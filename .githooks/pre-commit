@@ -14,6 +14,14 @@
 set -e
 root=$(git rev-parse --show-toplevel)
 
+# git exports GIT_DIR (and GIT_INDEX_FILE) into a hook, and in a linked worktree GIT_DIR
+# names the worktree private git dir. The `git -C <checkout>` probes below would then
+# run against *this* repository instead of the checkout they name, so a pin that does
+# resolve in extern/ would be rejected whenever the commit is made from a worktree.
+# `root` is already known, so drop the exported paths; every later git call names a
+# directory explicitly.
+unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE GIT_PREFIX
+
 # 1. a measurement holds target/campaign.lock
 lock="$root/target/campaign.lock"
 if [ -e "$lock" ] && ! flock -n "$lock" true 2>/dev/null; then
