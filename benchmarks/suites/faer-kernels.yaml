@@ -11,10 +11,12 @@ description: >-
   of the same family measure the same work:
   `gemm` is `linalg::matmul::matmul` into a caller-prepared destination with
   `Accum::Replace`; `qr_factor` is the compact `qr_in_place`; `qr` is the
-  composite returning explicit Q and R, with Q the compact `m x min(m, n)`
-  factor that the vendor route's `orgqr(m, min(m, n))` builds and that this
-  suite's own check consumes -- not the full `m x m` completion, which on a tall
-  shape is eight times the work and is not what either row would be buying;
+  composite returning explicit Q and R (the faer rows' owning contract), with Q
+  the compact `m x min(m, n)` factor that this suite's own check consumes -- not
+  the full `m x m` completion, which on a tall shape is eight times the work and
+  is not what either row would be buying. The vendor row has no `qr` route (it is
+  recorded `skipped`): `qr_factor` is the QR comparison with a vendor, see
+  `docs/reliable-measurement.md`, "Route differences that remain";
   `upgrade_factor` is the public but
   `#[doc(hidden)]` `upgrade_householder_factor`; `householder_apply` is the
   block apply and the one-block sequence form, as two rows, with basis width
@@ -86,7 +88,7 @@ workloads:
     rerun is reproducible.
   known_blind_spots:
     - "Only the faer entry points are measured. tlinalg's packing, batch loop and lane policy, tenferro's tensor construction and dtype dispatch, and the small-`m` decode-projection shapes are other repositories' rows (tlinalg-benchmark, tenferro-benchmark)."
-    - "Vendor C-order cells use CBLAS/LAPACKE row-major entry points. Workspace allocation or layout conversion internal to those APIs remains timed; these are not prepared-column-major or transpose measurements."
+    - "Vendor C-order cells use CBLAS/LAPACKE row-major entry points. Workspace allocation or layout conversion internal to those APIs remains timed; these are not prepared-column-major or transpose measurements. LAPACKE's row-major work copy and transposes are intrinsic to the C-order route and are absent for F order, so a C-order vendor ratio carries a cost the F-order one does not."
     - "`gemm` covers the tall class's two Householder legs (a 16-wide basis and a 240-column target over 4096 rows: the reduction and the write-back) beside a vendor `?gemm` on the same leg. A single leg beside a vendor gemm is a diagnostic reference, not the equivalent implementation of the whole update, and the row is labelled accordingly."
     - "`householder_apply` measures block apply and the one-block sequence form as two distinct rows, labelled with basis width min(m,n) and target width n. QR fixture preparation is outside timing. Independently varied basis/target widths and multi-panel sequences are not covered."
     - "Allocation performed inside the measured call stays inside the clock. The fork's two row splits allocate their partial buffers inside the public call, and the public scratch function does not expose them; the campaign reports that as it is instead of changing faer's API to make the boundary look cleaner."

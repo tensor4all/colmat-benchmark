@@ -853,8 +853,17 @@ mod imp {
         let batch = case.batch;
         match family {
             "gemm" => Ok(vec![gemm_op::<T>(m, case.k.unwrap_or(m), n, batch, order)?]),
-            "qr_factor" => Ok(vec![qr_op::<T>(m, n, batch, order, false)?]),
-            "qr" => Ok(vec![qr_op::<T>(m, n, batch, order, true)?]),
+            "qr_factor" => Ok(vec![qr_op::<T>(m, n, batch, order)?]),
+            // Decided, not missing: `qr` returns an explicit Q and R, and the faer rows' owning
+            // contract (the library allocates and returns them) is legitimate for that family. A
+            // vendor row can only be made to pay the same by bending it (prepared Q and R on one
+            // side, library-allocated on the other), so no ratio is claimed; `qr_factor` is the
+            // like-for-like QR comparison. docs/reliable-measurement.md, "Route differences".
+            "qr" => Err(
+                "qr (explicit Q and R, the faer rows' owning contract) is not compared with a \
+                 vendor row; qr_factor is the like-for-like QR comparison"
+                    .to_owned(),
+            ),
             "lu" => Ok(vec![lu_op::<T>(m, n, batch, order)?]),
             "cholesky" => {
                 square(case, family)?;
@@ -954,106 +963,55 @@ mod imp {
         ))
     }
 
-    /// `qr_factor` times `geqrf`; `qr` also forms Q with `orgqr`. The check
-    /// reconstructs `A = Q R` from the retained factors (and Q when requested).
-    fn qr_op<T: LapackScalar>(
-        m: usize,
-        n: usize,
-        batch: usize,
-        order: Order,
-        with_q: bool,
-    ) -> Result<Op, String> {
-        let salt = if with_q { 3 } else { m.min(n) };
-        let a0 = fill_seeded::<T>(m * n * batch, seed(m, n, salt));
+    /// `qr_factor` times `geqrf` on the prepared buffer. The check derives Q with `orgqr` from the
+    /// ACTUAL compact factors (outside the clock) and reconstructs `A = Q R`. The composite `qr`
+    /// (explicit Q and R returned) has no vendor route: see `ops_typed`.
+    fn qr_op<T: LapackScalar>(m: usize, n: usize, batch: usize, order: Order) -> Result<Op, String> {
+        let a0 = fill_seeded::<T>(m * n * batch, seed(m, n, m.min(n)));
         struct S<T> {
             a0: Vec<T>,
             a: Vec<Vec<T>>,
             tau: Vec<Vec<T>>,
-            r: Vec<Vec<T>>,
             m: usize,
             n: usize,
             batch: usize,
             order: Order,
-            with_q: bool,
         }
         // Every buffer the vendor call writes is the harness's, so it is allocated here, once,
         // and reused by every call (docs/reliable-measurement.md, "Allocation and the clock").
-        // `r` stays zero below its diagonal: only the upper trapezoid is ever written.
         let state = S {
             a: a0.chunks_exact(m * n).map(|a| a.to_vec()).collect(),
             tau: vec![vec![T::zero(); m.min(n)]; batch],
-            r: if with_q {
-                vec![vec![T::zero(); m.min(n) * n]; batch]
-            } else {
-                Vec::new()
-            },
             a0,
             m,
             n,
             batch,
             order,
-            with_q,
         };
         Ok(op_from(
             state,
             String::new(),
-            // The buffers are reused, so prepare spoils the retained result (outside the clock) and a
-            // check can only pass on what the next timed call writes.
+            // The buffers are reused, so prepare restores the input and spoils the retained tau
+            // (outside the clock): a check can only pass on what the next timed call writes.
             |s| {
-                if s.with_q {
-                    for r in &mut s.r {
-                        r[0] = T::from_f64(1e30);
-                    }
-                } else {
-                    for bi in 0..s.batch {
-                        s.a[bi].copy_from_slice(&s.a0[bi * s.m * s.n..(bi + 1) * s.m * s.n]);
-                        s.tau[bi].fill(T::zero());
-                    }
+                for bi in 0..s.batch {
+                    s.a[bi].copy_from_slice(&s.a0[bi * s.m * s.n..(bi + 1) * s.m * s.n]);
+                    s.tau[bi].fill(T::zero());
                 }
                 Ok(())
             },
             |s, _tk| {
-                let r = s.m.min(s.n);
                 for bi in 0..s.batch {
-                    if s.with_q {
-                        s.a[bi].copy_from_slice(&s.a0[bi * s.m * s.n..(bi + 1) * s.m * s.n]);
-                    }
-                    let a = &mut s.a[bi];
-                    let tau = &mut s.tau[bi];
                     let info = T::geqrf(
                         layout(s.order),
                         s.m,
                         s.n,
-                        a,
+                        &mut s.a[bi],
                         leading(s.m, s.n, s.order),
-                        tau,
+                        &mut s.tau[bi],
                     );
                     if info != 0 {
                         return Err(format!("geqrf returned {info}"));
-                    }
-                    if s.with_q {
-                        let rmat = &mut s.r[bi];
-                        for i in 0..r {
-                            for j in i..s.n {
-                                rmat[idx(i, j, r, s.n, s.order)] = a[idx(i, j, s.m, s.n, s.order)];
-                            }
-                        }
-                        // Q is m x r with r = min(m, n) columns; asking orgqr for
-                        // more columns than Q has (n > m on a wide shape) is invalid
-                        // and MKL rejects it. The m x n buffer keeps its own leading
-                        // dimension, so only the requested column count changes.
-                        let info = T::orgqr(
-                            layout(s.order),
-                            s.m,
-                            r,
-                            r,
-                            a,
-                            leading(s.m, s.n, s.order),
-                            tau,
-                        );
-                        if info != 0 {
-                            return Err(format!("orgqr returned {info}"));
-                        }
                     }
                 }
                 Ok(())
@@ -1063,30 +1021,25 @@ mod imp {
                 for bi in 0..s.batch {
                     let a0 = &s.a0[bi * s.m * s.n..(bi + 1) * s.m * s.n];
                     let mut a = s.a[bi].clone();
-                    let mut rmat = if s.with_q {
-                        s.r[bi].clone()
-                    } else {
-                        vec![T::zero(); r * s.n]
-                    };
-                    if !s.with_q {
-                        // Derive Q from the ACTUAL compact factors, never re-factor input.
-                        for i in 0..r {
-                            for j in i..s.n {
-                                rmat[idx(i, j, r, s.n, s.order)] = a[idx(i, j, s.m, s.n, s.order)];
-                            }
+                    let mut rmat = vec![T::zero(); r * s.n];
+                    for i in 0..r {
+                        for j in i..s.n {
+                            rmat[idx(i, j, r, s.n, s.order)] = a[idx(i, j, s.m, s.n, s.order)];
                         }
-                        let info = T::orgqr(
-                            layout(s.order),
-                            s.m,
-                            r,
-                            r,
-                            &mut a,
-                            leading(s.m, s.n, s.order),
-                            &s.tau[bi],
-                        );
-                        if info != 0 {
-                            return Err(format!("orgqr returned {info}"));
-                        }
+                    }
+                    // Q is m x r with r = min(m, n) columns; asking orgqr for more columns than Q
+                    // has (n > m on a wide shape) is invalid and MKL rejects it.
+                    let info = T::orgqr(
+                        layout(s.order),
+                        s.m,
+                        r,
+                        r,
+                        &mut a,
+                        leading(s.m, s.n, s.order),
+                        &s.tau[bi],
+                    );
+                    if info != 0 {
+                        return Err(format!("orgqr returned {info}"));
                     }
                     let mut qmat = vec![T::zero(); s.m * r];
                     for i in 0..s.m {
@@ -1371,9 +1324,14 @@ mod imp {
         Ok(op_from(
             state,
             String::new(),
-            // The buffers are reused, so prepare spoils the retained result (outside the clock) and a
-            // check can only pass on what the next timed call writes.
+            // `gesdd` overwrites its input, so prepare restores it into the prepared work buffer
+            // (outside the clock, as for `getrf`): the timed call is `gesdd` alone, the call the faer
+            // `in_place` rows make on a read-only input. The buffers are reused, so prepare also spoils
+            // the retained result, and a check can only pass on what the next timed call writes.
             |s| {
+                for bi in 0..s.batch {
+                    s.work[bi].copy_from_slice(&s.a0[bi * s.m * s.n..(bi + 1) * s.m * s.n]);
+                }
                 for (sigma, u, _) in &mut s.outputs {
                     sigma[0] = -1.0;
                     if let Some(x) = u.first_mut() {
@@ -1386,7 +1344,6 @@ mod imp {
                 let r = s.m.min(s.n);
                 for bi in 0..s.batch {
                     let a = &mut s.work[bi];
-                    a.copy_from_slice(&s.a0[bi * s.m * s.n..(bi + 1) * s.m * s.n]);
                     let (sigma, u, vt) = &mut s.outputs[bi];
                     let mut dummy_u = [T::zero()];
                     let mut dummy_vt = [T::zero()];
@@ -1498,18 +1455,21 @@ mod imp {
         Ok(op_from(
             state,
             String::new(),
-            // The buffers are reused, so prepare spoils the retained result (outside the clock) and a
-            // check can only pass on what the next timed call writes.
+            // `syevd`/`heevd` overwrite their input with the eigenvectors, so prepare restores it
+            // (outside the clock): the timed call is the driver alone, as the faer `in_place` row's
+            // is `self_adjoint_evd` on a prepared `U`. Prepare also spoils the eigenvalues, so a check
+            // can only pass on what the next timed call writes.
             |s| {
-                for (a, _) in &mut s.outputs {
-                    a[0] = T::from_f64(1e30);
+                for bi in 0..s.batch {
+                    let (a, w) = &mut s.outputs[bi];
+                    a.copy_from_slice(&s.a0[bi * s.n * s.n..(bi + 1) * s.n * s.n]);
+                    w[0] = -1e30;
                 }
                 Ok(())
             },
             |s, _tk| {
                 for bi in 0..s.batch {
                     let (a, w) = &mut s.outputs[bi];
-                    a.copy_from_slice(&s.a0[bi * s.n * s.n..(bi + 1) * s.n * s.n]);
                     let info = T::evd(
                         layout(s.order),
                         JOB_V,

@@ -63,7 +63,9 @@ and one coefficient block; multi-panel sequences are not covered.
   to the provider API remain timed, including LAPACKE-owned workspace/adaptation.
 - Factorization composites produce and retain actual outputs. The faer owning
   routes' public-API allocation/copy/factorization and explicit-Q construction
-  are timed; prior output destruction happens in prepare, outside timing. Solve
+  are timed, and so is the destruction of the previous call's outputs: `prepare`
+  only moves them aside and the next timed call frees them before it allocates
+  (allocation and its matching free are both the library's cost). Solve
   consumes its temporary factor in the measured pipeline and retains the
   solution. What the harness allocates is not timed (next section).
 - Checks inspect the actual last execution's factors/values/vectors/solution,
@@ -106,12 +108,39 @@ vendor's cost and stays inside. The owning faer routes (the op with an empty `no
 `PartialPivLu::new`, `Llt::new`, `partial_piv_lu().solve()` upstream and the fork's composite
 rebuild of them) are kept as the call a user makes; what they allocate is the library's cost and is
 never hoisted, so those cells move with the allocator's state (a 16 MB heap trim at n = 1024 is
-about 3 ms) and are not the comparison with the vendor row. Other families keep their input copy
-inside the clock on every row. Because buffers are reused, `prepare` restores or spoils each
+about 3 ms) and are not the comparison with the vendor row; their previous outputs are freed
+inside the clock, so a call is charged for the free that its allocation implies. The faer
+`in_place` routes exist for `full_piv_lu`, `svd_values`, `svd_thin` and `eigh` as well, written
+once in `define_backend!` for both faer rows: the matrix and permutations (`full_piv_lu`) or the
+outputs `S`, `U`, `V` (`svd`, `eigh`) and the `MemStack` sized by the library's own `*_scratch` are
+allocated before the clock, and the decompositions run straight on the input, which they read
+without modifying. The vendor row's `gesdd` and `syevd`/`heevd` overwrite their input, so `prepare`
+restores it into a prepared buffer and the timed call is the driver alone. No row keeps an input
+copy inside the clock except an owning faer route, whose copy is the library's. Because buffers are
+reused, `prepare` restores or spoils each
 retained result, so a check can only pass on what the timed call wrote. No case may depend on the
 allocator's adaptive behaviour: a measurement is not repaired with `MALLOC_*` or any other
 allocator setting, and a cell that moves with process history is traced to the allocation inside
 its clock. Numbers recorded before this rule are not comparable for these cells.
+
+### Route differences that remain
+
+- **`qr` (explicit Q and R) has no vendor row.** The faer rows return an owning Q and R, which is what
+  the family declares and a legitimate contract; a vendor row can be made to pay the same only by
+  preparing Q and R on one side and letting the library allocate on the other, which compares two
+  harness choices rather than two libraries. The decision is to record the difference, not to bend an
+  arm: the vendor row reports `qr` as `skipped` with that reason, no `qr` ratio against `lapack-*`
+  is claimed, and `qr_factor` (`geqrf` against `qr_in_place`, both on prepared buffers) is the
+  like-for-like QR comparison. The two faer rows are still compared with each other on `qr`, both
+  owning.
+- **Row-major input on the vendor row.** For C order, LAPACKE allocates a work copy and transposes in and
+  out of it inside the call (reference `_work.c`; MKL's LAPACKE was not inspected, so that is unverified
+  for MKL). That cost is intrinsic to the row-major entry point, stays inside the clock and is not
+  present for F order. A C-order vendor ratio therefore includes a cost the F-order one does not; the
+  faer rows factor a row-major input where it is.
+- **A route difference between arms is a property to record, not to fix away.** When two arms make
+  different kinds of call, the page says so (note, skip reason, this section) and the ratio is read
+  with it; the harness does not add or remove work on one arm until the numbers agree.
 
 ## Adoption gate
 

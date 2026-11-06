@@ -277,9 +277,10 @@ macro_rules! define_backend {
                     // well, with `min(m, n)` pivots and a trapezoidal `L` or
                     // `U`. So neither is gated to square.
                     "lu" => Ok(vec![lu_op::<T>(m, n, batch, order)?, lu_in_place_op::<T>(m, n, batch, order)?]),
-                    "full_piv_lu" => {
-                        Ok(vec![full_piv_lu_op::<T>(m, n, batch, order)?])
-                    }
+                    "full_piv_lu" => Ok(vec![
+                        full_piv_lu_op::<T>(m, n, batch, order)?,
+                        full_piv_lu_in_place_op::<T>(m, n, batch, order)?,
+                    ]),
                     "cholesky" => {
                         square(case, family)?;
                         Ok(vec![cholesky_op::<T>(m, batch, order)?, cholesky_in_place_op::<T>(m, batch, order)?])
@@ -292,11 +293,17 @@ macro_rules! define_backend {
                         square(case, family)?;
                         Ok(vec![triangular_solve_op::<T>(m, batch, order)?])
                     }
-                    "svd_values" => Ok(vec![svd_values_op::<T>(m, n, batch, order)?]),
-                    "svd_thin" => Ok(vec![svd_thin_op::<T>(m, n, batch, order)?]),
+                    "svd_values" => Ok(vec![
+                        svd_values_op::<T>(m, n, batch, order)?,
+                        svd_in_place_op::<T>(m, n, batch, order, false)?,
+                    ]),
+                    "svd_thin" => Ok(vec![
+                        svd_thin_op::<T>(m, n, batch, order)?,
+                        svd_in_place_op::<T>(m, n, batch, order, true)?,
+                    ]),
                     "eigh" => {
                         square(case, family)?;
-                        Ok(vec![eigh_op::<T>(m, batch, order)?])
+                        Ok(vec![eigh_op::<T>(m, batch, order)?, eigh_in_place_op::<T>(m, batch, order)?])
                     }
                     "householder_apply" => householder_ops::<T>(m, n, batch, order),
                     // Deliberately not written yet. `upgrade_factor` needs a valid
@@ -980,6 +987,292 @@ macro_rules! define_backend {
                     },
                 ))
             }
+
+            // ------------------------------------------ full_piv_lu, svd, eigh: the same rule
+
+            // `full_piv_lu`, `svd_values`, `svd_thin` and `eigh` are timed twice on each faer row, as
+            // `lu` is: the empty-note op is the owning route (the library's allocation of its outputs
+            // and scratch is its cost), the `in_place` op below is this text expanded for both crates.
+            // Everything the harness needs is allocated once before the clock: the factor matrix and
+            // the four permutations (restored in `prepare`) for `full_piv_lu`; the outputs `S`, `U`,
+            // `V` and the `MemStack` sized by the library's own `*_scratch` for the decompositions,
+            // which read `A` without modifying it, so they run straight on the input and need no
+            // restore. `prepare` zeroes the reused outputs, so a skipped execution cannot pass its check.
+
+            /// `max |(P A Q)_{ij} - (L U)_{ij}|` with `(P A Q)` entry `(i, j)` = `A` entry `(rf[i], cf[j])`.
+            fn full_piv_residual<T: Scalar + ComplexField>(
+                a0: &[T], lu: MatRef<'_, T>, rf: &[usize], cf: &[usize], m: usize, n: usize, order: Order,
+            ) -> f64 {
+                let (l, u) = check_split_lu(lu);
+                let size = m.min(n);
+                let l = to_layout(l.as_ref(), m, size, order);
+                let u = to_layout(u.as_ref(), size, n, order);
+                let mut prod = vec![T::zero(); m * n];
+                mul(m, size, n, order, &l, &u, &mut prod);
+                let mut paq = vec![T::zero(); m * n];
+                for i in 0..m {
+                    for j in 0..n {
+                        paq[idx(i, j, m, n, order)] = a0[idx(rf[i], cf[j], m, n, order)];
+                    }
+                }
+                max_diff(&paq, &prod)
+            }
+
+            fn full_piv_lu_in_place_op<T: Scalar + ComplexField>(
+                m: usize,
+                n: usize,
+                batch: usize,
+                order: Order,
+            ) -> Result<Op, String> {
+                use fk::linalg::lu::full_pivoting::factor as flu;
+                let a0 = fill_seeded::<T>(m * n * batch, seed(m, n, 7));
+                struct S<T: ComplexField> {
+                    a0: Vec<T>,
+                    a: Vec<T>,
+                    perms: Vec<[Vec<usize>; 4]>,
+                    mem: MemBuffer,
+                    m: usize,
+                    n: usize,
+                    batch: usize,
+                    order: Order,
+                    par: ParCfg,
+                }
+                let par = cfg_par();
+                let req = flu::lu_in_place_scratch::<usize, T>(m, n, parmod::shape(par), Default::default());
+                let state = S {
+                    a: a0.clone(),
+                    a0,
+                    perms: (0..batch).map(|_| [vec![0usize; m], vec![0usize; m], vec![0usize; n], vec![0usize; n]]).collect(),
+                    mem: MemBuffer::new(req),
+                    m,
+                    n,
+                    batch,
+                    order,
+                    par,
+                };
+                Ok(op_from(
+                    state,
+                    "in_place".to_owned(),
+                    |s| {
+                        s.a.copy_from_slice(&s.a0);
+                        for p in &mut s.perms {
+                            for v in p.iter_mut() {
+                                v.fill(0);
+                            }
+                        }
+                        Ok(())
+                    },
+                    |s, mut tk| {
+                        let len = s.m * s.n;
+                        for bi in 0..s.batch {
+                            let [rf, rb, cf, cb] = &mut s.perms[bi];
+                            flu::lu_in_place(
+                                mmut(&mut s.a[bi * len..(bi + 1) * len], s.m, s.n, s.order),
+                                rf,
+                                rb,
+                                cf,
+                                cb,
+                                parmod::mk_from(&mut tk, s.par),
+                                MemStack::new(&mut s.mem),
+                                Default::default(),
+                            );
+                        }
+                        Ok(())
+                    },
+                    |s| {
+                        let len = s.m * s.n;
+                        for bi in 0..s.batch {
+                            let a0 = &s.a0[bi * len..(bi + 1) * len];
+                            let lu = mref(&s.a[bi * len..(bi + 1) * len], s.m, s.n, s.order);
+                            let [rf, _, cf, _] = &s.perms[bi];
+                            let r = full_piv_residual(a0, lu, rf, cf, s.m, s.n, s.order);
+                            within::<T>(r, frob(a0), s.n.max(s.m), "full_piv_lu in_place")?;
+                        }
+                        Ok(())
+                    },
+                ))
+            }
+
+            /// `svd` with prepared `S` (and `U`, `V` when `thin`) and a prepared `MemStack`.
+            fn svd_in_place_op<T: Scalar + ComplexField>(
+                m: usize,
+                n: usize,
+                batch: usize,
+                order: Order,
+                thin: bool,
+            ) -> Result<Op, String>
+            where
+                T::Real: Scalar,
+            {
+                use fk::linalg::svd::ComputeSvdVectors as Cv;
+                let a0 = fill_seeded::<T>(m * n * batch, seed(m, n, if thin { 31 } else { 29 }));
+                let r = m.min(n);
+                struct S<T: ComplexField> {
+                    a0: Vec<T>,
+                    sv: Vec<fk::diag::Diag<T>>,
+                    u: Vec<fk::Mat<T>>,
+                    v: Vec<fk::Mat<T>>,
+                    mem: MemBuffer,
+                    m: usize,
+                    n: usize,
+                    batch: usize,
+                    order: Order,
+                    thin: bool,
+                    par: ParCfg,
+                }
+                let par = cfg_par();
+                let mode = if thin { Cv::Thin } else { Cv::No };
+                let req = fk::linalg::svd::svd_scratch::<T>(m, n, mode, mode, parmod::shape(par), Default::default());
+                let state = S {
+                    a0,
+                    sv: (0..batch).map(|_| fk::diag::Diag::<T>::zeros(r)).collect(),
+                    u: (0..if thin { batch } else { 0 }).map(|_| fk::Mat::<T>::zeros(m, r)).collect(),
+                    v: (0..if thin { batch } else { 0 }).map(|_| fk::Mat::<T>::zeros(n, r)).collect(),
+                    mem: MemBuffer::new(req),
+                    m,
+                    n,
+                    batch,
+                    order,
+                    thin,
+                    par,
+                };
+                Ok(op_from(
+                    state,
+                    "in_place".to_owned(),
+                    |s| {
+                        for d in &mut s.sv {
+                            d.as_mut().column_vector_mut().fill(T::zero_impl());
+                        }
+                        for x in s.u.iter_mut().chain(s.v.iter_mut()) {
+                            x.as_mut().fill(T::zero_impl());
+                        }
+                        Ok(())
+                    },
+                    |s, mut tk| {
+                        for bi in 0..s.batch {
+                            let a0 = &s.a0[bi * s.m * s.n..(bi + 1) * s.m * s.n];
+                            let (u, v) = if s.thin {
+                                (Some(s.u[bi].as_mut()), Some(s.v[bi].as_mut()))
+                            } else {
+                                (None, None)
+                            };
+                            fk::linalg::svd::svd(
+                                mref(a0, s.m, s.n, s.order),
+                                s.sv[bi].as_mut(),
+                                u,
+                                v,
+                                parmod::mk_from(&mut tk, s.par),
+                                MemStack::new(&mut s.mem),
+                                Default::default(),
+                            )
+                            .map_err(|e| format!("svd in_place failed: {e:?}"))?;
+                        }
+                        Ok(())
+                    },
+                    |s| {
+                        for bi in 0..s.batch {
+                            let a0 = &s.a0[bi * s.m * s.n..(bi + 1) * s.m * s.n];
+                            if !s.thin {
+                                let sv: Vec<T::Real> =
+                                    s.sv[bi].column_vector().iter().map(|x| T::real_part_impl(x)).collect();
+                                check_singular_values::<T>(a0, &sv, s.m, s.n)?;
+                                continue;
+                            }
+                            let r = s.sv[bi].dim();
+                            let u = to_layout(s.u[bi].as_ref(), s.m, r, s.order);
+                            let v = to_layout(s.v[bi].as_ref(), s.n, r, s.order);
+                            let scale = frob(a0);
+                            within::<T>(gram_residual(&u, s.m, r, s.order), 1.0, s.m, "svd_thin U")?;
+                            within::<T>(gram_residual(&v, s.n, r, s.order), 1.0, s.n, "svd_thin V")?;
+                            let s_diag = diag_vec(s.sv[bi].as_ref());
+                            let scaled_v = scale_cols(&v, s.n, r, &s_diag, s.order);
+                            let mut recon = vec![T::zero(); s.m * s.n];
+                            mul_adj_b(s.m, r, s.n, s.order, &u, &scaled_v, &mut recon);
+                            within::<T>(max_diff(a0, &recon), scale, s.n.max(s.m), "svd_thin")?;
+                        }
+                        Ok(())
+                    },
+                ))
+            }
+
+            /// `self_adjoint_evd` (lower triangle) with prepared eigenvalues, `U` and `MemStack`.
+            fn eigh_in_place_op<T: Scalar + ComplexField>(
+                n: usize,
+                batch: usize,
+                order: Order,
+            ) -> Result<Op, String> {
+                let a0 = hermitian::<T>(n, order, seed(n, n, 37));
+                let a0 = replicate(&a0, batch);
+                struct S<T: ComplexField> {
+                    a0: Vec<T>,
+                    sv: Vec<fk::diag::Diag<T>>,
+                    u: Vec<fk::Mat<T>>,
+                    mem: MemBuffer,
+                    n: usize,
+                    batch: usize,
+                    order: Order,
+                    par: ParCfg,
+                }
+                let par = cfg_par();
+                let req = fk::linalg::evd::self_adjoint_evd_scratch::<T>(
+                    n,
+                    fk::linalg::evd::ComputeEigenvectors::Yes,
+                    parmod::shape(par),
+                    Default::default(),
+                );
+                let state = S {
+                    a0,
+                    sv: (0..batch).map(|_| fk::diag::Diag::<T>::zeros(n)).collect(),
+                    u: (0..batch).map(|_| fk::Mat::<T>::zeros(n, n)).collect(),
+                    mem: MemBuffer::new(req),
+                    n,
+                    batch,
+                    order,
+                    par,
+                };
+                Ok(op_from(
+                    state,
+                    "in_place".to_owned(),
+                    |s| {
+                        for d in &mut s.sv {
+                            d.as_mut().column_vector_mut().fill(T::zero_impl());
+                        }
+                        for x in &mut s.u {
+                            x.as_mut().fill(T::zero_impl());
+                        }
+                        Ok(())
+                    },
+                    |s, mut tk| {
+                        for bi in 0..s.batch {
+                            let a0 = &s.a0[bi * s.n * s.n..(bi + 1) * s.n * s.n];
+                            fk::linalg::evd::self_adjoint_evd(
+                                mref(a0, s.n, s.n, s.order),
+                                s.sv[bi].as_mut(),
+                                Some(s.u[bi].as_mut()),
+                                parmod::mk_from(&mut tk, s.par),
+                                MemStack::new(&mut s.mem),
+                                Default::default(),
+                            )
+                            .map_err(|e| format!("self_adjoint_evd in_place failed: {e:?}"))?;
+                        }
+                        Ok(())
+                    },
+                    |s| {
+                        for bi in 0..s.batch {
+                            let a0 = &s.a0[bi * s.n * s.n..(bi + 1) * s.n * s.n];
+                            let u = to_layout(s.u[bi].as_ref(), s.n, s.n, s.order);
+                            let scale = frob(a0);
+                            within::<T>(gram_residual(&u, s.n, s.n, s.order), 1.0, s.n, "eigh U")?;
+                            let s_diag = diag_vec(s.sv[bi].as_ref());
+                            let mut au = vec![T::zero(); s.n * s.n];
+                            mul(s.n, s.n, s.n, s.order, a0, &u, &mut au);
+                            let us = scale_cols(&u, s.n, s.n, &s_diag, s.order);
+                            within::<T>(max_diff(&au, &us), scale, s.n, "eigh in_place")?;
+                        }
+                        Ok(())
+                    },
+                ))
+            }
         }
     };
 }
@@ -1007,6 +1300,7 @@ macro_rules! highlevel_ops {
                 struct S<T> {
                     a0: Vec<T>,
                     outputs: Vec<(Qr<T>, fk::Mat<T>)>,
+                    stash: Vec<(Qr<T>, fk::Mat<T>)>,
                     m: usize,
                     n: usize,
                     size: usize,
@@ -1016,6 +1310,7 @@ macro_rules! highlevel_ops {
                 let state = S {
                     a0,
                     outputs: Vec::with_capacity(batch),
+                    stash: Vec::new(),
                     m,
                     n,
                     size,
@@ -1026,10 +1321,11 @@ macro_rules! highlevel_ops {
                     state,
                     String::new(),
                     |s| {
-                        s.outputs.clear();
+                        s.stash.append(&mut s.outputs);
                         Ok(())
                     },
                     |s, _tk| {
+                        s.stash.clear(); // the previous call's outputs are freed inside the clock
                         for bi in 0..s.batch {
                             let a0 = &s.a0[bi * s.m * s.n..(bi + 1) * s.m * s.n];
                             // The composite the vendor route's `orgqr` arm matches:
@@ -1078,6 +1374,7 @@ macro_rules! highlevel_ops {
                 struct S<T> {
                     a0: Vec<T>,
                     lus: Vec<PartialPivLu<T>>,
+                    stash: Vec<PartialPivLu<T>>,
                     m: usize,
                     n: usize,
                     batch: usize,
@@ -1086,6 +1383,7 @@ macro_rules! highlevel_ops {
                 let state = S {
                     a0,
                     lus: Vec::with_capacity(batch),
+                    stash: Vec::new(),
                     m,
                     n,
                     batch,
@@ -1095,10 +1393,11 @@ macro_rules! highlevel_ops {
                     state,
                     String::new(),
                     |s| {
-                        s.lus.clear();
+                        s.stash.append(&mut s.lus);
                         Ok(())
                     },
                     |s, _tk| {
+                        s.stash.clear(); // the previous call's outputs are freed inside the clock
                         for bi in 0..s.batch {
                             let a0 = &s.a0[bi * s.m * s.n..(bi + 1) * s.m * s.n];
                             let lu = mref(a0, s.m, s.n, s.order).partial_piv_lu();
@@ -1129,6 +1428,7 @@ macro_rules! highlevel_ops {
                 struct S<T> {
                     a0: Vec<T>,
                     lus: Vec<FullPivLu<T>>,
+                    stash: Vec<FullPivLu<T>>,
                     m: usize,
                     n: usize,
                     batch: usize,
@@ -1137,6 +1437,7 @@ macro_rules! highlevel_ops {
                 let state = S {
                     a0,
                     lus: Vec::with_capacity(batch),
+                    stash: Vec::new(),
                     m,
                     n,
                     batch,
@@ -1146,10 +1447,11 @@ macro_rules! highlevel_ops {
                     state,
                     String::new(),
                     |s| {
-                        s.lus.clear();
+                        s.stash.append(&mut s.lus);
                         Ok(())
                     },
                     |s, _tk| {
+                        s.stash.clear(); // the previous call's outputs are freed inside the clock
                         for bi in 0..s.batch {
                             let a0 = &s.a0[bi * s.m * s.n..(bi + 1) * s.m * s.n];
                             let lu = mref(a0, s.m, s.n, s.order).full_piv_lu();
@@ -1184,6 +1486,7 @@ macro_rules! highlevel_ops {
                 struct S<T> {
                     a0: Vec<T>,
                     outputs: Vec<Llt<T>>,
+                    stash: Vec<Llt<T>>,
                     n: usize,
                     batch: usize,
                     order: Order,
@@ -1191,6 +1494,7 @@ macro_rules! highlevel_ops {
                 let state = S {
                     a0,
                     outputs: Vec::with_capacity(batch),
+                    stash: Vec::new(),
                     n,
                     batch,
                     order,
@@ -1198,8 +1502,9 @@ macro_rules! highlevel_ops {
                 Ok(op_from(
                     state,
                     String::new(),
-                    |s| { s.outputs.clear(); Ok(()) },
+                    |s| { s.stash.append(&mut s.outputs); Ok(()) },
                     |s, _tk| {
+                        s.stash.clear(); // the previous call's outputs are freed inside the clock
                         for bi in 0..s.batch {
                             let a0 = &s.a0[bi * s.n * s.n..(bi + 1) * s.n * s.n];
                             let llt = mref(a0, s.n, s.n, s.order)
@@ -1346,6 +1651,7 @@ macro_rules! highlevel_ops {
                 struct S<T: ComplexField> {
                     a0: Vec<T>,
                     outputs: Vec<Vec<T::Real>>,
+                    stash: Vec<Vec<T::Real>>,
                     m: usize,
                     n: usize,
                     batch: usize,
@@ -1354,6 +1660,7 @@ macro_rules! highlevel_ops {
                 let state = S {
                     a0,
                     outputs: Vec::with_capacity(batch),
+                    stash: Vec::new(),
                     m,
                     n,
                     batch,
@@ -1362,8 +1669,9 @@ macro_rules! highlevel_ops {
                 Ok(op_from(
                     state,
                     String::new(),
-                    |s| { s.outputs.clear(); Ok(()) },
+                    |s| { s.stash.append(&mut s.outputs); Ok(()) },
                     |s, _tk| {
+                        s.stash.clear(); // the previous call's outputs are freed inside the clock
                         for bi in 0..s.batch {
                             let a0 = &s.a0[bi * s.m * s.n..(bi + 1) * s.m * s.n];
                             let sv = mref(a0, s.m, s.n, s.order)
@@ -1424,6 +1732,7 @@ macro_rules! highlevel_ops {
                 struct S<T> {
                     a0: Vec<T>,
                     outputs: Vec<Svd<T>>,
+                    stash: Vec<Svd<T>>,
                     m: usize,
                     n: usize,
                     batch: usize,
@@ -1432,6 +1741,7 @@ macro_rules! highlevel_ops {
                 let state = S {
                     a0,
                     outputs: Vec::with_capacity(batch),
+                    stash: Vec::new(),
                     m,
                     n,
                     batch,
@@ -1440,8 +1750,9 @@ macro_rules! highlevel_ops {
                 Ok(op_from(
                     state,
                     String::new(),
-                    |s| { s.outputs.clear(); Ok(()) },
+                    |s| { s.stash.append(&mut s.outputs); Ok(()) },
                     |s, _tk| {
+                        s.stash.clear(); // the previous call's outputs are freed inside the clock
                         for bi in 0..s.batch {
                             let a0 = &s.a0[bi * s.m * s.n..(bi + 1) * s.m * s.n];
                             let svd = mref(a0, s.m, s.n, s.order)
@@ -1480,6 +1791,7 @@ macro_rules! highlevel_ops {
                 struct S<T> {
                     a0: Vec<T>,
                     outputs: Vec<SelfAdjointEigen<T>>,
+                    stash: Vec<SelfAdjointEigen<T>>,
                     n: usize,
                     batch: usize,
                     order: Order,
@@ -1487,6 +1799,7 @@ macro_rules! highlevel_ops {
                 let state = S {
                     a0,
                     outputs: Vec::with_capacity(batch),
+                    stash: Vec::new(),
                     n,
                     batch,
                     order,
@@ -1494,8 +1807,9 @@ macro_rules! highlevel_ops {
                 Ok(op_from(
                     state,
                     String::new(),
-                    |s| { s.outputs.clear(); Ok(()) },
+                    |s| { s.stash.append(&mut s.outputs); Ok(()) },
                     |s, _tk| {
+                        s.stash.clear(); // the previous call's outputs are freed inside the clock
                         for bi in 0..s.batch {
                             let a0 = &s.a0[bi * s.n * s.n..(bi + 1) * s.n * s.n];
                             let evd = mref(a0, s.n, s.n, s.order)
@@ -1624,6 +1938,7 @@ macro_rules! explicit_ops {
             struct S<T: ComplexField> {
                 a0: Vec<T>,
                 outputs: Vec<(fk::Mat<T>, fk::Mat<T>)>,
+                stash: Vec<(fk::Mat<T>, fk::Mat<T>)>,
                 m: usize,
                 n: usize,
                 size: usize,
@@ -1634,6 +1949,7 @@ macro_rules! explicit_ops {
             let state = S {
                 a0,
                 outputs: Vec::with_capacity(batch),
+                stash: Vec::new(),
                 m,
                 n,
                 size,
@@ -1645,10 +1961,11 @@ macro_rules! explicit_ops {
                 state,
                 String::new(),
                 |s| {
-                    s.outputs.clear();
+                    s.stash.append(&mut s.outputs);
                     Ok(())
                 },
                 |s, mut tk| {
+                    s.stash.clear(); // the previous call's outputs are freed inside the clock
                     for bi in 0..s.batch {
                         let a0 = &s.a0[bi * s.m * s.n..(bi + 1) * s.m * s.n];
                         // `Qr::new` then `compute_thin_Q`, with the row's parallelism.
@@ -1715,6 +2032,7 @@ macro_rules! explicit_ops {
             struct S<T: ComplexField> {
                 a0: Vec<T>,
                 lus: Vec<(fk::Mat<T>, fk::Mat<T>, Vec<usize>, Vec<usize>)>,
+                stash: Vec<(fk::Mat<T>, fk::Mat<T>, Vec<usize>, Vec<usize>)>,
                 m: usize,
                 n: usize,
                 batch: usize,
@@ -1724,6 +2042,7 @@ macro_rules! explicit_ops {
             let state = S {
                 a0,
                 lus: Vec::with_capacity(batch),
+                stash: Vec::new(),
                 m,
                 n,
                 batch,
@@ -1734,10 +2053,11 @@ macro_rules! explicit_ops {
                 state,
                 String::new(),
                 |s| {
-                    s.lus.clear();
+                    s.stash.append(&mut s.lus);
                     Ok(())
                 },
                 |s, mut tk| {
+                    s.stash.clear(); // the previous call's outputs are freed inside the clock
                     for bi in 0..s.batch {
                         let a0 = &s.a0[bi * s.m * s.n..(bi + 1) * s.m * s.n];
                         s.lus.push(partial_lu_of(mref(a0, s.m, s.n, s.order), &mut tk, s.par));
@@ -1780,6 +2100,7 @@ macro_rules! explicit_ops {
             struct S<T: ComplexField> {
                 a0: Vec<T>,
                 lus: Vec<(fk::Mat<T>, fk::Mat<T>, [Vec<usize>; 4])>,
+                stash: Vec<(fk::Mat<T>, fk::Mat<T>, [Vec<usize>; 4])>,
                 m: usize,
                 n: usize,
                 batch: usize,
@@ -1789,6 +2110,7 @@ macro_rules! explicit_ops {
             let state = S {
                 a0,
                 lus: Vec::with_capacity(batch),
+                stash: Vec::new(),
                 m,
                 n,
                 batch,
@@ -1799,10 +2121,11 @@ macro_rules! explicit_ops {
                 state,
                 String::new(),
                 |s| {
-                    s.lus.clear();
+                    s.stash.append(&mut s.lus);
                     Ok(())
                 },
                 |s, mut tk| {
+                    s.stash.clear(); // the previous call's outputs are freed inside the clock
                     for bi in 0..s.batch {
                         let a0 = &s.a0[bi * s.m * s.n..(bi + 1) * s.m * s.n];
                         let mut lu = mref(a0, s.m, s.n, s.order).to_owned();
@@ -1868,6 +2191,7 @@ macro_rules! explicit_ops {
             struct S<T: ComplexField> {
                 a0: Vec<T>,
                 outputs: Vec<fk::Mat<T>>,
+                stash: Vec<fk::Mat<T>>,
                 n: usize,
                 batch: usize,
                 order: Order,
@@ -1876,6 +2200,7 @@ macro_rules! explicit_ops {
             let state = S {
                 a0,
                 outputs: Vec::with_capacity(batch),
+                stash: Vec::new(),
                 n,
                 batch,
                 order,
@@ -1885,10 +2210,11 @@ macro_rules! explicit_ops {
                 state,
                 String::new(),
                 |s| {
-                    s.outputs.clear();
+                    s.stash.append(&mut s.outputs);
                     Ok(())
                 },
                 |s, mut tk| {
+                    s.stash.clear(); // the previous call's outputs are freed inside the clock
                     for bi in 0..s.batch {
                         let a0 = &s.a0[bi * s.n * s.n..(bi + 1) * s.n * s.n];
                         // `Llt::new(A, Side::Lower)`: copy the lower triangle, factor, clear the upper.
@@ -2084,6 +2410,7 @@ macro_rules! explicit_ops {
             struct S<T: ComplexField> {
                 a0: Vec<T>,
                 outputs: Vec<Vec<T::Real>>,
+                stash: Vec<Vec<T::Real>>,
                 m: usize,
                 n: usize,
                 batch: usize,
@@ -2093,6 +2420,7 @@ macro_rules! explicit_ops {
             let state = S {
                 a0,
                 outputs: Vec::with_capacity(batch),
+                stash: Vec::new(),
                 m,
                 n,
                 batch,
@@ -2103,10 +2431,11 @@ macro_rules! explicit_ops {
                 state,
                 String::new(),
                 |s| {
-                    s.outputs.clear();
+                    s.stash.append(&mut s.outputs);
                     Ok(())
                 },
                 |s, mut tk| {
+                    s.stash.clear(); // the previous call's outputs are freed inside the clock
                     for bi in 0..s.batch {
                         let a0 = &s.a0[bi * s.m * s.n..(bi + 1) * s.m * s.n];
                         // `MatRef::singular_values`, with the row's parallelism.
@@ -2157,6 +2486,7 @@ macro_rules! explicit_ops {
             struct S<T: ComplexField> {
                 a0: Vec<T>,
                 outputs: Vec<(fk::diag::Diag<T>, fk::Mat<T>, fk::Mat<T>)>,
+                stash: Vec<(fk::diag::Diag<T>, fk::Mat<T>, fk::Mat<T>)>,
                 m: usize,
                 n: usize,
                 batch: usize,
@@ -2166,6 +2496,7 @@ macro_rules! explicit_ops {
             let state = S {
                 a0,
                 outputs: Vec::with_capacity(batch),
+                stash: Vec::new(),
                 m,
                 n,
                 batch,
@@ -2176,10 +2507,11 @@ macro_rules! explicit_ops {
                 state,
                 String::new(),
                 |s| {
-                    s.outputs.clear();
+                    s.stash.append(&mut s.outputs);
                     Ok(())
                 },
                 |s, mut tk| {
+                    s.stash.clear(); // the previous call's outputs are freed inside the clock
                     for bi in 0..s.batch {
                         let a0 = &s.a0[bi * s.m * s.n..(bi + 1) * s.m * s.n];
                         // `MatRef::thin_svd`, with the row's parallelism.
@@ -2239,6 +2571,7 @@ macro_rules! explicit_ops {
             struct S<T: ComplexField> {
                 a0: Vec<T>,
                 outputs: Vec<(fk::diag::Diag<T>, fk::Mat<T>)>,
+                stash: Vec<(fk::diag::Diag<T>, fk::Mat<T>)>,
                 n: usize,
                 batch: usize,
                 order: Order,
@@ -2247,6 +2580,7 @@ macro_rules! explicit_ops {
             let state = S {
                 a0,
                 outputs: Vec::with_capacity(batch),
+                stash: Vec::new(),
                 n,
                 batch,
                 order,
@@ -2256,10 +2590,11 @@ macro_rules! explicit_ops {
                 state,
                 String::new(),
                 |s| {
-                    s.outputs.clear();
+                    s.stash.append(&mut s.outputs);
                     Ok(())
                 },
                 |s, mut tk| {
+                    s.stash.clear(); // the previous call's outputs are freed inside the clock
                     for bi in 0..s.batch {
                         let a0 = &s.a0[bi * s.n * s.n..(bi + 1) * s.n * s.n];
                         // `MatRef::self_adjoint_eigen(Side::Lower)`, with the row's parallelism.

@@ -118,6 +118,15 @@ above predate #35.
 
 ## 5. Ranked fixes (most threatened published number first)
 
+> **Status (2026-11-07).** Fixes 1, 2, 3, 6 and 9 landed in #49. Fixes 4, 5, 7, 8 and 10 landed in the
+> pull request that follows it: 4 (`full_piv_lu` `in_place` on both faer rows), 7 (`svd_values`,
+> `svd_thin`, `eigh`: prepared outputs and `MemStack` on both faer rows; the vendor row restores its
+> input in `prepare`), 8 (the owning routes' previous outputs are freed inside the clock), 5 (decided:
+> the owning contract of `qr` is legitimate, so the vendor row no longer takes `qr` and no `qr` ratio
+> against a vendor is claimed; `qr_factor` is the vendor comparison) and 10 (the row-major cost is
+> documented as intrinsic, `docs/reliable-measurement.md`, "Route differences that remain"). The text
+> below is the audit as written at `c333615`; the line references are not updated.
+
 1. **`cholesky`, fork + upstream: owning (`Llt::new` / mirror) → `in_place`.** Allocate the matrix and
    the `MemStack` (sized by `cholesky_in_place_scratch`) before the clock, restore the matrix from
    `a0` in `prepare`, call `cholesky_in_place` on a `MatMut` over the prepared buffer inside it. No

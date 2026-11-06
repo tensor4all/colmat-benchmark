@@ -234,7 +234,7 @@ mod tests {
                 if !row.starts_with("faer-")
                     && matches!(
                         family,
-                        "full_piv_lu" | "triangular_solve" | "householder_apply"
+                        "qr" | "full_piv_lu" | "triangular_solve" | "householder_apply"
                     )
                 {
                     continue;
@@ -249,10 +249,15 @@ mod tests {
                         };
                         let ops = crate::ops_for(&row, dtype, family, case, order).unwrap();
                         // householder_apply times both public forms; both faer rows time `lu`,
-                        // `cholesky` and `solve` through the owning method and the `in_place` route.
+                        // `full_piv_lu`, `cholesky`, `solve`, `svd_values`, `svd_thin` and `eigh`
+                        // through the owning method and the `in_place` route.
                         let expected = match family {
                             "householder_apply" => 2,
-                            "lu" | "cholesky" | "solve" if row.starts_with("faer-") => 2,
+                            "lu" | "full_piv_lu" | "cholesky" | "solve" | "svd_values" | "svd_thin" | "eigh"
+                                if row.starts_with("faer-") =>
+                            {
+                                2
+                            }
                             _ => 1,
                         };
                         assert_eq!(ops.len(), expected);
