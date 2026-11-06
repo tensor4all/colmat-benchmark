@@ -276,13 +276,13 @@ macro_rules! define_backend {
                     // `dgetrf` takes any shape and faer's `lu_in_place` does as
                     // well, with `min(m, n)` pivots and a trapezoidal `L` or
                     // `U`. So neither is gated to square.
-                    "lu" => Ok(vec![lu_op::<T>(m, n, batch, order)?]),
+                    "lu" => lu_ops::<T>(m, n, batch, order),
                     "full_piv_lu" => {
                         Ok(vec![full_piv_lu_op::<T>(m, n, batch, order)?])
                     }
                     "cholesky" => {
                         square(case, family)?;
-                        Ok(vec![cholesky_op::<T>(m, batch, order)?])
+                        cholesky_ops::<T>(m, batch, order)
                     }
                     "solve" => {
                         square(case, family)?;
@@ -723,6 +723,15 @@ macro_rules! highlevel_ops {
             DenseSolveCore, FullPivLu, Llt, PartialPivLu, Qr, SelfAdjointEigen, Solve, Svd,
         };
         use fk::Side;
+
+        /// Upstream is measured through its owning methods only.
+        fn lu_ops<T: Scalar + ComplexField>(m: usize, n: usize, batch: usize, order: Order) -> Result<Vec<Op>, String> {
+            Ok(vec![lu_op::<T>(m, n, batch, order)?])
+        }
+
+        fn cholesky_ops<T: Scalar + ComplexField>(n: usize, batch: usize, order: Order) -> Result<Vec<Op>, String> {
+            Ok(vec![cholesky_op::<T>(n, batch, order)?])
+        }
             // -------------------------------------------------------- qr (composite)
 
             fn qr_op<T: Scalar + ComplexField>(
@@ -1667,6 +1676,199 @@ macro_rules! explicit_ops {
                         }
                         let recon = to_layout(out.as_ref(), s.n, s.n, s.order);
                         within::<T>(max_diff(a0, &recon), frob(a0), s.n, "cholesky")?;
+                    }
+                    Ok(())
+                },
+            ))
+        }
+
+        // ------------------------------------------------- workspace (in_place) routes
+
+        /// `lu` and `cholesky` are measured twice on the fork row. The op with an empty note is the
+        /// owning route (`PartialPivLu::new`, `Llt::new`): the API a user calls, whose own factor
+        /// allocation is the library's cost and stays inside the clock. The op noted `in_place` is
+        /// the workspace route the vendor row is comparable with: the caller's buffer, in the
+        /// input's own layout, and a `MemStack` sized by `*_in_place_scratch` are allocated once,
+        /// outside the clock; the timed call copies the input into that buffer (a contiguous copy,
+        /// as the vendor row's) and factors it in place. No allocation happens inside the clock.
+        fn lu_ops<T: Scalar + ComplexField>(m: usize, n: usize, batch: usize, order: Order) -> Result<Vec<Op>, String> {
+            Ok(vec![lu_op::<T>(m, n, batch, order)?, lu_in_place_op::<T>(m, n, batch, order)?])
+        }
+
+        fn cholesky_ops<T: Scalar + ComplexField>(n: usize, batch: usize, order: Order) -> Result<Vec<Op>, String> {
+            Ok(vec![cholesky_op::<T>(n, batch, order)?, cholesky_in_place_op::<T>(n, batch, order)?])
+        }
+
+        fn lu_in_place_op<T: Scalar + ComplexField>(
+            m: usize,
+            n: usize,
+            batch: usize,
+            order: Order,
+        ) -> Result<Op, String> {
+            let a0 = fill_seeded::<T>(m * n * batch, seed(m, n, 5));
+            struct S<T: ComplexField> {
+                a0: Vec<T>,
+                a: Vec<T>,
+                perms: Vec<(Vec<usize>, Vec<usize>)>,
+                mem: MemBuffer,
+                m: usize,
+                n: usize,
+                batch: usize,
+                order: Order,
+                par: ParCfg,
+            }
+            let par = cfg_par();
+            let req = plu::lu_in_place_scratch::<usize, T>(m, n, parmod::shape(par), Default::default());
+            let state = S {
+                a: a0.clone(),
+                a0,
+                perms: (0..batch).map(|_| (vec![0usize; m], vec![0usize; m])).collect(),
+                mem: MemBuffer::new(req),
+                m,
+                n,
+                batch,
+                order,
+                par,
+            };
+            Ok(op_from(
+                state,
+                "in_place".to_owned(),
+                // The buffers are reused, so prepare spoils the retained result (outside the clock).
+                |s| {
+                    let len = s.m * s.n;
+                    for bi in 0..s.batch {
+                        s.a[bi * len] = T::from_f64(1e30);
+                        let (fwd, bwd) = &mut s.perms[bi];
+                        fwd.fill(0);
+                        bwd.fill(0);
+                    }
+                    Ok(())
+                },
+                |s, mut tk| {
+                    let len = s.m * s.n;
+                    for bi in 0..s.batch {
+                        s.a[bi * len..(bi + 1) * len].copy_from_slice(&s.a0[bi * len..(bi + 1) * len]);
+                        let (fwd, bwd) = &mut s.perms[bi];
+                        plu::lu_in_place(
+                            mmut(&mut s.a[bi * len..(bi + 1) * len], s.m, s.n, s.order),
+                            fwd,
+                            bwd,
+                            parmod::mk_from(&mut tk, s.par),
+                            MemStack::new(&mut s.mem),
+                            Default::default(),
+                        );
+                    }
+                    Ok(())
+                },
+                |s| {
+                    let seq = ParCfg::Seq;
+                    let len = s.m * s.n;
+                    for bi in 0..s.batch {
+                        let a0 = &s.a0[bi * len..(bi + 1) * len];
+                        let (l, u) = split_lu(mref(&s.a[bi * len..(bi + 1) * len], s.m, s.n, s.order).to_owned());
+                        let (fwd, bwd) = &s.perms[bi];
+                        let mut out = fk::Mat::<T>::zeros(s.m, s.n);
+                        plu_rec::reconstruct(
+                            out.as_mut(),
+                            l.as_ref(),
+                            u.as_ref(),
+                            PermRef::new_checked(fwd, bwd, s.m),
+                            parmod::verify_par(seq),
+                            MemStack::new(&mut MemBuffer::new(
+                                plu_rec::reconstruct_scratch::<usize, T>(s.m, s.n, parmod::shape(seq)),
+                            )),
+                        );
+                        let recon = to_layout(out.as_ref(), s.m, s.n, s.order);
+                        within::<T>(max_diff(a0, &recon), frob(a0), s.n.max(s.m), "lu in_place")?;
+                    }
+                    Ok(())
+                },
+            ))
+        }
+
+        /// `cholesky_in_place` works on the strides it is given, so a row-major input is factored
+        /// where it is, with no transpose. Only the lower triangle is read and written; the upper
+        /// keeps the input, as `potrf`'s does.
+        fn cholesky_in_place_op<T: Scalar + ComplexField>(
+            n: usize,
+            batch: usize,
+            order: Order,
+        ) -> Result<Op, String> {
+            let a0 = spd::<T>(n, batch, order, seed(n, n, 11));
+            struct S<T: ComplexField> {
+                a0: Vec<T>,
+                a: Vec<T>,
+                mem: MemBuffer,
+                n: usize,
+                batch: usize,
+                order: Order,
+                par: ParCfg,
+            }
+            let par = cfg_par();
+            let req = llt_factor::cholesky_in_place_scratch::<T>(n, parmod::shape(par), Default::default());
+            let state = S {
+                a: a0.clone(),
+                a0,
+                mem: MemBuffer::new(req),
+                n,
+                batch,
+                order,
+                par,
+            };
+            Ok(op_from(
+                state,
+                "in_place".to_owned(),
+                // The buffers are reused, so prepare spoils the retained result (outside the clock).
+                |s| {
+                    let len = s.n * s.n;
+                    for bi in 0..s.batch {
+                        s.a[bi * len] = T::from_f64(1e30);
+                    }
+                    Ok(())
+                },
+                |s, mut tk| {
+                    let len = s.n * s.n;
+                    for bi in 0..s.batch {
+                        s.a[bi * len..(bi + 1) * len].copy_from_slice(&s.a0[bi * len..(bi + 1) * len]);
+                        llt_factor::cholesky_in_place(
+                            mmut(&mut s.a[bi * len..(bi + 1) * len], s.n, s.n, s.order),
+                            Default::default(),
+                            parmod::mk_from(&mut tk, s.par),
+                            MemStack::new(&mut s.mem),
+                            Default::default(),
+                        )
+                        .map_err(|e| format!("llt in_place failed: {e:?}"))?;
+                    }
+                    Ok(())
+                },
+                |s| {
+                    let seq = ParCfg::Seq;
+                    let len = s.n * s.n;
+                    for bi in 0..s.batch {
+                        let a0 = &s.a0[bi * len..(bi + 1) * len];
+                        let view = mref(&s.a[bi * len..(bi + 1) * len], s.n, s.n, s.order);
+                        let mut l = fk::Mat::<T>::zeros(s.n, s.n);
+                        for j in 0..s.n {
+                            for i in j..s.n {
+                                l[(i, j)] = view[(i, j)].clone();
+                            }
+                        }
+                        let mut out = fk::Mat::<T>::zeros(s.n, s.n);
+                        llt_rec::reconstruct(
+                            out.as_mut(),
+                            l.as_ref(),
+                            parmod::verify_par(seq),
+                            MemStack::new(&mut MemBuffer::new(
+                                llt_rec::reconstruct_scratch::<T>(s.n, parmod::shape(seq)),
+                            )),
+                        );
+                        for j in 1..s.n {
+                            for i in 0..j {
+                                out[(i, j)] = T::conj_impl(&out[(j, i)]);
+                            }
+                        }
+                        let recon = to_layout(out.as_ref(), s.n, s.n, s.order);
+                        within::<T>(max_diff(a0, &recon), frob(a0), s.n, "cholesky in_place")?;
                     }
                     Ok(())
                 },

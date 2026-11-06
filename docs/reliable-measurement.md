@@ -61,10 +61,11 @@ and one coefficient block; multi-panel sequences are not covered.
 - GEMM, factor-only QR and Householder apply are retained-buffer calls: caller
   buffer initialization/restoration is outside the clock. Allocations internal
   to the provider API remain timed, including LAPACKE-owned workspace/adaptation.
-- Factorization composites produce and retain actual outputs. Public-API
-  allocation/copy/factorization and explicit-Q construction are timed; prior
-  output destruction happens in prepare, outside timing. Solve consumes its
-  temporary factor in the measured pipeline and retains the solution.
+- Factorization composites produce and retain actual outputs. The faer owning
+  routes' public-API allocation/copy/factorization and explicit-Q construction
+  are timed; prior output destruction happens in prepare, outside timing. Solve
+  consumes its temporary factor in the measured pipeline and retains the
+  solution. What the harness allocates is not timed (next section).
 - Checks inspect the actual last execution's factors/values/vectors/solution,
   not a replacement factorization of the original input. They do not check every
   timed call. Corrupting retained outputs must fail validation.
@@ -87,6 +88,26 @@ and one coefficient block; multi-panel sequences are not covered.
   timing-version suffix, so a new measurement contract does not overwrite the
   old numerical page. The exact clean toolkit commit is pinned and recorded as
   well as the harness and both library revisions.
+
+## Allocation and the clock
+
+Every buffer the harness owns is allocated before the clock, once per op, and reused by every
+priming and timed call: inputs and their references, the caller buffers a vendor routine factors
+in place (the copy of the input, `ipiv`, `tau`, singular values and vectors, eigenvalues, the
+explicit `R`), the faer `in_place` route's matrix, permutations and `MemStack` (sized by the
+library's `*_in_place_scratch`), and the comparison arms' buffers; copying the input into such a
+buffer stays inside the clock, on every row alike. What a library call allocates for itself stays
+inside the clock and is part of that operation's cost, even where the harness could hoist it: the
+owning faer methods (`PartialPivLu::new`, `Llt::new`, and the fork composites that rebuild them
+from the low-level calls) allocate their own factor, permutations and scratch, and LAPACKE may
+allocate a transpose or workspace. So the fork's `lu` and `cholesky` are timed twice: the op with
+an empty `note` is the owning route, the headline number a user's call costs, and the op noted
+`in_place` is the workspace route, which allocates nothing inside the clock and is the one
+comparable with the vendor row. Because buffers are reused, each op's `prepare` spoils one value of
+the retained result so that a check can only pass on what the timed call wrote. No case may depend
+on the allocator's adaptive behaviour: a measurement is not repaired with `MALLOC_*` or any other
+allocator setting, and a cell that moves with process history is traced to the allocation inside
+its clock. Vendor numbers recorded before this rule include the vendor row's buffer allocation.
 
 ## Adoption gate
 

@@ -976,18 +976,17 @@ mod imp {
             order: Order,
             with_q: bool,
         }
+        // Every buffer the vendor call writes is the harness's, so it is allocated here, once,
+        // and reused by every call (docs/reliable-measurement.md, "Allocation and the clock").
+        // `r` stays zero below its diagonal: only the upper trapezoid is ever written.
         let state = S {
-            a: if with_q {
-                Vec::with_capacity(batch)
+            a: a0.chunks_exact(m * n).map(|a| a.to_vec()).collect(),
+            tau: vec![vec![T::zero(); m.min(n)]; batch],
+            r: if with_q {
+                vec![vec![T::zero(); m.min(n) * n]; batch]
             } else {
-                a0.chunks_exact(m * n).map(|a| a.to_vec()).collect()
+                Vec::new()
             },
-            tau: if with_q {
-                Vec::with_capacity(batch)
-            } else {
-                vec![vec![T::zero(); m.min(n)]; batch]
-            },
-            r: Vec::with_capacity(batch),
             a0,
             m,
             n,
@@ -998,11 +997,13 @@ mod imp {
         Ok(op_from(
             state,
             String::new(),
+            // The buffers are reused, so prepare spoils the retained result (outside the clock) and a
+            // check can only pass on what the next timed call writes.
             |s| {
-                s.r.clear();
                 if s.with_q {
-                    s.a.clear();
-                    s.tau.clear();
+                    for r in &mut s.r {
+                        r[0] = T::from_f64(1e30);
+                    }
                 } else {
                     for bi in 0..s.batch {
                         s.a[bi].copy_from_slice(&s.a0[bi * s.m * s.n..(bi + 1) * s.m * s.n]);
@@ -1015,8 +1016,7 @@ mod imp {
                 let r = s.m.min(s.n);
                 for bi in 0..s.batch {
                     if s.with_q {
-                        s.a.push(s.a0[bi * s.m * s.n..(bi + 1) * s.m * s.n].to_vec());
-                        s.tau.push(vec![T::zero(); r]);
+                        s.a[bi].copy_from_slice(&s.a0[bi * s.m * s.n..(bi + 1) * s.m * s.n]);
                     }
                     let a = &mut s.a[bi];
                     let tau = &mut s.tau[bi];
@@ -1032,13 +1032,12 @@ mod imp {
                         return Err(format!("geqrf returned {info}"));
                     }
                     if s.with_q {
-                        let mut rmat = vec![T::zero(); r * s.n];
+                        let rmat = &mut s.r[bi];
                         for i in 0..r {
                             for j in i..s.n {
                                 rmat[idx(i, j, r, s.n, s.order)] = a[idx(i, j, s.m, s.n, s.order)];
                             }
                         }
-                        s.r.push(rmat);
                         // Q is m x r with r = min(m, n) columns; asking orgqr for
                         // more columns than Q has (n > m on a wide shape) is invalid
                         // and MKL rejects it. The m x n buffer keeps its own leading
@@ -1127,8 +1126,8 @@ mod imp {
             order: Order,
         }
         let state = S {
+            outputs: (0..batch).map(|_| (vec![T::zero(); m * n], vec![0i32; size])).collect(),
             a0,
-            outputs: Vec::with_capacity(batch),
             m,
             n,
             size,
@@ -1138,26 +1137,30 @@ mod imp {
         Ok(op_from(
             state,
             String::new(),
+            // The buffers are reused, so prepare spoils the retained result (outside the clock) and a
+            // check can only pass on what the next timed call writes.
             |s| {
-                s.outputs.clear();
+                for (a, ipiv) in &mut s.outputs {
+                    a[0] = T::from_f64(1e30);
+                    ipiv[0] = 0;
+                }
                 Ok(())
             },
             |s, _tk| {
                 for bi in 0..s.batch {
-                    let mut a = s.a0[bi * s.m * s.n..(bi + 1) * s.m * s.n].to_vec();
-                    let mut ipiv = vec![0i32; s.size];
+                    let (a, ipiv) = &mut s.outputs[bi];
+                    a.copy_from_slice(&s.a0[bi * s.m * s.n..(bi + 1) * s.m * s.n]);
                     let info = T::getrf(
                         layout(s.order),
                         s.m,
                         s.n,
-                        &mut a,
+                        a,
                         leading(s.m, s.n, s.order),
-                        &mut ipiv,
+                        ipiv,
                     );
                     if info != 0 {
                         return Err(format!("getrf returned {info}"));
                     }
-                    s.outputs.push((a, ipiv));
                 }
                 Ok(())
             },
@@ -1217,8 +1220,8 @@ mod imp {
             order: Order,
         }
         let state = S {
+            outputs: vec![vec![T::zero(); n * n]; batch],
             a0,
-            outputs: Vec::with_capacity(batch),
             n,
             batch,
             order,
@@ -1226,18 +1229,22 @@ mod imp {
         Ok(op_from(
             state,
             String::new(),
+            // The buffers are reused, so prepare spoils the retained result (outside the clock) and a
+            // check can only pass on what the next timed call writes.
             |s| {
-                s.outputs.clear();
+                for a in &mut s.outputs {
+                    a[0] = T::from_f64(1e30);
+                }
                 Ok(())
             },
             |s, _tk| {
                 for bi in 0..s.batch {
-                    let mut a = s.a0[bi * s.n * s.n..(bi + 1) * s.n * s.n].to_vec();
-                    let info = T::potrf(layout(s.order), s.n, &mut a, leading(s.n, s.n, s.order));
+                    let a = &mut s.outputs[bi];
+                    a.copy_from_slice(&s.a0[bi * s.n * s.n..(bi + 1) * s.n * s.n]);
+                    let info = T::potrf(layout(s.order), s.n, a, leading(s.n, s.n, s.order));
                     if info != 0 {
                         return Err(format!("potrf returned {info}"));
                     }
-                    s.outputs.push(a);
                 }
                 Ok(())
             },
@@ -1266,6 +1273,7 @@ mod imp {
         let b0 = fill_seeded::<T>(n * batch, seed(n, 1, 17));
         struct S<T> {
             a0: Vec<T>,
+            work: Vec<(Vec<T>, Vec<i32>)>,
             b0: Vec<T>,
             b: Vec<T>,
             sink: T,
@@ -1274,6 +1282,7 @@ mod imp {
             order: Order,
         }
         let state = S {
+            work: (0..batch).map(|_| (vec![T::zero(); n * n], vec![0i32; n])).collect(),
             a0,
             b0: b0.clone(),
             b: b0.clone(),
@@ -1291,14 +1300,14 @@ mod imp {
             },
             |s, _tk| {
                 for bi in 0..s.batch {
-                    let mut a = s.a0[bi * s.n * s.n..(bi + 1) * s.n * s.n].to_vec();
-                    let mut ipiv = vec![0i32; s.n];
+                    let (a, ipiv) = &mut s.work[bi];
+                    a.copy_from_slice(&s.a0[bi * s.n * s.n..(bi + 1) * s.n * s.n]);
                     let info = T::gesv(
                         layout(s.order),
                         s.n,
-                        &mut a,
+                        a,
                         leading(s.n, s.n, s.order),
-                        &mut ipiv,
+                        ipiv,
                         &mut s.b[bi * s.n..],
                         leading(s.n, 1, s.order),
                     );
@@ -1334,6 +1343,7 @@ mod imp {
         let a0 = fill_seeded::<T>(m * n * batch, seed(m, n, if thin { 31 } else { 29 }));
         struct S<T> {
             a0: Vec<T>,
+            work: Vec<Vec<T>>,
             outputs: Vec<(Vec<f64>, Vec<T>, Vec<T>)>,
             m: usize,
             n: usize,
@@ -1341,9 +1351,16 @@ mod imp {
             order: Order,
             thin: bool,
         }
+        let r = m.min(n);
         let state = S {
+            work: vec![vec![T::zero(); m * n]; batch],
+            outputs: (0..batch)
+                .map(|_| {
+                    let (u, vt) = if thin { (m * r, r * n) } else { (0, 0) };
+                    (vec![0.0f64; r], vec![T::zero(); u], vec![T::zero(); vt])
+                })
+                .collect(),
             a0,
-            outputs: Vec::with_capacity(batch),
             m,
             n,
             batch,
@@ -1353,25 +1370,23 @@ mod imp {
         Ok(op_from(
             state,
             String::new(),
+            // The buffers are reused, so prepare spoils the retained result (outside the clock) and a
+            // check can only pass on what the next timed call writes.
             |s| {
-                s.outputs.clear();
+                for (sigma, u, _) in &mut s.outputs {
+                    sigma[0] = -1.0;
+                    if let Some(x) = u.first_mut() {
+                        *x = T::from_f64(1e30);
+                    }
+                }
                 Ok(())
             },
             |s, _tk| {
                 let r = s.m.min(s.n);
                 for bi in 0..s.batch {
-                    let mut a = s.a0[bi * s.m * s.n..(bi + 1) * s.m * s.n].to_vec();
-                    let mut sigma = vec![0.0f64; r];
-                    let mut u = if s.thin {
-                        vec![T::zero(); s.m * r]
-                    } else {
-                        Vec::new()
-                    };
-                    let mut vt = if s.thin {
-                        vec![T::zero(); r * s.n]
-                    } else {
-                        Vec::new()
-                    };
+                    let a = &mut s.work[bi];
+                    a.copy_from_slice(&s.a0[bi * s.m * s.n..(bi + 1) * s.m * s.n]);
+                    let (sigma, u, vt) = &mut s.outputs[bi];
                     let mut dummy_u = [T::zero()];
                     let mut dummy_vt = [T::zero()];
                     let jobz = if s.thin { JOB_S } else { JOB_N };
@@ -1380,9 +1395,9 @@ mod imp {
                         jobz,
                         s.m,
                         s.n,
-                        &mut a,
+                        a,
                         leading(s.m, s.n, s.order),
-                        &mut sigma,
+                        sigma,
                         if s.thin {
                             u.as_mut_slice()
                         } else {
@@ -1401,7 +1416,6 @@ mod imp {
                     if info != 0 {
                         return Err(format!("gesdd returned {info}"));
                     }
-                    s.outputs.push((sigma, u, vt));
                 }
                 Ok(())
             },
@@ -1474,8 +1488,8 @@ mod imp {
             order: Order,
         }
         let state = S {
+            outputs: (0..batch).map(|_| (vec![T::zero(); n * n], vec![0.0f64; n])).collect(),
             a0,
-            outputs: Vec::with_capacity(batch),
             n,
             batch,
             order,
@@ -1483,26 +1497,29 @@ mod imp {
         Ok(op_from(
             state,
             String::new(),
+            // The buffers are reused, so prepare spoils the retained result (outside the clock) and a
+            // check can only pass on what the next timed call writes.
             |s| {
-                s.outputs.clear();
+                for (a, _) in &mut s.outputs {
+                    a[0] = T::from_f64(1e30);
+                }
                 Ok(())
             },
             |s, _tk| {
                 for bi in 0..s.batch {
-                    let mut a = s.a0[bi * s.n * s.n..(bi + 1) * s.n * s.n].to_vec();
-                    let mut w = vec![0.0f64; s.n];
+                    let (a, w) = &mut s.outputs[bi];
+                    a.copy_from_slice(&s.a0[bi * s.n * s.n..(bi + 1) * s.n * s.n]);
                     let info = T::evd(
                         layout(s.order),
                         JOB_V,
                         s.n,
-                        &mut a,
+                        a,
                         leading(s.n, s.n, s.order),
-                        &mut w,
+                        w,
                     );
                     if info != 0 {
                         return Err(format!("syevd/heevd returned {info}"));
                     }
-                    s.outputs.push((a, w));
                 }
                 Ok(())
             },
