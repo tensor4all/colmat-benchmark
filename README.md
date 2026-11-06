@@ -20,6 +20,7 @@ which own the same job one layer up.
 | Latest results | [`result/INDEX.md`](result/INDEX.md) — generated table of contents over the per-revision pages |
 | Result layout | [`docs/results.md`](docs/results.md) |
 | Timing policy | [`docs/timing-policy.md`](docs/timing-policy.md) |
+| Measurement audit | [`docs/measurement-audit-2026-11-06.md`](docs/measurement-audit-2026-11-06.md) — what each timed call includes, per family and arm |
 | Reference revisions | [`pins/t4a-faer.rev`](pins/t4a-faer.rev) (the fork) and [`pins/upstream-faer.rev`](pins/upstream-faer.rev) (the baseline) — what `status` is measured against |
 | Rules and runbook | [`docs/rules.md`](docs/rules.md) - acceptance in an hour, the frozen contract, and the commands |
 | Design record | [`docs/worklog.md`](docs/worklog.md) — decisions, fixed failures, open items |
