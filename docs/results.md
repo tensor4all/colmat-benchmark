@@ -133,6 +133,10 @@ comparison.
 
 ## Coverage and staleness
 
+> **Read [`result/STATUS.md`](../result/STATUS.md) before quoting a page:** the pages recorded before #49
+> carry cells withdrawn pending re-measurement (`lu`, `solve`, `full_piv_lu`, `cholesky`, `qr_factor/n64`).
+> The index cannot say so, because it is generated.
+
 `result/INDEX.md` is generated and has two tables: the newest full-coverage page
 per cell with its currency, and every published page keyed by revision and
 hardware. Its point is that reports are self-describing but the *set* of them was
