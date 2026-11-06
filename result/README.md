@@ -4,4 +4,4 @@ Latest human-facing report per `(profile, suite, fork revision, upstream revisio
 plus the generated `INDEX.md`. Generated files: `INDEX.md`. Historical reports are not maintained;
 use git history.
 
-[`STATUS.md`](STATUS.md) is written by hand: which pages predate #49 and which cells of them are withdrawn.
+[`../docs/dataset-status.md`](../docs/dataset-status.md) is written by hand: which pages predate #49 and which cells of them are withdrawn.

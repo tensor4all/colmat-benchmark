@@ -133,7 +133,7 @@ comparison.
 
 ## Coverage and staleness
 
-> **Read [`result/STATUS.md`](../result/STATUS.md) before quoting a page:** the pages recorded before #49
+> **Read [`docs/dataset-status.md`](dataset-status.md) before quoting a page:** the pages recorded before #49
 > carry cells withdrawn pending re-measurement (`lu`, `solve`, `full_piv_lu`, `cholesky`, `qr_factor/n64`).
 > The index cannot say so, because it is generated.
 

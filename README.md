@@ -17,7 +17,7 @@ which own the same job one layer up.
 
 | | |
 |---|---|
-| Latest results | [`result/INDEX.md`](result/INDEX.md) — generated table of contents over the per-revision pages; read [`result/STATUS.md`](result/STATUS.md) first: pages recorded before #49 carry withdrawn cells |
+| Latest results | [`result/INDEX.md`](result/INDEX.md) — generated table of contents over the per-revision pages; read [`docs/dataset-status.md`](docs/dataset-status.md) first: pages recorded before #49 carry withdrawn cells |
 | Result layout | [`docs/results.md`](docs/results.md) |
 | Timing policy | [`docs/timing-policy.md`](docs/timing-policy.md) |
 | Measurement audit | [`docs/measurement-audit-2026-11-06.md`](docs/measurement-audit-2026-11-06.md) — what each timed call includes, per family and arm |
