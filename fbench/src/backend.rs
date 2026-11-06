@@ -276,17 +276,17 @@ macro_rules! define_backend {
                     // `dgetrf` takes any shape and faer's `lu_in_place` does as
                     // well, with `min(m, n)` pivots and a trapezoidal `L` or
                     // `U`. So neither is gated to square.
-                    "lu" => lu_ops::<T>(m, n, batch, order),
+                    "lu" => Ok(vec![lu_op::<T>(m, n, batch, order)?, lu_in_place_op::<T>(m, n, batch, order)?]),
                     "full_piv_lu" => {
                         Ok(vec![full_piv_lu_op::<T>(m, n, batch, order)?])
                     }
                     "cholesky" => {
                         square(case, family)?;
-                        cholesky_ops::<T>(m, batch, order)
+                        Ok(vec![cholesky_op::<T>(m, batch, order)?, cholesky_in_place_op::<T>(m, batch, order)?])
                     }
                     "solve" => {
                         square(case, family)?;
-                        Ok(vec![solve_op::<T>(m, batch, order)?])
+                        Ok(vec![solve_op::<T>(m, batch, order)?, solve_in_place_op::<T>(m, batch, order)?])
                     }
                     "triangular_solve" => {
                         square(case, family)?;
@@ -709,6 +709,277 @@ macro_rules! define_backend {
                 }
                 replicate(&mm, batch)
             }
+
+            // ------------------------------------------- in_place routes (one body, both faer rows)
+
+            // `lu`, `cholesky` and `solve` are timed twice on each faer row. The op with an empty
+            // note is the owning route (`PartialPivLu::new`, `Llt::new`, `partial_piv_lu().solve()`
+            // upstream; the fork's composite rebuild of them). The op noted `in_place` is this text,
+            // expanded identically for both crates: the matrix (and right-hand side), the
+            // permutations and a `MemStack` sized by the library's own `*_scratch` are allocated
+            // once, before the clock; `prepare` restores the input into them; the timed call is the
+            // in-place factorization (and solve) alone, on the input's own layout (a row-major
+            // input is factored where it is). The vendor row's `lu`, `cholesky` and `solve` are the
+            // same kind of call. See docs/reliable-measurement.md, "Allocation and the clock".
+
+            /// `(L, U)` of a packed LU, built element by element for the check (outside the clock).
+            fn check_split_lu<T: ComplexField>(lu: MatRef<'_, T>) -> (fk::Mat<T>, fk::Mat<T>) {
+                let (m, n) = lu.shape();
+                let size = m.min(n);
+                let mut l = fk::Mat::<T>::zeros(m, size);
+                let mut u = fk::Mat::<T>::zeros(size, n);
+                for j in 0..size {
+                    for i in j + 1..m {
+                        l[(i, j)] = lu[(i, j)].clone();
+                    }
+                    l[(j, j)] = T::one_impl();
+                }
+                for j in 0..n {
+                    for i in 0..=j.min(size - 1) {
+                        u[(i, j)] = lu[(i, j)].clone();
+                    }
+                }
+                (l, u)
+            }
+
+            /// `max |(P A)_{ij} - (L U)_{ij}|` with `(P A)` row `i` = `A` row `fwd[i]`.
+            fn lu_residual<T: Scalar + ComplexField>(
+                a0: &[T], lu: MatRef<'_, T>, fwd: &[usize], m: usize, n: usize, order: Order,
+            ) -> f64 {
+                let (l, u) = check_split_lu(lu);
+                let size = m.min(n);
+                let l = to_layout(l.as_ref(), m, size, order);
+                let u = to_layout(u.as_ref(), size, n, order);
+                let mut prod = vec![T::zero(); m * n];
+                mul(m, size, n, order, &l, &u, &mut prod);
+                let mut pa = vec![T::zero(); m * n];
+                for i in 0..m {
+                    for j in 0..n {
+                        pa[idx(i, j, m, n, order)] = a0[idx(fwd[i], j, m, n, order)];
+                    }
+                }
+                max_diff(&pa, &prod)
+            }
+
+            fn lu_in_place_op<T: Scalar + ComplexField>(
+                m: usize,
+                n: usize,
+                batch: usize,
+                order: Order,
+            ) -> Result<Op, String> {
+                use fk::linalg::lu::partial_pivoting::factor as plu;
+                let a0 = fill_seeded::<T>(m * n * batch, seed(m, n, 5));
+                struct S<T: ComplexField> {
+                    a0: Vec<T>,
+                    a: Vec<T>,
+                    perms: Vec<(Vec<usize>, Vec<usize>)>,
+                    mem: MemBuffer,
+                    m: usize,
+                    n: usize,
+                    batch: usize,
+                    order: Order,
+                    par: ParCfg,
+                }
+                let par = cfg_par();
+                let req = plu::lu_in_place_scratch::<usize, T>(m, n, parmod::shape(par), Default::default());
+                let state = S {
+                    a: a0.clone(),
+                    a0,
+                    perms: (0..batch).map(|_| (vec![0usize; m], vec![0usize; m])).collect(),
+                    mem: MemBuffer::new(req),
+                    m,
+                    n,
+                    batch,
+                    order,
+                    par,
+                };
+                Ok(op_from(
+                    state,
+                    "in_place".to_owned(),
+                    |s| {
+                        s.a.copy_from_slice(&s.a0);
+                        for (fwd, bwd) in &mut s.perms {
+                            fwd.fill(0);
+                            bwd.fill(0);
+                        }
+                        Ok(())
+                    },
+                    |s, mut tk| {
+                        let len = s.m * s.n;
+                        for bi in 0..s.batch {
+                            let (fwd, bwd) = &mut s.perms[bi];
+                            plu::lu_in_place(
+                                mmut(&mut s.a[bi * len..(bi + 1) * len], s.m, s.n, s.order),
+                                fwd,
+                                bwd,
+                                parmod::mk_from(&mut tk, s.par),
+                                MemStack::new(&mut s.mem),
+                                Default::default(),
+                            );
+                        }
+                        Ok(())
+                    },
+                    |s| {
+                        let len = s.m * s.n;
+                        for bi in 0..s.batch {
+                            let a0 = &s.a0[bi * len..(bi + 1) * len];
+                            let lu = mref(&s.a[bi * len..(bi + 1) * len], s.m, s.n, s.order);
+                            let r = lu_residual(a0, lu, &s.perms[bi].0, s.m, s.n, s.order);
+                            within::<T>(r, frob(a0), s.n.max(s.m), "lu in_place")?;
+                        }
+                        Ok(())
+                    },
+                ))
+            }
+
+            /// Only the lower triangle is read and written; the upper keeps the input, as `potrf`'s.
+            fn cholesky_in_place_op<T: Scalar + ComplexField>(
+                n: usize,
+                batch: usize,
+                order: Order,
+            ) -> Result<Op, String> {
+                use fk::linalg::cholesky::llt::factor as llt;
+                let a0 = spd::<T>(n, batch, order, seed(n, n, 11));
+                struct S<T: ComplexField> {
+                    a0: Vec<T>,
+                    a: Vec<T>,
+                    mem: MemBuffer,
+                    n: usize,
+                    batch: usize,
+                    order: Order,
+                    par: ParCfg,
+                }
+                let par = cfg_par();
+                let req = llt::cholesky_in_place_scratch::<T>(n, parmod::shape(par), Default::default());
+                let state = S { a: a0.clone(), a0, mem: MemBuffer::new(req), n, batch, order, par };
+                Ok(op_from(
+                    state,
+                    "in_place".to_owned(),
+                    |s| {
+                        s.a.copy_from_slice(&s.a0);
+                        Ok(())
+                    },
+                    |s, mut tk| {
+                        let len = s.n * s.n;
+                        for bi in 0..s.batch {
+                            llt::cholesky_in_place(
+                                mmut(&mut s.a[bi * len..(bi + 1) * len], s.n, s.n, s.order),
+                                Default::default(),
+                                parmod::mk_from(&mut tk, s.par),
+                                MemStack::new(&mut s.mem),
+                                Default::default(),
+                            )
+                            .map_err(|e| format!("llt in_place failed: {e:?}"))?;
+                        }
+                        Ok(())
+                    },
+                    |s| {
+                        let len = s.n * s.n;
+                        for bi in 0..s.batch {
+                            let a0 = &s.a0[bi * len..(bi + 1) * len];
+                            let a = &s.a[bi * len..(bi + 1) * len];
+                            let mut l = vec![T::zero(); len];
+                            for j in 0..s.n {
+                                for i in j..s.n {
+                                    l[idx(i, j, s.n, s.n, s.order)] = a[idx(i, j, s.n, s.n, s.order)];
+                                }
+                            }
+                            let mut recon = vec![T::zero(); len];
+                            mul_adj_b(s.n, s.n, s.n, s.order, &l, &l, &mut recon);
+                            within::<T>(max_diff(a0, &recon), frob(a0), s.n, "cholesky in_place")?;
+                        }
+                        Ok(())
+                    },
+                ))
+            }
+
+            /// `lu_in_place`, then `solve_in_place_with_conj` with the packed factor passed as both
+            /// `L` (its unit-lower part is read) and `U` (its upper part).
+            fn solve_in_place_op<T: Scalar + ComplexField>(
+                n: usize,
+                batch: usize,
+                order: Order,
+            ) -> Result<Op, String> {
+                use fk::linalg::lu::partial_pivoting::{factor as plu, solve as plu_solve};
+                let a0 = diag_dominant::<T>(n, batch, order, seed(n, n, 13));
+                let b0 = fill_seeded::<T>(n * batch, seed(n, 1, 17));
+                struct S<T: ComplexField> {
+                    a0: Vec<T>,
+                    a: Vec<T>,
+                    b0: Vec<T>,
+                    b: Vec<T>,
+                    perms: Vec<(Vec<usize>, Vec<usize>)>,
+                    mem_lu: MemBuffer,
+                    mem_solve: MemBuffer,
+                    sink: T,
+                    n: usize,
+                    batch: usize,
+                    order: Order,
+                    par: ParCfg,
+                }
+                let par = cfg_par();
+                let state = S {
+                    a: a0.clone(),
+                    a0,
+                    b: b0.clone(),
+                    b0,
+                    perms: (0..batch).map(|_| (vec![0usize; n], vec![0usize; n])).collect(),
+                    mem_lu: MemBuffer::new(plu::lu_in_place_scratch::<usize, T>(n, n, parmod::shape(par), Default::default())),
+                    mem_solve: MemBuffer::new(plu_solve::solve_in_place_scratch::<usize, T>(n, 1, parmod::shape(par))),
+                    sink: T::zero(),
+                    n,
+                    batch,
+                    order,
+                    par,
+                };
+                Ok(op_from(
+                    state,
+                    "in_place".to_owned(),
+                    |s| {
+                        s.a.copy_from_slice(&s.a0);
+                        s.b.copy_from_slice(&s.b0);
+                        Ok(())
+                    },
+                    |s, mut tk| {
+                        let len = s.n * s.n;
+                        for bi in 0..s.batch {
+                            let (fwd, bwd) = &mut s.perms[bi];
+                            let a = &mut s.a[bi * len..(bi + 1) * len];
+                            let (_, perm) = plu::lu_in_place(
+                                mmut(a, s.n, s.n, s.order),
+                                fwd,
+                                bwd,
+                                parmod::mk_from(&mut tk, s.par),
+                                MemStack::new(&mut s.mem_lu),
+                                Default::default(),
+                            );
+                            let lu = mref(a, s.n, s.n, s.order);
+                            plu_solve::solve_in_place_with_conj(
+                                lu,
+                                lu,
+                                perm,
+                                Conj::No,
+                                mmut(&mut s.b[bi * s.n..(bi + 1) * s.n], s.n, 1, s.order),
+                                parmod::mk_from(&mut tk, s.par),
+                                MemStack::new(&mut s.mem_solve),
+                            );
+                            acc(&mut s.sink, s.b[bi * s.n].clone());
+                        }
+                        Ok(())
+                    },
+                    |s| {
+                        for bi in 0..s.batch {
+                            let a0 = &s.a0[bi * s.n * s.n..(bi + 1) * s.n * s.n];
+                            let b0 = &s.b0[bi * s.n..(bi + 1) * s.n];
+                            let x = &s.b[bi * s.n..(bi + 1) * s.n];
+                            let mut ax = vec![T::zero(); s.n];
+                            mul(s.n, s.n, 1, s.order, a0, x, &mut ax);
+                            within::<T>(max_diff(&ax, b0), frob(b0), s.n, "solve in_place")?;
+                        }
+                        Ok(())
+                    },
+                ))
+            }
         }
     };
 }
@@ -723,15 +994,6 @@ macro_rules! highlevel_ops {
             DenseSolveCore, FullPivLu, Llt, PartialPivLu, Qr, SelfAdjointEigen, Solve, Svd,
         };
         use fk::Side;
-
-        /// Upstream is measured through its owning methods only.
-        fn lu_ops<T: Scalar + ComplexField>(m: usize, n: usize, batch: usize, order: Order) -> Result<Vec<Op>, String> {
-            Ok(vec![lu_op::<T>(m, n, batch, order)?])
-        }
-
-        fn cholesky_ops<T: Scalar + ComplexField>(n: usize, batch: usize, order: Order) -> Result<Vec<Op>, String> {
-            Ok(vec![cholesky_op::<T>(n, batch, order)?])
-        }
             // -------------------------------------------------------- qr (composite)
 
             fn qr_op<T: Scalar + ComplexField>(
@@ -1676,199 +1938,6 @@ macro_rules! explicit_ops {
                         }
                         let recon = to_layout(out.as_ref(), s.n, s.n, s.order);
                         within::<T>(max_diff(a0, &recon), frob(a0), s.n, "cholesky")?;
-                    }
-                    Ok(())
-                },
-            ))
-        }
-
-        // ------------------------------------------------- workspace (in_place) routes
-
-        /// `lu` and `cholesky` are measured twice on the fork row. The op with an empty note is the
-        /// owning route (`PartialPivLu::new`, `Llt::new`): the API a user calls, whose own factor
-        /// allocation is the library's cost and stays inside the clock. The op noted `in_place` is
-        /// the workspace route the vendor row is comparable with: the caller's buffer, in the
-        /// input's own layout, and a `MemStack` sized by `*_in_place_scratch` are allocated once,
-        /// outside the clock; the timed call copies the input into that buffer (a contiguous copy,
-        /// as the vendor row's) and factors it in place. No allocation happens inside the clock.
-        fn lu_ops<T: Scalar + ComplexField>(m: usize, n: usize, batch: usize, order: Order) -> Result<Vec<Op>, String> {
-            Ok(vec![lu_op::<T>(m, n, batch, order)?, lu_in_place_op::<T>(m, n, batch, order)?])
-        }
-
-        fn cholesky_ops<T: Scalar + ComplexField>(n: usize, batch: usize, order: Order) -> Result<Vec<Op>, String> {
-            Ok(vec![cholesky_op::<T>(n, batch, order)?, cholesky_in_place_op::<T>(n, batch, order)?])
-        }
-
-        fn lu_in_place_op<T: Scalar + ComplexField>(
-            m: usize,
-            n: usize,
-            batch: usize,
-            order: Order,
-        ) -> Result<Op, String> {
-            let a0 = fill_seeded::<T>(m * n * batch, seed(m, n, 5));
-            struct S<T: ComplexField> {
-                a0: Vec<T>,
-                a: Vec<T>,
-                perms: Vec<(Vec<usize>, Vec<usize>)>,
-                mem: MemBuffer,
-                m: usize,
-                n: usize,
-                batch: usize,
-                order: Order,
-                par: ParCfg,
-            }
-            let par = cfg_par();
-            let req = plu::lu_in_place_scratch::<usize, T>(m, n, parmod::shape(par), Default::default());
-            let state = S {
-                a: a0.clone(),
-                a0,
-                perms: (0..batch).map(|_| (vec![0usize; m], vec![0usize; m])).collect(),
-                mem: MemBuffer::new(req),
-                m,
-                n,
-                batch,
-                order,
-                par,
-            };
-            Ok(op_from(
-                state,
-                "in_place".to_owned(),
-                // The buffers are reused, so prepare spoils the retained result (outside the clock).
-                |s| {
-                    let len = s.m * s.n;
-                    for bi in 0..s.batch {
-                        s.a[bi * len] = T::from_f64(1e30);
-                        let (fwd, bwd) = &mut s.perms[bi];
-                        fwd.fill(0);
-                        bwd.fill(0);
-                    }
-                    Ok(())
-                },
-                |s, mut tk| {
-                    let len = s.m * s.n;
-                    for bi in 0..s.batch {
-                        s.a[bi * len..(bi + 1) * len].copy_from_slice(&s.a0[bi * len..(bi + 1) * len]);
-                        let (fwd, bwd) = &mut s.perms[bi];
-                        plu::lu_in_place(
-                            mmut(&mut s.a[bi * len..(bi + 1) * len], s.m, s.n, s.order),
-                            fwd,
-                            bwd,
-                            parmod::mk_from(&mut tk, s.par),
-                            MemStack::new(&mut s.mem),
-                            Default::default(),
-                        );
-                    }
-                    Ok(())
-                },
-                |s| {
-                    let seq = ParCfg::Seq;
-                    let len = s.m * s.n;
-                    for bi in 0..s.batch {
-                        let a0 = &s.a0[bi * len..(bi + 1) * len];
-                        let (l, u) = split_lu(mref(&s.a[bi * len..(bi + 1) * len], s.m, s.n, s.order).to_owned());
-                        let (fwd, bwd) = &s.perms[bi];
-                        let mut out = fk::Mat::<T>::zeros(s.m, s.n);
-                        plu_rec::reconstruct(
-                            out.as_mut(),
-                            l.as_ref(),
-                            u.as_ref(),
-                            PermRef::new_checked(fwd, bwd, s.m),
-                            parmod::verify_par(seq),
-                            MemStack::new(&mut MemBuffer::new(
-                                plu_rec::reconstruct_scratch::<usize, T>(s.m, s.n, parmod::shape(seq)),
-                            )),
-                        );
-                        let recon = to_layout(out.as_ref(), s.m, s.n, s.order);
-                        within::<T>(max_diff(a0, &recon), frob(a0), s.n.max(s.m), "lu in_place")?;
-                    }
-                    Ok(())
-                },
-            ))
-        }
-
-        /// `cholesky_in_place` works on the strides it is given, so a row-major input is factored
-        /// where it is, with no transpose. Only the lower triangle is read and written; the upper
-        /// keeps the input, as `potrf`'s does.
-        fn cholesky_in_place_op<T: Scalar + ComplexField>(
-            n: usize,
-            batch: usize,
-            order: Order,
-        ) -> Result<Op, String> {
-            let a0 = spd::<T>(n, batch, order, seed(n, n, 11));
-            struct S<T: ComplexField> {
-                a0: Vec<T>,
-                a: Vec<T>,
-                mem: MemBuffer,
-                n: usize,
-                batch: usize,
-                order: Order,
-                par: ParCfg,
-            }
-            let par = cfg_par();
-            let req = llt_factor::cholesky_in_place_scratch::<T>(n, parmod::shape(par), Default::default());
-            let state = S {
-                a: a0.clone(),
-                a0,
-                mem: MemBuffer::new(req),
-                n,
-                batch,
-                order,
-                par,
-            };
-            Ok(op_from(
-                state,
-                "in_place".to_owned(),
-                // The buffers are reused, so prepare spoils the retained result (outside the clock).
-                |s| {
-                    let len = s.n * s.n;
-                    for bi in 0..s.batch {
-                        s.a[bi * len] = T::from_f64(1e30);
-                    }
-                    Ok(())
-                },
-                |s, mut tk| {
-                    let len = s.n * s.n;
-                    for bi in 0..s.batch {
-                        s.a[bi * len..(bi + 1) * len].copy_from_slice(&s.a0[bi * len..(bi + 1) * len]);
-                        llt_factor::cholesky_in_place(
-                            mmut(&mut s.a[bi * len..(bi + 1) * len], s.n, s.n, s.order),
-                            Default::default(),
-                            parmod::mk_from(&mut tk, s.par),
-                            MemStack::new(&mut s.mem),
-                            Default::default(),
-                        )
-                        .map_err(|e| format!("llt in_place failed: {e:?}"))?;
-                    }
-                    Ok(())
-                },
-                |s| {
-                    let seq = ParCfg::Seq;
-                    let len = s.n * s.n;
-                    for bi in 0..s.batch {
-                        let a0 = &s.a0[bi * len..(bi + 1) * len];
-                        let view = mref(&s.a[bi * len..(bi + 1) * len], s.n, s.n, s.order);
-                        let mut l = fk::Mat::<T>::zeros(s.n, s.n);
-                        for j in 0..s.n {
-                            for i in j..s.n {
-                                l[(i, j)] = view[(i, j)].clone();
-                            }
-                        }
-                        let mut out = fk::Mat::<T>::zeros(s.n, s.n);
-                        llt_rec::reconstruct(
-                            out.as_mut(),
-                            l.as_ref(),
-                            parmod::verify_par(seq),
-                            MemStack::new(&mut MemBuffer::new(
-                                llt_rec::reconstruct_scratch::<T>(s.n, parmod::shape(seq)),
-                            )),
-                        );
-                        for j in 1..s.n {
-                            for i in 0..j {
-                                out[(i, j)] = T::conj_impl(&out[(j, i)]);
-                            }
-                        }
-                        let recon = to_layout(out.as_ref(), s.n, s.n, s.order);
-                        within::<T>(max_diff(a0, &recon), frob(a0), s.n, "cholesky in_place")?;
                     }
                     Ok(())
                 },

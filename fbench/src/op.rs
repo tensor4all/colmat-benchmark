@@ -248,11 +248,11 @@ mod tests {
                             batch: 2,
                         };
                         let ops = crate::ops_for(&row, dtype, family, case, order).unwrap();
-                        // householder_apply times both public forms; the fork row times `lu` and
-                        // `cholesky` through the owning method and the `in_place` workspace route.
+                        // householder_apply times both public forms; both faer rows time `lu`,
+                        // `cholesky` and `solve` through the owning method and the `in_place` route.
                         let expected = match family {
                             "householder_apply" => 2,
-                            "lu" | "cholesky" if row == "faer-fork" => 2,
+                            "lu" | "cholesky" | "solve" if row.starts_with("faer-") => 2,
                             _ => 1,
                         };
                         assert_eq!(ops.len(), expected);

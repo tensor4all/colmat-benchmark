@@ -91,7 +91,18 @@ pub fn set_threads(threads: usize) -> Result<(), String> {
         };
     }
     sys::set_threads(threads);
+    // LAPACKE scans every input matrix for NaN before the call unless told not to; faer does no
+    // such pass, so the vendor row turns it off once, before anything is measured, and checks it.
+    sys::set_nancheck(false);
+    if sys::nancheck() != Some(false) {
+        return Err("LAPACKE_set_nancheck(0) did not take effect".to_owned());
+    }
     require_threads(threads)
+}
+
+/// Whether LAPACKE validates inputs for NaN (`None`: no vendor library is linked).
+pub fn nancheck() -> Option<bool> {
+    if NAME == "none" { None } else { sys::nancheck() }
 }
 
 /// The library-reported maximum thread budget, not an active-worker trace.
@@ -149,6 +160,21 @@ mod sys {
         // SAFETY: a plain setter on the Intel OpenMP runtime's thread count, which
         // is the layer this MKL build uses.
         unsafe { omp_set_num_threads(threads as c_int) }
+    }
+
+    unsafe extern "C" {
+        fn LAPACKE_set_nancheck(flag: c_int);
+        fn LAPACKE_get_nancheck() -> c_int;
+    }
+
+    pub fn set_nancheck(on: bool) {
+        // SAFETY: a process-wide LAPACKE flag, set once before any measured call.
+        unsafe { LAPACKE_set_nancheck(on as c_int) }
+    }
+
+    pub fn nancheck() -> Option<bool> {
+        // SAFETY: reads the flag set above.
+        Some(unsafe { LAPACKE_get_nancheck() } != 0)
     }
 
     pub fn threads() -> Option<usize> {
@@ -232,6 +258,21 @@ mod sys {
         unsafe { openblas_set_num_threads(threads as c_int) }
     }
 
+    unsafe extern "C" {
+        fn LAPACKE_set_nancheck(flag: c_int);
+        fn LAPACKE_get_nancheck() -> c_int;
+    }
+
+    pub fn set_nancheck(on: bool) {
+        // SAFETY: a process-wide LAPACKE flag, set once before any measured call.
+        unsafe { LAPACKE_set_nancheck(on as c_int) }
+    }
+
+    pub fn nancheck() -> Option<bool> {
+        // SAFETY: reads the flag set above.
+        Some(unsafe { LAPACKE_get_nancheck() } != 0)
+    }
+
     pub fn threads() -> Option<usize> {
         // SAFETY: no arguments beyond reading the vendor's thread count.
         let threads = unsafe { openblas_get_num_threads() };
@@ -264,6 +305,10 @@ mod sys {
     }
     pub fn set_threads(_threads: usize) {}
     pub fn threads() -> Option<usize> {
+        None
+    }
+    pub fn set_nancheck(_on: bool) {}
+    pub fn nancheck() -> Option<bool> {
         None
     }
 }

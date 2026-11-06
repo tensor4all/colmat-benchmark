@@ -1137,19 +1137,18 @@ mod imp {
         Ok(op_from(
             state,
             String::new(),
-            // The buffers are reused, so prepare spoils the retained result (outside the clock) and a
-            // check can only pass on what the next timed call writes.
+            // prepare restores the input into the reused buffer (outside the clock), so the timed
+            // call is the in-place factorization alone, as the faer rows' `in_place` op.
             |s| {
-                for (a, ipiv) in &mut s.outputs {
-                    a[0] = T::from_f64(1e30);
-                    ipiv[0] = 0;
+                for (bi, (a, ipiv)) in s.outputs.iter_mut().enumerate() {
+                    a.copy_from_slice(&s.a0[bi * s.m * s.n..(bi + 1) * s.m * s.n]);
+                    ipiv.fill(0);
                 }
                 Ok(())
             },
             |s, _tk| {
                 for bi in 0..s.batch {
                     let (a, ipiv) = &mut s.outputs[bi];
-                    a.copy_from_slice(&s.a0[bi * s.m * s.n..(bi + 1) * s.m * s.n]);
                     let info = T::getrf(
                         layout(s.order),
                         s.m,
@@ -1229,18 +1228,17 @@ mod imp {
         Ok(op_from(
             state,
             String::new(),
-            // The buffers are reused, so prepare spoils the retained result (outside the clock) and a
-            // check can only pass on what the next timed call writes.
+            // prepare restores the input into the reused buffer (outside the clock), so the timed
+            // call is the in-place factorization alone, as the faer rows' `in_place` op.
             |s| {
-                for a in &mut s.outputs {
-                    a[0] = T::from_f64(1e30);
+                for (bi, a) in s.outputs.iter_mut().enumerate() {
+                    a.copy_from_slice(&s.a0[bi * s.n * s.n..(bi + 1) * s.n * s.n]);
                 }
                 Ok(())
             },
             |s, _tk| {
                 for bi in 0..s.batch {
                     let a = &mut s.outputs[bi];
-                    a.copy_from_slice(&s.a0[bi * s.n * s.n..(bi + 1) * s.n * s.n]);
                     let info = T::potrf(layout(s.order), s.n, a, leading(s.n, s.n, s.order));
                     if info != 0 {
                         return Err(format!("potrf returned {info}"));
@@ -1296,12 +1294,15 @@ mod imp {
             String::new(),
             |s| {
                 s.b.copy_from_slice(&s.b0);
+                for (bi, (a, ipiv)) in s.work.iter_mut().enumerate() {
+                    a.copy_from_slice(&s.a0[bi * s.n * s.n..(bi + 1) * s.n * s.n]);
+                    ipiv.fill(0);
+                }
                 Ok(())
             },
             |s, _tk| {
                 for bi in 0..s.batch {
                     let (a, ipiv) = &mut s.work[bi];
-                    a.copy_from_slice(&s.a0[bi * s.n * s.n..(bi + 1) * s.n * s.n]);
                     let info = T::gesv(
                         layout(s.order),
                         s.n,

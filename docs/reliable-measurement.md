@@ -92,22 +92,26 @@ and one coefficient block; multi-panel sequences are not covered.
 ## Allocation and the clock
 
 Every buffer the harness owns is allocated before the clock, once per op, and reused by every
-priming and timed call: inputs and their references, the caller buffers a vendor routine factors
-in place (the copy of the input, `ipiv`, `tau`, singular values and vectors, eigenvalues, the
-explicit `R`), the faer `in_place` route's matrix, permutations and `MemStack` (sized by the
-library's `*_in_place_scratch`), and the comparison arms' buffers; copying the input into such a
-buffer stays inside the clock, on every row alike. What a library call allocates for itself stays
-inside the clock and is part of that operation's cost, even where the harness could hoist it: the
-owning faer methods (`PartialPivLu::new`, `Llt::new`, and the fork composites that rebuild them
-from the low-level calls) allocate their own factor, permutations and scratch, and LAPACKE may
-allocate a transpose or workspace. So the fork's `lu` and `cholesky` are timed twice: the op with
-an empty `note` is the owning route, the headline number a user's call costs, and the op noted
-`in_place` is the workspace route, which allocates nothing inside the clock and is the one
-comparable with the vendor row. Because buffers are reused, each op's `prepare` spoils one value of
-the retained result so that a check can only pass on what the timed call wrote. No case may depend
-on the allocator's adaptive behaviour: a measurement is not repaired with `MALLOC_*` or any other
+priming and timed call: inputs and their references, the caller buffers a vendor routine works in
+(`ipiv`, `tau`, singular values and vectors, eigenvalues, the explicit `R`), the faer `in_place`
+routes' matrix, right-hand side, permutations and `MemStack` (sized by the library's own
+`*_scratch`), and the comparison arms' buffers. For `lu`, `cholesky` and `solve` every row makes
+the same kind of call: `prepare` restores the input into the prepared buffer, outside the clock,
+and the timed call is the in-place factorization (and solve) alone - `getrf`/`potrf`/`gesv` on
+the vendor row, and on both faer rows one shared body (`define_backend!`, noted `in_place`) calling
+`lu_in_place`, `cholesky_in_place` and `solve_in_place_with_conj` on the input's own layout. The
+vendor row turns LAPACKE's input NaN scan off (`LAPACKE_set_nancheck(0)`, checked at startup);
+what LAPACKE still does for itself, such as a row-major transpose and its workspace, is the
+vendor's cost and stays inside. The owning faer routes (the op with an empty `note`:
+`PartialPivLu::new`, `Llt::new`, `partial_piv_lu().solve()` upstream and the fork's composite
+rebuild of them) are kept as the call a user makes; what they allocate is the library's cost and is
+never hoisted, so those cells move with the allocator's state (a 16 MB heap trim at n = 1024 is
+about 3 ms) and are not the comparison with the vendor row. Other families keep their input copy
+inside the clock on every row. Because buffers are reused, `prepare` restores or spoils each
+retained result, so a check can only pass on what the timed call wrote. No case may depend on the
+allocator's adaptive behaviour: a measurement is not repaired with `MALLOC_*` or any other
 allocator setting, and a cell that moves with process history is traced to the allocation inside
-its clock. Vendor numbers recorded before this rule include the vendor row's buffer allocation.
+its clock. Numbers recorded before this rule are not comparable for these cells.
 
 ## Adoption gate
 
