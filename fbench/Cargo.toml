@@ -18,7 +18,10 @@
 # links OpenBLAS statically (`openblas-src/static`) so the recorder can execute
 # the binary directly with no loader search path; `link-mkl` links the installed
 # Intel oneAPI MKL, whose versioned paths the build script resolves and exports
-# as `MKLROOT`/`MKL_THREADING_LIB`.
+# as `MKLROOT`/`MKL_THREADING_LIB`; `link-aocl` links AMD's AOCL (libflame for
+# LAPACKE, threaded BLIS for CBLAS) from the versioned `AOCL_ROOT` the build
+# script exports. AOCL also defines the same symbols, so it is a third arm, not a
+# second vendor in an existing one.
 [package]
 name = "fbench"
 version = "0.1.0"
@@ -49,6 +52,8 @@ link-mkl = [
     "blas-src/intel-mkl-dynamic-parallel",
     "lapack-src/intel-mkl-dynamic-parallel",
 ]
+# No `*-src` crate ships AOCL; `build.rs` emits the link line itself.
+link-aocl = []
 
 [dependencies]
 # The range spans every fork generation the build script can detect (0.24.x, 0.25 `ParShape`,

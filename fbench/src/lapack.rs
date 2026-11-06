@@ -10,13 +10,15 @@
 //! The complex ABI is the one flat 16-byte `{re, im}` struct MKL documents as
 //! `lapack_complex_double`/`MKL_Complex16`; `num_complex::Complex64` is that
 //! layout. (An OpenBLAS built with C99 `double complex` would differ, which is
-//! why the MKL arm is the one the campaign runs.)
+//! why the MKL arm is the one the campaign runs.) AOCL's LAPACKE declares C99
+//! `double _Complex`, whose in-memory layout is the same pair; the harness passes
+//! complex values to it only by pointer, so the by-value difference never arises.
 //!
 //! Families with no LAPACK route the harness measures (`triangular_solve`,
 //! `full_piv_lu`, `householder_apply`, `upgrade_factor`, `eig`) return an error
 //! and are recorded as `skipped`, never as a number.
 
-#[cfg(any(feature = "link-mkl", feature = "link-openblas"))]
+#[cfg(any(feature = "link-mkl", feature = "link-openblas", feature = "link-aocl"))]
 mod imp {
     use crate::op::{op_from, Op};
     use crate::shared::*;
@@ -770,6 +772,8 @@ mod imp {
     pub fn row_name() -> &'static str {
         if cfg!(feature = "link-mkl") {
             "lapack-mkl"
+        } else if cfg!(feature = "link-aocl") {
+            "lapack-aocl"
         } else {
             "lapack-openblas"
         }
@@ -1528,15 +1532,15 @@ mod imp {
     }
 }
 
-#[cfg(any(feature = "link-mkl", feature = "link-openblas"))]
+#[cfg(any(feature = "link-mkl", feature = "link-openblas", feature = "link-aocl"))]
 pub use imp::{ops, row_name};
 
-#[cfg(not(any(feature = "link-mkl", feature = "link-openblas")))]
+#[cfg(not(any(feature = "link-mkl", feature = "link-openblas", feature = "link-aocl")))]
 pub fn row_name() -> &'static str {
     "lapack-none"
 }
 
-#[cfg(not(any(feature = "link-mkl", feature = "link-openblas")))]
+#[cfg(not(any(feature = "link-mkl", feature = "link-openblas", feature = "link-aocl")))]
 pub fn ops(
     _dtype: crate::shared::Dtype,
     _family: &str,

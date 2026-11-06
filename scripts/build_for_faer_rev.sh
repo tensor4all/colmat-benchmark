@@ -2,7 +2,7 @@
 # Build the campaign harness (`fbench`) with both faer libraries linked *by path*.
 #
 #   build_for_faer_rev.sh --checkout <fork-dir> --upstream <upstream-dir> \
-#                         --vendor <openblas|mkl> --out <var-file> [--bin fbench]...
+#                         --vendor <openblas|mkl|aocl> --out <var-file> [--bin fbench]...
 #
 # Writes shell assignments to <var-file>:
 #   FAER_FORK_REV, FAER_FORK_DIRTY, FAER_FORK_DIR, FAER_FORK_VERSION, FAER_FORK_FEATURES,
@@ -47,7 +47,7 @@ PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
 usage() {
     echo "usage: build_for_faer_rev.sh --checkout <fork-dir> --upstream <upstream-dir>" >&2
-    echo "                            --vendor <openblas|mkl> --out <var-file> [--bin <name>]..." >&2
+    echo "                            --vendor <openblas|mkl|aocl> --out <var-file> [--bin <name>]..." >&2
 }
 
 FORK_DIR=""
@@ -196,8 +196,22 @@ case "$VENDOR" in
     export MKLROOT MKL_THREADING_LIB
     VENDOR_BUILD_ENV="MKLROOT=$MKLROOT MKL_THREADING_LIB=$MKL_THREADING_LIB"
     ;;
+  aocl)
+    FEATURES="fbench/link-aocl"
+    # AMD AOCL (libflame + threaded BLIS + aocl-utils), named by its versioned compiler tree; the
+    # newest installed version wins, as for MKL, and the manifest records the resolved path. AOCL
+    # is not registered with the system loader on purpose, so the binary needs
+    # `LD_LIBRARY_PATH=$AOCL_ROOT/lib` at run time (see `fbench/build.rs`); that is recorded here
+    # too, because it is part of how the numbers are reproduced.
+    AOCL_ROOT="$(newest_dir "${AOCL_ROOT:-/opt/AMD/aocl/*/gcc}")"
+    [[ -n "$AOCL_ROOT" && -f "$AOCL_ROOT/lib_LP64/libflame.so" && -f "$AOCL_ROOT/lib_LP64/libaoclutils.so" ]] || {
+      echo "ERROR: no AOCL install with libflame and aocl-utils found; set AOCL_ROOT" >&2; exit 1; }
+    AOCL_ROOT="$(cd "$AOCL_ROOT" && pwd -P)"
+    export AOCL_ROOT
+    VENDOR_BUILD_ENV="AOCL_ROOT=$AOCL_ROOT run:LD_LIBRARY_PATH=$AOCL_ROOT/lib"
+    ;;
   *)
-    echo "ERROR: unknown --vendor '$VENDOR'; this harness knows openblas and mkl" >&2; exit 1 ;;
+    echo "ERROR: unknown --vendor '$VENDOR'; this harness knows openblas, mkl and aocl" >&2; exit 1 ;;
 esac
 
 # ------------------------------------------------------------ fork API generation
@@ -287,6 +301,7 @@ for bin in "${BINS[@]}"; do bin_args+=(--bin "$bin"); done
 RUSTC_WRAPPER= CARGO_TARGET_DIR="$target" \
     env -u OPENBLAS_NUM_THREADS -u OMP_NUM_THREADS -u RAYON_NUM_THREADS -u MKL_NUM_THREADS \
         -u MKL_DOMAIN_NUM_THREADS -u MKL_INTERFACE_LAYER -u MKL_THREADING_LAYER -u MKL_DYNAMIC \
+        -u BLIS_NUM_THREADS -u FLA_NUM_THREADS \
         OPENBLAS_DYNAMIC_ARCH=1 \
     cargo build --manifest-path "$PROJECT_DIR/Cargo.toml" "${profile_flag[@]}" \
     -p fbench --features "$FEATURES" "${PATCH_ARGS[@]}" "${bin_args[@]}" >&2
