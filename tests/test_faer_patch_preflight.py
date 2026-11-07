@@ -23,7 +23,7 @@ PREFLIGHT = REPO / "scripts" / "faer_patch_preflight.sh"
 STUB = """#!/usr/bin/env bash
 printf '%s\\n' "$*" >> "$STUB_LOG"
 if [[ "$*" == *"--offline"* && "${STUB_OFFLINE:-fail}" == "fail" ]]; then
-    echo "error: failed to download \`t4a-gemm v0.20.1\`" >&2
+    echo "error: failed to download t4a-gemm v0.20.1" >&2
     exit 101
 fi
 if [[ "$*" != *"--offline"* && "${STUB_ONLINE:-ok}" == "fail" ]]; then
