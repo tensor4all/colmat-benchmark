@@ -497,6 +497,8 @@ dependencies = [
 [[package]]
 name = "faer"
 version = "0.24.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5ab6df3dd147fe8d702a288b95bcd8fcc499ab572fc80da6828f60cd4d524d67"
 dependencies = [
  "bytemuck",
  "dyn-stack",
@@ -518,6 +520,8 @@ dependencies = [
 [[package]]
 name = "faer-traits"
 version = "0.24.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b87d23ed7ab1f26c0cba0e5b9e061a796fbb7dc170fa8bee6970055a1308bb0f"
 dependencies = [
  "bytemuck",
  "dyn-stack",
@@ -1806,12 +1810,11 @@ dependencies = [
 
 [[package]]
 name = "t4a-faer"
-version = "0.24.4"
+version = "0.32.0"
 dependencies = [
  "bytemuck",
  "dyn-stack",
  "equator 0.6.0",
- "gemm",
  "generativity",
  "libm",
  "nano-gemm",
@@ -1820,14 +1823,15 @@ dependencies = [
  "pulp",
  "rayon",
  "reborrow",
- "spindle",
  "t4a-faer-traits",
+ "t4a-gemm",
  "t4a-private-gemm-x86",
+ "threadteam",
 ]
 
 [[package]]
 name = "t4a-faer-traits"
-version = "0.24.0"
+version = "0.24.3"
 dependencies = [
  "bytemuck",
  "dyn-stack",
@@ -1841,10 +1845,129 @@ dependencies = [
 ]
 
 [[package]]
-name = "t4a-private-gemm-x86"
-version = "0.1.24"
+name = "t4a-gemm"
+version = "0.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d6e140e3b2522528a14dc01752648b0eefa6594e1b8e7e7baff2c217acfb2c62"
+checksum = "f59ad637f7982e2197eb1550929b8cdaba0f7f5911af3c2a00ea242918419985"
+dependencies = [
+ "dyn-stack",
+ "num-complex",
+ "num-traits",
+ "paste",
+ "raw-cpuid",
+ "seq-macro",
+ "t4a-gemm-c32",
+ "t4a-gemm-c64",
+ "t4a-gemm-common",
+ "t4a-gemm-f16",
+ "t4a-gemm-f32",
+ "t4a-gemm-f64",
+]
+
+[[package]]
+name = "t4a-gemm-c32"
+version = "0.20.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2a948134ee5d958a52277201643452742b8d37f608bab1604252121f3d31a081"
+dependencies = [
+ "dyn-stack",
+ "num-complex",
+ "num-traits",
+ "paste",
+ "raw-cpuid",
+ "seq-macro",
+ "t4a-gemm-common",
+]
+
+[[package]]
+name = "t4a-gemm-c64"
+version = "0.20.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "01efdf71d74a61ebdf6199abbdb458d8e2f35c27463ef2d60eabf329ffd214ca"
+dependencies = [
+ "dyn-stack",
+ "num-complex",
+ "num-traits",
+ "paste",
+ "raw-cpuid",
+ "seq-macro",
+ "t4a-gemm-common",
+]
+
+[[package]]
+name = "t4a-gemm-common"
+version = "0.20.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "51ea83be78d08fc2e0f79e8c9c59b34b2e441c212162929405dbcb53aca525ef"
+dependencies = [
+ "bytemuck",
+ "dyn-stack",
+ "half",
+ "libm",
+ "num-complex",
+ "num-traits",
+ "once_cell",
+ "paste",
+ "pulp",
+ "raw-cpuid",
+ "rayon",
+ "seq-macro",
+ "sysctl",
+]
+
+[[package]]
+name = "t4a-gemm-f16"
+version = "0.20.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3d804c3cd6c64a7104fca770bbc8a6b1d51d9bba4a4c52ff489b53f6b25c9d6"
+dependencies = [
+ "dyn-stack",
+ "half",
+ "num-complex",
+ "num-traits",
+ "paste",
+ "raw-cpuid",
+ "rayon",
+ "seq-macro",
+ "t4a-gemm-common",
+ "t4a-gemm-f32",
+]
+
+[[package]]
+name = "t4a-gemm-f32"
+version = "0.20.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "905030a831256754168b3df6d9f29638fde37f6cce6ba60b47f0437841602217"
+dependencies = [
+ "dyn-stack",
+ "num-complex",
+ "num-traits",
+ "paste",
+ "raw-cpuid",
+ "seq-macro",
+ "t4a-gemm-common",
+]
+
+[[package]]
+name = "t4a-gemm-f64"
+version = "0.20.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ff81c96e4e16a37d797d07a7926274cd24ee12a9efaab9535c65b43a8a9cd97a"
+dependencies = [
+ "dyn-stack",
+ "num-complex",
+ "num-traits",
+ "paste",
+ "raw-cpuid",
+ "seq-macro",
+ "t4a-gemm-common",
+]
+
+[[package]]
+name = "t4a-private-gemm-x86"
+version = "0.1.28"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "90295f48b59ab213a5fa840a0342d7a16cfc71bb5905070414fd105fcc0fcba7"
 dependencies = [
  "crossbeam",
  "defer",
@@ -1914,6 +2037,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ad99c4c6d32803332c548b1af0540b357b3f5fc0be8f6c6bfe8b2e6ae784070"
 dependencies = [
  "cfg-if",
+]
+
+[[package]]
+name = "threadteam"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8ae7666b2f6a9ad479f5d0be7b54d21d62912ddd7c69923ad6f50767a86440e8"
+dependencies = [
+ "libc",
+ "loom",
+ "rayon",
+ "thiserror 1.0.69",
 ]
 
 [[package]]

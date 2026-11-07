@@ -274,8 +274,10 @@ for name, expected in (('t4a-faer', expected_fork), ('faer', expected_upstream))
     actual = found.get(name)
     if actual != expected:
         print(f"ERROR: this build would link {name} from {actual!r}, not from {expected!r}: a `[patch]`"
-              f" is ignored when the locked version differs from the checkout's version, so reconcile"
-              f" Cargo.lock before measuring", file=sys.stderr)
+              f" is ignored when the checkout's version is outside the range the harness declares"
+              f" (see `faer_fork` / `faer_upstream` in fbench/Cargo.toml) or when the locked version"
+              f" differs from the checkout's. Widen the declared range first -- the lock follows, and"
+              f" the resolved lock is kept beside the binary -- before measuring.", file=sys.stderr)
         raise SystemExit(1)
 PYEOF
 rm -f "$patch_meta"
