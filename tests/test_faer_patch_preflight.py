@@ -94,7 +94,8 @@ class PreflightTests(unittest.TestCase):
         return subprocess.run(
             ["bash", str(script), "--manifest", str(self.manifest),
              "--fork-manifest", str(self.fork), "--upstream-manifest", str(self.upstream),
-             "--config", 'patch.crates-io.t4a-faer.path="x"'],
+             "--config", 'patch.crates-io.t4a-faer.path="x"',
+             "--config", 'patch.crates-io.faer.path="y"'],
             capture_output=True, text=True, env=environment,
         )
 
@@ -120,6 +121,10 @@ class PreflightTests(unittest.TestCase):
         self.assertIn("retrying online", result.stderr)
         self.assertEqual(len(self.calls()), 2)
         self.assertNotIn("--offline", self.calls()[1])
+        # The retry must keep the patch arguments. Without this assertion, deleting them from the
+        # second call left the suite green while the retry silently resolved the registry copy.
+        self.assertIn('--config patch.crates-io.t4a-faer.path=', self.calls()[1])
+        self.assertIn('--config patch.crates-io.faer.path=', self.calls()[1])
 
     def test_both_attempts_failing_is_reported_with_the_cause(self):
         result = self.run_preflight(offline="fail", online="fail")
@@ -151,7 +156,8 @@ class PreflightTests(unittest.TestCase):
         result = subprocess.run(
             ["bash", str(PREFLIGHT), "--manifest", "Cargo.toml",
              "--fork-manifest", str(self.fork), "--upstream-manifest", str(self.upstream),
-             "--config", 'patch.crates-io.t4a-faer.path="x"'],
+             "--config", 'patch.crates-io.t4a-faer.path="x"',
+             "--config", 'patch.crates-io.faer.path="y"'],
             capture_output=True, text=True, cwd=self.root,
             env={**os.environ, "PATH": f"{self.bin}:{os.environ['PATH']}", "STUB_LOG": str(self.log),
                  "STUB_METADATA": str(self.metadata)},

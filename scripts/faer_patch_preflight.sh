@@ -7,11 +7,12 @@
 # This resolves the graph first and compares the resolved `manifest_path` of every measured crate
 # against the checkout that was named for it.
 #
-# The resolution runs `--offline` first because a measuring host may have no network, then retries
-# once with the network when the failure is a *download* (a checkout whose dependency set is newer
-# than the local cargo cache) rather than a resolution error.  `tests/test_faer_patch_preflight.py`
-# pins both branches with a stub `cargo`: an earlier version discarded cargo's own error and reported
-# only "cannot verify", which cost an hour of guessing.
+# The resolution runs `--offline` first because a measuring host may have no network, and retries
+# once with the network whenever that attempt fails -- for any reason.  It does not try to classify
+# cargo's error: an earlier version did, to decide between retrying and refusing, and every phrasing
+# that did not match its vocabulary either refused a build the network would have fixed or reported
+# a bad requirement as a cache miss.  Both messages are printed verbatim instead.
+# `tests/test_faer_patch_preflight.py` pins the branches with a stub `cargo`.
 #
 # Kept as its own script so it can be exercised without a checkout, a toolchain or a network.
 set -euo pipefail
