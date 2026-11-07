@@ -38,7 +38,7 @@ done
 # naturally has to hand, so reject it here with a message instead of letting cargo answer
 # "is a directory but expected a file" from inside the retry logic.
 case "$project" in
-    */Cargo.toml) ;;
+    Cargo.toml|*/Cargo.toml) ;;
     *) echo "ERROR: --manifest must be a Cargo.toml path, got: $project" >&2; exit 2 ;;
 esac
 [[ -f "$project" ]] || { echo "ERROR: no manifest at $project" >&2; exit 2; }
@@ -51,9 +51,17 @@ trap cleanup EXIT
 if ! cargo metadata --manifest-path "$project" --format-version 1 --offline \
         ${config_args[@]+"${config_args[@]}"} > "$patch_meta" 2> "$patch_err"; then
     cat "$patch_err" >&2
-    # Only a fetch that failed for lack of network deserves a second attempt.  A resolution or
-    # argument error is not fixed by going online, and retrying it only hides the real message.
-    if ! grep -qiE 'failed to download|no matching package|network|timed out|connection|TLS|registry index' "$patch_err"; then
+    # Only a fetch that failed for lack of network deserves a second attempt, and the test has to be
+    # cargo's own phrasing: matching a word like `network` also fires on a *path* that happens to
+    # contain it, which turned a TOML syntax error into a "cache miss" retry in review.
+    retryable=no
+    if grep -qiE 'failed to download|failed to fetch|no matching package named|unable to update (a )?source|could not resolve host|network is unreachable|connection timed out|failed to connect to' "$patch_err"; then
+        retryable=yes
+    fi
+    if grep -qiE 'expected `|unclosed|invalid toml|failed to parse|invalid type' "$patch_err"; then
+        retryable=no
+    fi
+    if [ "$retryable" != yes ]; then
         echo "ERROR: cargo metadata failed and this is not a download problem; not retrying" >&2
         exit 1
     fi

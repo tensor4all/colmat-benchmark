@@ -150,6 +150,37 @@ class PreflightTests(unittest.TestCase):
         self.assertNotIn("retrying online", result.stderr)
         self.assertEqual(len(self.calls()), 1)
 
+    def test_a_relative_manifest_is_accepted(self):
+        """`Cargo.toml` is a path cargo accepts; the pattern must not demand a slash."""
+        result = subprocess.run(
+            ["bash", str(PREFLIGHT), "--manifest", "Cargo.toml",
+             "--fork-manifest", str(self.fork), "--upstream-manifest", str(self.upstream),
+             "--config", 'patch.crates-io.t4a-faer.path="x"'],
+            capture_output=True, text=True, cwd=self.root,
+            env={**os.environ, "PATH": f"{self.bin}:{os.environ['PATH']}", "STUB_LOG": str(self.log),
+                 "STUB_METADATA": str(self.metadata)},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(self.calls())
+
+    def test_a_syntax_error_is_not_retried_even_when_the_path_says_network(self):
+        """cargo's message can contain a directory named `network`; that is not a download failure."""
+        stub = self.bin / "cargo"
+        stub.write_text(STUB.replace(
+            'echo "error: failed to download t4a-gemm v0.20.1" >&2',
+            'echo "error: failed to parse manifest at /tmp/network/Cargo.toml: expected `]`" >&2'))
+        result = self.run_preflight(offline="fail", online="ok")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("retrying online", result.stderr)
+        self.assertEqual(len(self.calls()), 1)
+
+    def test_the_upstream_check_is_not_decorative(self):
+        """Both measured crates are compared; only checking the fork would pass an upstream mix-up."""
+        self.write_metadata(fork=self.fork, upstream=self.root / "wrong" / "faer" / "Cargo.toml")
+        result = self.run_preflight(offline="ok")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("would link faer from", result.stderr)
+
     def test_the_caller_passes_a_manifest_not_a_directory(self):
         """The extraction made the call site an interface; that is the bug this test pins.
 
