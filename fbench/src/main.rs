@@ -407,6 +407,9 @@ fn info(threads: Option<usize>) {
     if let Some(n) = vendor::reported_threads() {
         println!("threads.vendor_reported={n}");
     }
+    if let Some(detail) = vendor::thread_detail() {
+        println!("threads.vendor_detail={detail}");
+    }
 }
 
 fn configure_threads(n: usize) -> Result<(), String> {
@@ -607,7 +610,15 @@ fn main() -> ExitCode {
                             };
                             for mut ops in ops {
                                 if run {
-                                    match measure_row(row, threads, &mut ops, args.prime_ms, args.reps) {
+                                    let measured = measure_row(row, threads, &mut ops, args.prime_ms, args.reps);
+                                    // Compare-and-abort after the timed loop as well as before the row
+                                    // (above): a budget that moved during priming or timing is refused,
+                                    // not merely recorded in `vendor_threads`.
+                                    if let Err(e) = require_threads(threads) {
+                                        eprintln!("after {row} {family}: {e}");
+                                        return ExitCode::from(2);
+                                    }
+                                    match measured {
                                         Ok(samples) => {
                                             let note = ops.note.clone();
                                             emit(

@@ -104,6 +104,39 @@ and distinct crate identities even though both declare `[lib] name = "faer"`. Th
 two vendor arms cannot share a process (they own the same symbols), so a vendor
 arm is its own build, its own run and its own page.
 
+### The AOCL arm (`lapack-aocl`)
+
+A third vendor arm runs the same LAPACK row body against AMD AOCL: LAPACKE from
+AOCL-LAPACK (`libflame`), CBLAS from the threaded AOCL-BLAS (`libblis-mt`), plus
+`libaoclutils`, which libflame needs for its CPU-feature dispatch. It is its own
+binary like the other two; `record_run.py` does not know it yet, so it is driven
+by a pinned driver of its own. What a reader needs to reproduce a number from it:
+
+- **`AOCL_ROOT`**: the versioned compiler tree, e.g. `/opt/AMD/aocl/5.2.0/gcc`
+  (installed with `install.sh -l blis libflame utils -i lp64`; without `utils`
+  libflame cannot load). `scripts/build_for_faer_rev.sh --vendor aocl` resolves
+  the newest `/opt/AMD/aocl/*/gcc` and records it in `BUILD_ENV`.
+- **`LD_LIBRARY_PATH=$AOCL_ROOT/lib` at run time, in the measured process only.**
+  The binary carries no rpath by design: an executable's `DT_RUNPATH` does not
+  cover libflame's own `NEEDED libaoclutils.so`, and the loader path belongs in
+  the command, where a reader sees it. Without it the binary does not start.
+- **The AOCL tree must not be registered with `ldconfig`.** Otherwise AMD's
+  `libblas`/`liblapack` stand in for the system ones in every process on the
+  host, and no other arm on that machine measures the library it names.
+- **Thread budget**: one AOCL call is governed by three per-thread counts -
+  OpenMP's, BLIS's (`BLIS_NUM_THREADS`) and libflame's (`FLA_NUM_THREADS`), the
+  last two each overriding the OpenMP one. The harness sets the budget through
+  OpenMP, as on the MKL arm, and refuses the run (before each row and again after
+  its timed loop) unless all three read back equal to it; `fbench info` prints
+  them as `threads.vendor_detail=omp:N blis:N flame:N`.
+- **Identity**: `fbench info` records both libraries' version strings, the files
+  the loader actually mapped, and the dispatched kernels (`blis=zen5,
+  flame=avx512` on Zen 5). The fork, upstream and harness revisions come from the
+  build script's `--out` file, as for the other arms.
+
+A t4a-faer 0.31 checkout must live outside this repository's tree: nested under
+`extern/`, Cargo cannot resolve its workspace-inherited package fields.
+
 ## Tooling
 
 The seven `scripts/*.py` entry points are thin shims over
