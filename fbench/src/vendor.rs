@@ -107,23 +107,47 @@ pub fn nancheck() -> Option<bool> {
     if NAME == "none" { None } else { sys::nancheck() }
 }
 
-/// The library-reported maximum thread budget, not an active-worker trace.
-pub fn reported_threads() -> Option<usize> {
-    sys::threads()
+/// Every thread count the linked vendor reports for the calling thread, by knob name. MKL and
+/// OpenBLAS have one; AOCL has three that each govern part of a call (OpenMP, BLIS, libflame), so
+/// a single number could hide one of them running at another width.
+pub fn thread_counts() -> Vec<(&'static str, Option<usize>)> {
+    if NAME == "none" { Vec::new() } else { sys::thread_counts() }
 }
 
-/// Check that the vendor library is configured for `threads` threads.
+/// `omp:4 blis:4 flame:4`, one `knob:value` per count (`?` where the knob reports nothing).
+pub fn thread_detail() -> Option<String> {
+    let counts = thread_counts();
+    (!counts.is_empty()).then(|| {
+        counts
+            .iter()
+            .map(|(k, v)| format!("{k}:{}", v.map_or("?".to_owned(), |v| v.to_string())))
+            .collect::<Vec<_>>()
+            .join(" ")
+    })
+}
+
+/// The library-reported maximum thread budget, not an active-worker trace: the common value when
+/// every count the vendor reports agrees, and `None` otherwise, so the CSV never carries one count
+/// standing in for another.
+pub fn reported_threads() -> Option<usize> {
+    let counts = thread_counts();
+    let first = counts.first()?.1?;
+    counts.iter().all(|(_, v)| *v == Some(first)).then_some(first)
+}
+
+/// Check that every thread count the vendor library reports equals `threads`.
 pub fn require_threads(threads: usize) -> Result<(), String> {
     if NAME == "none" {
         return Ok(());
     }
-    match sys::threads() {
-        Some(actual) if actual == threads => Ok(()),
-        Some(actual) => Err(format!(
-            "{NAME} reports {actual} threads, but this row declares {threads}"
-        )),
-        None => Err(format!("{NAME} does not report its thread count")),
+    let counts = thread_counts();
+    if !counts.is_empty() && counts.iter().all(|(_, v)| *v == Some(threads)) {
+        return Ok(());
     }
+    Err(format!(
+        "{NAME} reports {}, but this row declares {threads} threads",
+        thread_detail().unwrap_or_else(|| "no thread count".to_owned())
+    ))
 }
 
 #[cfg(feature = "link-mkl")]
@@ -179,10 +203,10 @@ mod sys {
         Some(unsafe { LAPACKE_get_nancheck() } != 0)
     }
 
-    pub fn threads() -> Option<usize> {
+    pub fn thread_counts() -> Vec<(&'static str, Option<usize>)> {
         // SAFETY: no arguments beyond reading MKL's current thread count.
         let threads = unsafe { mkl_get_max_threads() };
-        (threads > 0).then_some(threads as usize)
+        vec![("mkl", (threads > 0).then_some(threads as usize))]
     }
 
     pub fn config() -> Option<String> {
@@ -275,10 +299,10 @@ mod sys {
         Some(unsafe { LAPACKE_get_nancheck() } != 0)
     }
 
-    pub fn threads() -> Option<usize> {
+    pub fn thread_counts() -> Vec<(&'static str, Option<usize>)> {
         // SAFETY: no arguments beyond reading the vendor's thread count.
         let threads = unsafe { openblas_get_num_threads() };
-        (threads > 0).then_some(threads as usize)
+        vec![("openblas", (threads > 0).then_some(threads as usize))]
     }
 
     pub fn procs() -> Option<usize> {
@@ -395,15 +419,14 @@ mod sys {
         Some(unsafe { LAPACKE_get_nancheck() } != 0)
     }
 
-    /// The budget only when OpenMP, BLIS and libflame agree on it; otherwise the disagreeing
-    /// value, so `require_threads` names a mismatch instead of passing on one of the three.
-    pub fn threads() -> Option<usize> {
+    /// The three counts one AOCL call is governed by, each read on the calling thread.
+    pub fn thread_counts() -> Vec<(&'static str, Option<usize>)> {
         // SAFETY: no arguments; each reads the calling thread's count.
         let (omp, blis, flame) = unsafe {
             (omp_get_max_threads() as i64, bli_thread_get_num_threads() as i64, fla_thread_get_num_threads() as i64)
         };
-        let value = if omp == blis && blis == flame { omp } else if blis != omp { blis } else { flame };
-        (value > 0).then_some(value as usize)
+        let some = |v: i64| (v > 0).then_some(v as usize);
+        vec![("omp", some(omp)), ("blis", some(blis)), ("flame", some(flame))]
     }
 }
 
@@ -425,8 +448,8 @@ mod sys {
         None
     }
     pub fn set_threads(_threads: usize) {}
-    pub fn threads() -> Option<usize> {
-        None
+    pub fn thread_counts() -> Vec<(&'static str, Option<usize>)> {
+        Vec::new()
     }
     pub fn set_nancheck(_on: bool) {}
     pub fn nancheck() -> Option<bool> {
