@@ -55,7 +55,7 @@ if ! cargo metadata --manifest-path "$project" --format-version 1 --offline \
     # cargo's own phrasing: matching a word like `network` also fires on a *path* that happens to
     # contain it, which turned a TOML syntax error into a "cache miss" retry in review.
     retryable=no
-    if grep -qiE 'failed to download|failed to fetch|no matching package named|unable to update (a )?source|could not resolve host|network is unreachable|connection timed out|failed to connect to' "$patch_err"; then
+    if grep -qiE 'failed to download|failed to fetch|no matching package named|unable to update (a )?source|failed to update the registry index|could not resolve host|network is unreachable|connection timed out|failed to connect to|failed to select a version|candidate versions found which did not match|which didn.t match' "$patch_err"; then
         retryable=yes
     fi
     if grep -qiE 'expected `|unclosed|invalid toml|failed to parse|invalid type' "$patch_err"; then

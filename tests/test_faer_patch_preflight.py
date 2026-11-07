@@ -104,6 +104,9 @@ class PreflightTests(unittest.TestCase):
         self.assertIn("--offline", self.calls()[0])
         # Rule 2 of test-double-fidelity: assert the recorded argv, not just "it returned".
         self.assertIn(f"--manifest-path {self.manifest}", self.calls()[0])
+        # The patch arguments are the whole point of the preflight: if the caller stops forwarding
+        # them, cargo resolves the registry crate and the comparison would compare the wrong thing.
+        self.assertIn("--config patch.crates-io.t4a-faer.path=", self.calls()[0])
 
     def test_a_cache_miss_prints_cargos_own_error_and_retries_online(self):
         result = self.run_preflight(offline="fail", online="ok")
@@ -162,6 +165,18 @@ class PreflightTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(self.calls())
+
+    def test_a_stale_registry_index_is_retried(self):
+        """`failed to select a version ... candidates found` means the local index is behind."""
+        stub = self.bin / "cargo"
+        stub.write_text(STUB.replace(
+            'echo "error: failed to download t4a-gemm v0.20.1" >&2',
+            'echo "error: failed to select a version for the requirement `demo = \\"=1.1.0\\"`" >&2; '
+            'echo "candidate versions found which did not match: 1.0.0" >&2'))
+        result = self.run_preflight(offline="fail", online="ok")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("retrying online", result.stderr)
+        self.assertEqual(len(self.calls()), 2)
 
     def test_a_syntax_error_is_not_retried_even_when_the_path_says_network(self):
         """cargo's message can contain a directory named `network`; that is not a download failure."""
