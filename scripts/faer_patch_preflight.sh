@@ -54,22 +54,36 @@ if ! cargo metadata --manifest-path "$project" --format-version 1 --offline \
     # Only a fetch that failed for lack of network deserves a second attempt, and the test has to be
     # cargo's own phrasing: matching a word like `network` also fires on a *path* that happens to
     # contain it, which turned a TOML syntax error into a "cache miss" retry in review.
+    #
+    # `failed to select a version` is ambiguous: a stale local registry index produces it and an
+    # online attempt fixes it, while a genuinely unsatisfiable requirement (a feature a path
+    # dependency does not define) produces it too and no network helps. So it is retried once, and
+    # when the online attempt fails the same way the message says so instead of blaming the cache.
     retryable=no
-    if grep -qiE 'failed to download|failed to fetch|no matching package named|unable to update (a )?source|failed to update the registry index|could not resolve host|network is unreachable|connection timed out|failed to connect to|failed to select a version|candidate versions found which did not match|which didn.t match' "$patch_err"; then
+    resolution=no
+    if grep -qiE 'failed to download|failed to fetch|no matching package named|unable to update (a )?source|failed to update the registry index|could not resolve host|network is unreachable|connection timed out|failed to connect to' "$patch_err"; then
         retryable=yes
+    fi
+    if grep -qiE 'failed to select a version|candidate versions found which did not match|which didn.t match' "$patch_err"; then
+        resolution=yes
     fi
     if grep -qiE 'expected `|unclosed|invalid toml|failed to parse|invalid type' "$patch_err"; then
         retryable=no
+        resolution=no
     fi
-    if [ "$retryable" != yes ]; then
+    if [ "$retryable" != yes ] && [ "$resolution" != yes ]; then
         echo "ERROR: cargo metadata failed and this is not a download problem; not retrying" >&2
         exit 1
     fi
-    echo "cargo metadata needed the network (the checkout's dependency set is not in this cargo cache); retrying online" >&2
+    echo "cargo metadata failed ($([ "$retryable" = yes ] && echo 'a fetch may need the network' || echo 'resolution may be behind a stale index')); retrying online" >&2
     if ! cargo metadata --manifest-path "$project" --format-version 1 \
             ${config_args[@]+"${config_args[@]}"} > "$patch_meta" 2> "$patch_err"; then
         cat "$patch_err" >&2
-        echo "ERROR: cargo metadata failed; cannot verify which libraries would be linked" >&2
+        if [ "$resolution" = yes ]; then
+            echo "ERROR: the online attempt failed the same way; this is a resolution error, not a download problem" >&2
+        else
+            echo "ERROR: cargo metadata failed; cannot verify which libraries would be linked" >&2
+        fi
         exit 1
     fi
 fi

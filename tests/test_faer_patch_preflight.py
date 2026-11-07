@@ -177,6 +177,23 @@ class PreflightTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("retrying online", result.stderr)
         self.assertEqual(len(self.calls()), 2)
+        # The retry must keep the patch arguments: dropping them there would resolve the registry
+        # crate on the second attempt while the first one looked right.
+        self.assertIn("--config patch.crates-io.t4a-faer.path=", self.calls()[1])
+
+    def test_an_unsatisfiable_requirement_is_reported_as_a_resolution_error(self):
+        """A missing feature in a path dependency fails offline and online; the message must say so."""
+        stub = self.bin / "cargo"
+        stub.write_text(STUB.replace(
+            'echo "error: failed to download t4a-gemm v0.20.1" >&2',
+            'echo "error: failed to select a version for the requirement `demo = \\"1.0\\"`" >&2; '
+            'echo "candidate versions found which did not match: 1.0.0" >&2; '
+            'echo "note: perhaps a library or binary is missing" >&2'))
+        result = self.run_preflight(offline="fail", online="fail")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(len(self.calls()), 2)
+        self.assertIn("the online attempt failed the same way", result.stderr)
+        self.assertIn("resolution error", result.stderr)
 
     def test_a_syntax_error_is_not_retried_even_when_the_path_says_network(self):
         """cargo's message can contain a directory named `network`; that is not a download failure."""
