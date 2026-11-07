@@ -258,43 +258,11 @@ cp "$PROJECT_DIR/Cargo.lock" "$lock_backup"
 restore_lock() { cp "$lock_backup" "$PROJECT_DIR/Cargo.lock"; rm -f "$lock_backup"; }
 trap restore_lock EXIT
 
-patch_meta="$(mktemp)"
-patch_err="$(mktemp)"
-# Resolve offline first because a measuring host may have no network.  A checkout whose dependency
-# set is newer than the local cargo cache (a fork release can add a crate the harness never used)
-# makes that fail on a *download*, which is not a resolution problem: retry once with the network and
-# say so, rather than reporting "cannot verify" without the cause.
-if ! cargo metadata --manifest-path "$PROJECT_DIR/Cargo.toml" --format-version 1 --offline \
-        "${PATCH_ARGS[@]}" > "$patch_meta" 2> "$patch_err"; then
-    cat "$patch_err" >&2
-    echo "cargo metadata needed the network (the checkout's dependency set is not in this cargo cache); retrying online" >&2
-    if ! cargo metadata --manifest-path "$PROJECT_DIR/Cargo.toml" --format-version 1 \
-            "${PATCH_ARGS[@]}" > "$patch_meta" 2> "$patch_err"; then
-        cat "$patch_err" >&2
-        echo "ERROR: cargo metadata failed; cannot verify which libraries would be linked" >&2
-        rm -f "$patch_meta" "$patch_err"
-        exit 1
-    fi
-fi
-rm -f "$patch_err"
-python3 - "$patch_meta" "$FORK_DIR/faer/Cargo.toml" "$UPSTREAM_DIR/faer/Cargo.toml" <<'PYEOF' || { rm -f "$patch_meta"; exit 1; }
-import json, sys
-meta, expected_fork, expected_upstream = sys.argv[1], sys.argv[2], sys.argv[3]
-data = json.load(open(meta))
-found = {p['name']: p['manifest_path'] for p in data['packages'] if p['name'] in ('t4a-faer', 'faer')}
-for name, expected in (('t4a-faer', expected_fork), ('faer', expected_upstream)):
-    actual = found.get(name)
-    if actual != expected:
-        print(f"ERROR: this build would link {name} from {actual!r}, not from {expected!r}: a `[patch]`"
-              f" is ignored either when the checkout's version is outside the range the harness"
-              f" declares (see `faer_fork` / `faer_upstream` in fbench/Cargo.toml) or when Cargo.lock"
-              f" already pins a *different* version of that crate: widening the range alone does not"
-              f" move an existing lock entry, so the lock has to be re-resolved against this checkout"
-              f" (the build keeps the resolved lock beside the binary as Cargo.lock.resolved), then"
-              f" re-run.", file=sys.stderr)
-        raise SystemExit(1)
-PYEOF
-rm -f "$patch_meta"
+bash "$(dirname "${BASH_SOURCE[0]}")/faer_patch_preflight.sh" \
+    --project "$PROJECT_DIR" \
+    --fork-manifest "$FORK_DIR/faer/Cargo.toml" \
+    --upstream-manifest "$UPSTREAM_DIR/faer/Cargo.toml" \
+    "${PATCH_ARGS[@]}" || exit 1
 
 bin_args=()
 for bin in "${BINS[@]}"; do bin_args+=(--bin "$bin"); done
