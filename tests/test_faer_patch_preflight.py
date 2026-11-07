@@ -102,6 +102,8 @@ class PreflightTests(unittest.TestCase):
         self.assertNotIn("retrying online", result.stderr)
         self.assertEqual(len(self.calls()), 1)
         self.assertIn("--offline", self.calls()[0])
+        # Rule 2 of test-double-fidelity: assert the recorded argv, not just "it returned".
+        self.assertIn(f"--manifest-path {self.manifest}", self.calls()[0])
 
     def test_a_cache_miss_prints_cargos_own_error_and_retries_online(self):
         result = self.run_preflight(offline="fail", online="ok")
@@ -148,6 +150,17 @@ class PreflightTests(unittest.TestCase):
         self.assertNotIn("retrying online", result.stderr)
         self.assertEqual(len(self.calls()), 1)
 
+    def test_the_caller_passes_a_manifest_not_a_directory(self):
+        """The extraction made the call site an interface; that is the bug this test pins.
+
+        `build_for_faer_rev.sh` used to hand `--project "$PROJECT_DIR"` to a flag that became
+        `--manifest-path`, which real cargo rejects.  Running the whole build here would need a
+        toolchain, so assert on the invocation the script writes.
+        """
+        caller = (REPO / "scripts" / "build_for_faer_rev.sh").read_text()
+        self.assertIn('--manifest "$PROJECT_DIR/Cargo.toml"', caller)
+        self.assertNotIn('--project "$PROJECT_DIR"', caller)
+
     def test_removing_the_online_retry_makes_this_suite_fail(self):
         """The regression the reviewer asked for: mutate the retry to `exit 1` and watch it fail."""
         mutated = self.root / "mutated_preflight.sh"
@@ -157,8 +170,12 @@ class PreflightTests(unittest.TestCase):
         self.assertTrue(pattern.search(source), "the offline branch moved; update this mutation")
         mutated.write_text(pattern.sub("exit 1\n\n", source, count=1))
         result = self.run_preflight(offline="fail", online="ok", script=mutated)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertNotIn("retrying online", result.stderr)
+        # The mutation has to break a *named* assertion, not merely exit non-zero:
+        #   test_a_cache_miss_prints_cargos_own_error_and_retries_online asserts return code 0
+        #   and "retrying online" in stderr.  Both are what this mutation destroys.
+        self.assertNotEqual(result.returncode, 0, "the retry test's `returncode == 0` still holds")
+        self.assertNotIn("retrying online", result.stderr,
+                         "the retry test's `retrying online` assertion still holds")
 
 
 if __name__ == "__main__":
