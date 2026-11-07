@@ -39,11 +39,11 @@ if [ -d "$manifest" ]; then
     exit 101
 fi
 if [[ "$*" == *"--offline"* && "${STUB_OFFLINE:-fail}" == "fail" ]]; then
-    echo "error: failed to download t4a-gemm v0.20.1" >&2
+    printf '%s\n' "${STUB_OFFLINE_MSG:-error: failed to download t4a-gemm v0.20.1}" >&2
     exit 101
 fi
 if [[ "$*" != *"--offline"* && "${STUB_ONLINE:-ok}" == "fail" ]]; then
-    echo "error: no route to crates.io" >&2
+    printf '%s\n' "${STUB_ONLINE_MSG:-error: no route to crates.io}" >&2
     exit 101
 fi
 cat "$STUB_METADATA"
@@ -79,8 +79,13 @@ class PreflightTests(unittest.TestCase):
             {"name": "faer", "manifest_path": str(upstream)},
         ]}))
 
-    def run_preflight(self, *, offline="fail", online="ok", script=PREFLIGHT):
+    def run_preflight(self, *, offline="fail", online="ok", script=PREFLIGHT,
+                      offline_msg=None, online_msg=None):
         environment = dict(os.environ)
+        if offline_msg is not None:
+            environment["STUB_OFFLINE_MSG"] = offline_msg
+        if online_msg is not None:
+            environment["STUB_ONLINE_MSG"] = online_msg
         environment["PATH"] = f"{self.bin}:{environment['PATH']}"
         environment["STUB_LOG"] = str(self.log)
         environment["STUB_METADATA"] = str(self.metadata)
@@ -143,13 +148,10 @@ class PreflightTests(unittest.TestCase):
 
     def test_a_failure_that_is_not_a_download_is_not_retried(self):
         """A resolution error must not be dressed up as a network problem."""
-        stub = self.bin / "cargo"
-        stub.write_text(STUB.replace(
-            'echo "error: failed to download t4a-gemm v0.20.1" >&2',
-            'echo "error: failed to parse manifest" >&2'))
-        result = self.run_preflight(offline="fail", online="ok")
+        result = self.run_preflight(offline="fail", online="ok",
+                                    offline_msg="error: failed to parse manifest")
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("not a download problem", result.stderr)
+        self.assertIn("not something the network can fix", result.stderr)
         self.assertNotIn("retrying online", result.stderr)
         self.assertEqual(len(self.calls()), 1)
 
@@ -182,26 +184,41 @@ class PreflightTests(unittest.TestCase):
         self.assertIn("--config patch.crates-io.t4a-faer.path=", self.calls()[1])
 
     def test_an_unsatisfiable_requirement_is_reported_as_a_resolution_error(self):
-        """A missing feature in a path dependency fails offline and online; the message must say so."""
-        stub = self.bin / "cargo"
-        stub.write_text(STUB.replace(
-            'echo "error: failed to download t4a-gemm v0.20.1" >&2',
-            'echo "error: failed to select a version for the requirement `demo = \\"1.0\\"`" >&2; '
-            'echo "candidate versions found which did not match: 1.0.0" >&2; '
-            'echo "note: perhaps a library or binary is missing" >&2'))
-        result = self.run_preflight(offline="fail", online="fail")
+        """A missing feature in a path dependency fails offline and online, in the same words."""
+        resolution = ("error: failed to select a version for the requirement `demo = \"1.0\"`\n"
+                      "candidate versions found which did not match: 1.0.0")
+        result = self.run_preflight(offline="fail", online="fail",
+                                    offline_msg=resolution, online_msg=resolution)
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(len(self.calls()), 2)
         self.assertIn("the online attempt failed the same way", result.stderr)
         self.assertIn("resolution error", result.stderr)
 
+    def test_an_offline_resolution_error_without_network_is_reported_as_a_fetch_failure(self):
+        """The online attempt's own text decides: no network is not a bad requirement."""
+        resolution = ("error: failed to select a version for the requirement `demo = \"1.0\"`\n"
+                      "candidate versions found which did not match: 1.0.0")
+        result = self.run_preflight(offline="fail", online="fail", offline_msg=resolution,
+                                    online_msg="error: no route to crates.io")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("failed on a fetch", result.stderr)
+        self.assertNotIn("resolution error", result.stderr)
+
+    def test_a_git_dependency_that_was_never_fetched_is_retried(self):
+        """`unable to update file://...` / `you are in the offline mode` is a cache miss, not a bug."""
+        result = self.run_preflight(
+            offline="fail", online="ok",
+            offline_msg=("error: unable to update file:///tmp/dep\n"
+                         "error: you are in the offline mode (--offline)"))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(self.calls()), 2)
+        self.assertIn("retrying online", result.stderr)
+
     def test_a_syntax_error_is_not_retried_even_when_the_path_says_network(self):
         """cargo's message can contain a directory named `network`; that is not a download failure."""
-        stub = self.bin / "cargo"
-        stub.write_text(STUB.replace(
-            'echo "error: failed to download t4a-gemm v0.20.1" >&2',
-            'echo "error: failed to parse manifest at /tmp/network/Cargo.toml: expected `]`" >&2'))
-        result = self.run_preflight(offline="fail", online="ok")
+        result = self.run_preflight(
+            offline="fail", online="ok",
+            offline_msg="error: failed to parse manifest at /tmp/network/Cargo.toml: expected `]`")
         self.assertNotEqual(result.returncode, 0)
         self.assertNotIn("retrying online", result.stderr)
         self.assertEqual(len(self.calls()), 1)

@@ -48,38 +48,42 @@ patch_err="$(mktemp)"
 cleanup() { rm -f "$patch_meta" "$patch_err"; }
 trap cleanup EXIT
 
+# Classify one cargo error file as `download`, `resolution` or `other`.  The distinction decides both
+# whether a second attempt is worth making and what the reader is told when the second attempt fails:
+# a missing fetch is not the same defect as an unsatisfiable requirement, and reporting one as the
+# other sends the reader to the wrong place.
+classify_cargo_error() {
+    local file="$1"
+    if grep -qiE 'expected `|unclosed|invalid toml|failed to parse|invalid type' "$file"; then
+        echo other; return
+    fi
+    if grep -qiE 'failed to download|failed to fetch|no matching package named|unable to update|failed to update the registry index|could not resolve host|network is unreachable|connection timed out|failed to connect to|no route to|offline mode' "$file"; then
+        echo download; return
+    fi
+    if grep -qiE 'failed to select a version|candidate versions found which did not match|which didn.t match' "$file"; then
+        echo resolution; return
+    fi
+    echo other
+}
+
 if ! cargo metadata --manifest-path "$project" --format-version 1 --offline \
         ${config_args[@]+"${config_args[@]}"} > "$patch_meta" 2> "$patch_err"; then
     cat "$patch_err" >&2
-    # Only a fetch that failed for lack of network deserves a second attempt, and the test has to be
-    # cargo's own phrasing: matching a word like `network` also fires on a *path* that happens to
-    # contain it, which turned a TOML syntax error into a "cache miss" retry in review.
-    #
-    # `failed to select a version` is ambiguous: a stale local registry index produces it and an
-    # online attempt fixes it, while a genuinely unsatisfiable requirement (a feature a path
-    # dependency does not define) produces it too and no network helps. So it is retried once, and
-    # when the online attempt fails the same way the message says so instead of blaming the cache.
-    retryable=no
-    resolution=no
-    if grep -qiE 'failed to download|failed to fetch|no matching package named|unable to update (a )?source|failed to update the registry index|could not resolve host|network is unreachable|connection timed out|failed to connect to' "$patch_err"; then
-        retryable=yes
-    fi
-    if grep -qiE 'failed to select a version|candidate versions found which did not match|which didn.t match' "$patch_err"; then
-        resolution=yes
-    fi
-    if grep -qiE 'expected `|unclosed|invalid toml|failed to parse|invalid type' "$patch_err"; then
-        retryable=no
-        resolution=no
-    fi
-    if [ "$retryable" != yes ] && [ "$resolution" != yes ]; then
-        echo "ERROR: cargo metadata failed and this is not a download problem; not retrying" >&2
+    reason="$(classify_cargo_error "$patch_err")"
+    if [ "$reason" = other ]; then
+        echo "ERROR: cargo metadata failed and this is not something the network can fix; not retrying" >&2
         exit 1
     fi
-    echo "cargo metadata failed ($([ "$retryable" = yes ] && echo 'a fetch may need the network' || echo 'resolution may be behind a stale index')); retrying online" >&2
+    echo "cargo metadata failed ($reason); retrying online" >&2
     if ! cargo metadata --manifest-path "$project" --format-version 1 \
             ${config_args[@]+"${config_args[@]}"} > "$patch_meta" 2> "$patch_err"; then
         cat "$patch_err" >&2
-        if [ "$resolution" = yes ]; then
+        # Judge the *online* failure on its own text: an offline resolution error whose online retry
+        # dies because the host has no network is a connectivity problem, not a bad requirement.
+        online_reason="$(classify_cargo_error "$patch_err")"
+        if [ "$online_reason" = download ]; then
+            echo "ERROR: the online attempt failed on a fetch; the dependency is not cached and could not be fetched" >&2
+        elif [ "$online_reason" = resolution ]; then
             echo "ERROR: the online attempt failed the same way; this is a resolution error, not a download problem" >&2
         else
             echo "ERROR: cargo metadata failed; cannot verify which libraries would be linked" >&2

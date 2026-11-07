@@ -54,8 +54,8 @@ link-mkl = [
 # The pinned checkout is what is linked, and `scripts/build_for_faer_rev.sh` refuses the build
 # unless `cargo metadata` resolves `t4a-faer` from that checkout's manifest path -- so this range
 # is not a correctness control, it only has to admit the versions the fork can be at. A narrow
-# range turns into a hard blocker every generation (the fork is at 0.32.0, which `<0.28` excludes:
-# cargo warns that the patch is unused and the preflight refuses). Keep it wide.
+# range turns into a hard blocker every generation: when the pinned checkout's manifest declares a
+# version outside it, cargo warns that the patch is unused and the preflight refuses. Keep it wide.
 faer_fork = { package = "t4a-faer", version = ">=0.24, <1.0", default-features = false, features = ["std", "rayon"] }
 faer_upstream = { package = "faer", version = "0.24", default-features = false, features = ["std", "rayon"] }
 # The thread-pool helper upstream `faer` issues its parallel regions through, the same crate
