@@ -22,6 +22,22 @@ PREFLIGHT = REPO / "scripts" / "faer_patch_preflight.sh"
 
 STUB = """#!/usr/bin/env bash
 printf '%s\\n' "$*" >> "$STUB_LOG"
+# Behave like the real cargo for the one argument this script must get right: --manifest-path
+# takes a manifest file, so a directory has to be refused, not silently accepted by the stub.
+manifest=""
+prev=""
+for arg in "$@"; do
+    if [ "$prev" = "--manifest-path" ]; then manifest="$arg"; fi
+    prev="$arg"
+done
+if [ -z "$manifest" ]; then
+    echo "error: --manifest-path is required" >&2
+    exit 1
+fi
+if [ -d "$manifest" ]; then
+    echo "error: the manifest-path must be a path to a Cargo.toml file, not a directory: $manifest" >&2
+    exit 101
+fi
 if [[ "$*" == *"--offline"* && "${STUB_OFFLINE:-fail}" == "fail" ]]; then
     echo "error: failed to download t4a-gemm v0.20.1" >&2
     exit 101
@@ -44,6 +60,8 @@ class PreflightTests(unittest.TestCase):
         cargo.write_text(STUB)
         cargo.chmod(cargo.stat().st_mode | stat.S_IEXEC)
         self.log = self.root / "calls.log"
+        self.manifest = self.root / "Cargo.toml"
+        self.manifest.write_text("[workspace]\n")
         self.fork = self.root / "fork" / "faer" / "Cargo.toml"
         self.upstream = self.root / "upstream" / "faer" / "Cargo.toml"
         for path in (self.fork, self.upstream):
@@ -69,7 +87,7 @@ class PreflightTests(unittest.TestCase):
         environment["STUB_OFFLINE"] = offline
         environment["STUB_ONLINE"] = online
         return subprocess.run(
-            ["bash", str(script), "--project", str(self.root),
+            ["bash", str(script), "--manifest", str(self.manifest),
              "--fork-manifest", str(self.fork), "--upstream-manifest", str(self.upstream),
              "--config", 'patch.crates-io.t4a-faer.path="x"'],
             capture_output=True, text=True, env=environment,
@@ -107,6 +125,28 @@ class PreflightTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("would link t4a-faer from", result.stderr)
         self.assertIn("widening the range alone does not", result.stderr)
+
+    def test_a_directory_given_as_the_manifest_is_refused_before_cargo_runs(self):
+        result = subprocess.run(
+            ["bash", str(PREFLIGHT), "--manifest", str(self.root),
+             "--fork-manifest", str(self.fork), "--upstream-manifest", str(self.upstream)],
+            capture_output=True, text=True, env={**os.environ, "PATH": f"{self.bin}:{os.environ['PATH']}"},
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("must be a Cargo.toml path", result.stderr)
+        self.assertFalse(self.log.exists(), "cargo was invoked with an unusable manifest path")
+
+    def test_a_failure_that_is_not_a_download_is_not_retried(self):
+        """A resolution error must not be dressed up as a network problem."""
+        stub = self.bin / "cargo"
+        stub.write_text(STUB.replace(
+            'echo "error: failed to download t4a-gemm v0.20.1" >&2',
+            'echo "error: failed to parse manifest" >&2'))
+        result = self.run_preflight(offline="fail", online="ok")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("not a download problem", result.stderr)
+        self.assertNotIn("retrying online", result.stderr)
+        self.assertEqual(len(self.calls()), 1)
 
     def test_removing_the_online_retry_makes_this_suite_fail(self):
         """The regression the reviewer asked for: mutate the retry to `exit 1` and watch it fail."""

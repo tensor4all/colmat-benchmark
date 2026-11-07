@@ -23,7 +23,7 @@ config_args=()
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --project) project="$2"; shift 2 ;;
+        --manifest) project="$2"; shift 2 ;;
         --fork-manifest) fork_manifest="$2"; shift 2 ;;
         --upstream-manifest) upstream_manifest="$2"; shift 2 ;;
         --config) config_args+=(--config "$2"); shift 2 ;;
@@ -31,9 +31,17 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 [[ -n "$project" && -n "$fork_manifest" && -n "$upstream_manifest" ]] || {
-    echo "ERROR: --project, --fork-manifest and --upstream-manifest are required" >&2
+    echo "ERROR: --manifest, --fork-manifest and --upstream-manifest are required" >&2
     exit 2
 }
+# `--manifest-path` takes a manifest, not its directory.  Passing the directory is what a caller
+# naturally has to hand, so reject it here with a message instead of letting cargo answer
+# "is a directory but expected a file" from inside the retry logic.
+case "$project" in
+    */Cargo.toml) ;;
+    *) echo "ERROR: --manifest must be a Cargo.toml path, got: $project" >&2; exit 2 ;;
+esac
+[[ -f "$project" ]] || { echo "ERROR: no manifest at $project" >&2; exit 2; }
 
 patch_meta="$(mktemp)"
 patch_err="$(mktemp)"
@@ -43,6 +51,12 @@ trap cleanup EXIT
 if ! cargo metadata --manifest-path "$project" --format-version 1 --offline \
         ${config_args[@]+"${config_args[@]}"} > "$patch_meta" 2> "$patch_err"; then
     cat "$patch_err" >&2
+    # Only a fetch that failed for lack of network deserves a second attempt.  A resolution or
+    # argument error is not fixed by going online, and retrying it only hides the real message.
+    if ! grep -qiE 'failed to download|no matching package|network|timed out|connection|TLS|registry index' "$patch_err"; then
+        echo "ERROR: cargo metadata failed and this is not a download problem; not retrying" >&2
+        exit 1
+    fi
     echo "cargo metadata needed the network (the checkout's dependency set is not in this cargo cache); retrying online" >&2
     if ! cargo metadata --manifest-path "$project" --format-version 1 \
             ${config_args[@]+"${config_args[@]}"} > "$patch_meta" 2> "$patch_err"; then

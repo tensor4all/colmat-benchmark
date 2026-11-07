@@ -259,7 +259,7 @@ restore_lock() { cp "$lock_backup" "$PROJECT_DIR/Cargo.lock"; rm -f "$lock_backu
 trap restore_lock EXIT
 
 bash "$(dirname "${BASH_SOURCE[0]}")/faer_patch_preflight.sh" \
-    --project "$PROJECT_DIR" \
+    --manifest "$PROJECT_DIR/Cargo.toml" \
     --fork-manifest "$FORK_DIR/faer/Cargo.toml" \
     --upstream-manifest "$UPSTREAM_DIR/faer/Cargo.toml" \
     "${PATCH_ARGS[@]}" || exit 1
