@@ -48,46 +48,24 @@ patch_err="$(mktemp)"
 cleanup() { rm -f "$patch_meta" "$patch_err"; }
 trap cleanup EXIT
 
-# Classify one cargo error file as `download`, `resolution` or `other`.  The distinction decides both
-# whether a second attempt is worth making and what the reader is told when the second attempt fails:
-# a missing fetch is not the same defect as an unsatisfiable requirement, and reporting one as the
-# other sends the reader to the wrong place.
-classify_cargo_error() {
-    local file="$1"
-    if grep -qiE 'expected `|unclosed|invalid toml|failed to parse|invalid type' "$file"; then
-        echo other; return
-    fi
-    if grep -qiE 'failed to download|failed to fetch|no matching package named|unable to update|failed to update the registry index|could not resolve host|network is unreachable|connection timed out|failed to connect to|no route to|offline mode' "$file"; then
-        echo download; return
-    fi
-    if grep -qiE 'failed to select a version|candidate versions found which did not match|which didn.t match' "$file"; then
-        echo resolution; return
-    fi
-    echo other
-}
-
+# Run cargo metadata, and if the offline attempt fails, print cargo's message and try once online.
+#
+# This deliberately does NOT try to decide *why* cargo failed. An earlier version classified the
+# error text (download vs resolution vs syntax) to choose between retrying and refusing, and that
+# is unbounded: every cargo message that did not match the vocabulary either refused a build the
+# network would have fixed, or reported a bad requirement as a cache miss. The script's job is to
+# check which manifest the `[patch]` resolved to, not to diagnose cargo. So: one retry, both
+# messages shown verbatim, and the outcome reported by whether the retry succeeded.
 if ! cargo metadata --manifest-path "$project" --format-version 1 --offline \
         ${config_args[@]+"${config_args[@]}"} > "$patch_meta" 2> "$patch_err"; then
+    echo "cargo metadata failed in --offline mode:" >&2
     cat "$patch_err" >&2
-    reason="$(classify_cargo_error "$patch_err")"
-    if [ "$reason" = other ]; then
-        echo "ERROR: cargo metadata failed and this is not something the network can fix; not retrying" >&2
-        exit 1
-    fi
-    echo "cargo metadata failed ($reason); retrying online" >&2
+    echo "retrying online (offline resolution is not required for this build; cargo's message above is authoritative if the retry fails too):" >&2
     if ! cargo metadata --manifest-path "$project" --format-version 1 \
             ${config_args[@]+"${config_args[@]}"} > "$patch_meta" 2> "$patch_err"; then
+        echo "cargo metadata failed again without --offline:" >&2
         cat "$patch_err" >&2
-        # Judge the *online* failure on its own text: an offline resolution error whose online retry
-        # dies because the host has no network is a connectivity problem, not a bad requirement.
-        online_reason="$(classify_cargo_error "$patch_err")"
-        if [ "$online_reason" = download ]; then
-            echo "ERROR: the online attempt failed on a fetch; the dependency is not cached and could not be fetched" >&2
-        elif [ "$online_reason" = resolution ]; then
-            echo "ERROR: the online attempt failed the same way; this is a resolution error, not a download problem" >&2
-        else
-            echo "ERROR: cargo metadata failed; cannot verify which libraries would be linked" >&2
-        fi
+        echo "ERROR: cargo metadata failed twice; cannot verify which libraries would be linked" >&2
         exit 1
     fi
 fi

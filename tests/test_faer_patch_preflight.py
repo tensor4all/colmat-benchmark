@@ -146,15 +146,6 @@ class PreflightTests(unittest.TestCase):
         self.assertIn("must be a Cargo.toml path", result.stderr)
         self.assertFalse(self.log.exists(), "cargo was invoked with an unusable manifest path")
 
-    def test_a_failure_that_is_not_a_download_is_not_retried(self):
-        """A resolution error must not be dressed up as a network problem."""
-        result = self.run_preflight(offline="fail", online="ok",
-                                    offline_msg="error: failed to parse manifest")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("not something the network can fix", result.stderr)
-        self.assertNotIn("retrying online", result.stderr)
-        self.assertEqual(len(self.calls()), 1)
-
     def test_a_relative_manifest_is_accepted(self):
         """`Cargo.toml` is a path cargo accepts; the pattern must not demand a slash."""
         result = subprocess.run(
@@ -168,60 +159,23 @@ class PreflightTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(self.calls())
 
-    def test_a_stale_registry_index_is_retried(self):
-        """`failed to select a version ... candidates found` means the local index is behind."""
-        stub = self.bin / "cargo"
-        stub.write_text(STUB.replace(
-            'echo "error: failed to download t4a-gemm v0.20.1" >&2',
-            'echo "error: failed to select a version for the requirement `demo = \\"=1.1.0\\"`" >&2; '
-            'echo "candidate versions found which did not match: 1.0.0" >&2'))
-        result = self.run_preflight(offline="fail", online="ok")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("retrying online", result.stderr)
-        self.assertEqual(len(self.calls()), 2)
-        # The retry must keep the patch arguments: dropping them there would resolve the registry
-        # crate on the second attempt while the first one looked right.
-        self.assertIn("--config patch.crates-io.t4a-faer.path=", self.calls()[1])
-
-    def test_an_unsatisfiable_requirement_is_reported_as_a_resolution_error(self):
-        """A missing feature in a path dependency fails offline and online, in the same words."""
-        resolution = ("error: failed to select a version for the requirement `demo = \"1.0\"`\n"
-                      "candidate versions found which did not match: 1.0.0")
-        result = self.run_preflight(offline="fail", online="fail",
-                                    offline_msg=resolution, online_msg=resolution)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(len(self.calls()), 2)
-        self.assertIn("the online attempt failed the same way", result.stderr)
-        self.assertIn("resolution error", result.stderr)
-
-    def test_an_offline_resolution_error_without_network_is_reported_as_a_fetch_failure(self):
-        """The online attempt's own text decides: no network is not a bad requirement."""
-        resolution = ("error: failed to select a version for the requirement `demo = \"1.0\"`\n"
-                      "candidate versions found which did not match: 1.0.0")
-        result = self.run_preflight(offline="fail", online="fail", offline_msg=resolution,
-                                    online_msg="error: no route to crates.io")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("failed on a fetch", result.stderr)
-        self.assertNotIn("resolution error", result.stderr)
-
-    def test_a_git_dependency_that_was_never_fetched_is_retried(self):
-        """`unable to update file://...` / `you are in the offline mode` is a cache miss, not a bug."""
-        result = self.run_preflight(
-            offline="fail", online="ok",
-            offline_msg=("error: unable to update file:///tmp/dep\n"
-                         "error: you are in the offline mode (--offline)"))
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(len(self.calls()), 2)
-        self.assertIn("retrying online", result.stderr)
-
-    def test_a_syntax_error_is_not_retried_even_when_the_path_says_network(self):
-        """cargo's message can contain a directory named `network`; that is not a download failure."""
-        result = self.run_preflight(
-            offline="fail", online="ok",
-            offline_msg="error: failed to parse manifest at /tmp/network/Cargo.toml: expected `]`")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertNotIn("retrying online", result.stderr)
-        self.assertEqual(len(self.calls()), 1)
+    def test_the_retry_never_diagnoses_the_error(self):
+        """Whatever cargo said, the script prints it and reports the outcome, not a guess."""
+        for message in ("error: failed to download t4a-gemm v0.20.1",
+                        "error: failed to select a version for `demo`",
+                        "error: unable to update file:///tmp/dep",
+                        "error: expected `]` in /tmp/network/Cargo.toml"):
+            with self.subTest(message=message):
+                if self.log.exists():
+                    self.log.unlink()
+                result = self.run_preflight(offline="fail", online="fail",
+                                            offline_msg=message, online_msg=message)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr, "cargo's own message must be shown")
+                self.assertIn("cargo metadata failed twice", result.stderr)
+                for guess in ("resolution error", "download problem", "not something the network can fix"):
+                    self.assertNotIn(guess, result.stderr, f"the script guessed: {guess}")
+                self.assertEqual(len(self.calls()), 2)
 
     def test_the_upstream_check_is_not_decorative(self):
         """Both measured crates are compared; only checking the fork would pass an upstream mix-up."""
