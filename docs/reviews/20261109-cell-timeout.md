@@ -12,35 +12,44 @@ This note covers the PR that follows #60 (`3b58258`). Evidence logs are in
 
 * `--cell-timeout SECS` on `run` and `verify`, `FBENCH_CELL_TIMEOUT` when the flag is absent,
   `DEFAULT_CELL_TIMEOUT_S = 3600`, `0` disables. A cell is one `Op`, one CSV row.
-* The clock is thread-local (`timing::DEADLINE`, `timing::CUT`) and is armed on the thread that
-  runs the cell: `run_cell`/`measure_armed` arm it, so a row that runs on a team member or a worker
-  is cut there too.
+* Each build runs in a **child process** (`--cell-spec`, hidden): the parent spawns the child,
+  reads one `RESULT` per variant, and **kills the child (`SIGKILL`) when that variant's deadline
+  passes**. A killed variant is a `timeout` row; the following variant gets its own deadline, and
+  the next build starts normally. This is the guarantee: it does not depend on the harness finding
+  every library call. The child also watches its parent (500 ms `getppid` check) and exits if the
+  parent itself dies, so an external `SIGKILL` of the parent does not leave an orphan.
+* The recorder's interface does not change: `--locked`/`--no-verify`/`--publish` and the `--csv`
+  path stay where they were. The CSV is still written by the parent, at the same path, and only
+  the hidden `--cell-spec` argument exists between parent and child.
+* The cooperative clock (`timing::DEADLINE`, thread-local, armed on the executing thread) stays as
+  an **early-exit optimisation** inside the child. It can stop a reference loop sooner, but nothing
+  is promised to depend on it.
 * A cut cell is `status = timeout`, note `timeout <limit>`, with no partial time; the loop moves on
   to the next cell. In `verify` a cut prints `TIMEOUT <cell>` rather than `MISMATCH <cell>`.
 
-Review item 1 of #58: the expensive reference calculations that build an `Op`
-(`fbench/src/main.rs:440` `build_ops`, called at `:698`) — `cholesky`/`solve` build their input
-with the cubic `shared::mul_adj_b`, and the LAPACK `gemm` builds its whole reference product — used
-to run *before* the clock was armed, so no limit applied to them. The cell's **absolute
-deadline is fixed before construction**, construction runs under it, and each op `build_ops`
-produced gets its own deadline from that same stamp, less the construction time
-(`variant_deadline`, `main.rs:1014`; `Budget`, `main.rs:1006`): every variant pays the construction,
-and no variant spends the budget of the ones after it. If construction crossed
-the limit, **every** op it produced is cut without running, including the second variant of `lu`,
-`cholesky`, `solve`, `svd_*` and `eigh`: those ops stand on reference math that gave up part-way
-(a Cholesky input of `(n+1)I` instead of `M M^H + (n+1)I` factorizes and checks fine, so nothing
-about the row would say so).
+Review item 1 of #58: the expensive reference calculations that build an `Op` — `cholesky`/`solve`
+build their input with the cubic `shared::mul_adj_b`, the LAPACK `gemm` builds its whole reference
+product — used to run *before* the clock was armed, so no limit applied to them. Both the cooperative
+clock and the parent deadline now start **before construction** (the child arms before `ops_for`,
+and the parent starts variant 0's deadline before the spawn). Each variant `build_ops` produced
+gets its own deadline from its own start, less the construction time (`variant_deadline`,
+`main.rs`): every variant pays the construction, and no variant spends the budget of the ones after
+it. If construction crossed the limit, every op it produced is cut without running: those ops stand
+on reference math that gave up part-way (a Cholesky input of `(n+1)I` instead of
+`M M^H + (n+1)I` factorizes and checks fine, so nothing about the row would say so).
 
 The high-level solve routes are two library calls in one member too: `a.partial_piv_lu()` then
-`solve_in_place`, and `partial_lu_of` then `plu_solve` (`backend.rs:1621`, `:2403`).
+`solve_in_place`, and `partial_lu_of` then `plu_solve` (`backend.rs:1621`, `:2403`); so are the
+high-level `qr` (`a.qr()` then `compute_thin_Q`, `backend.rs:1382`) and `householder_apply`'s check
+(`qr_in_place` then the block apply, `backend.rs:665`). Each now polls at its entry.
 
 Review item 2: a batch `Op` is many library calls. `timing::measure` polled once per repetition, so
-after the limit passed every remaining batch member still ran. Every harness-owned batch loop now
-polls before each call and returns `timing::cut_error()` (34 poll sites in `fbench/src/backend.rs`,
-7 in `fbench/src/lapack.rs`), which the executor records as `timeout`, not as a library failure.
-That covers the loops that are *not* timed calls as well: `householder_apply`'s `prepare`
-factorizes every member, `qr_factor`'s check forms `Q` with the library, and `solve`/`qr` are one
-member with two library calls (factor, then solve / form `Q`), polled between the two.
+after the limit passed every remaining batch member still ran. The cooperative polls are still at
+every harness-owned batch loop (36 sites in `fbench/src/backend.rs`, 7 in `fbench/src/lapack.rs`)
+and at every compound boundary (`solve`, `qr`, `householder_apply`'s prepare and check), which lets
+the child exit early. The authoritative stop is now the parent's kill: even a library call or a
+loop that no poll covers cannot outlive the variant's deadline. Every wait is listed in
+`docs/reviews/20261110-cell-timeout-waiting-points.md`.
 
 Review item 3: `prepare` is outside the *timed* region but inside the cell, and it is not free
 (`householder_apply` factorizes there). `timing::measure` now polls immediately after every
@@ -50,6 +59,10 @@ path polls after its `prepare` too. A call that would start after the limit is n
 One more hole, from the same review: a stage that returned `Err` *after* the limit had passed was
 classified as `failed`. `timing::stage` and the verification path now check the clock before
 classifying a returned error, so it is a `timeout` row (`timing.rs:78`).
+
+A limit the platform clock cannot represent no longer disarms the cell: `deadline_at` returns an
+already-expired deadline (an explicit cut), and `parse` refuses such a `--cell-timeout` before the
+run starts. Returning `None` here used to mean "no limit" to every caller.
 
 Red, per item, with the fix removed (`docs/reviews/20261109-cell-timeout-logs/`):
 
@@ -64,8 +77,20 @@ Red, per item, with the fix removed (`docs/reviews/20261109-cell-timeout-logs/`)
 | `red-1b-deadline-construction.log` | the deadline recomputed at the start of the run | `the_cell_deadline_includes_the_reference_construction` FAILED (`ok`, construction not charged) |
 | `red-2b-highlevel-solve.log` | the two high-level `solve` mid-polls deleted | both solve tests FAILED (`Ok(())`) |
 | `red-3c-csv-write.log` | `Csv::push` no longer records the write error | `a_csv_that_lost_a_row_is_a_failed_run` FAILED (real `Broken pipe (os error 32)`) |
+| `red-1c-per-cell-deadline.log` | the construction time is no longer charged per variant | `two_variants_do_not_share_one_deadline` FAILED |
+| `red-2c-compound-entry.log` | the high-level `qr` / `householder_apply` check polls deleted | both tests FAILED |
+| `red-3d-overflow.log` | an unrepresentable limit returns `None` again | `an_unrepresentable_limit_cuts_the_cell` FAILED |
+| `red-2d-child-kill.log` | the parent waits for the child without a deadline (no kill) | `a_killed_cell_leaves_a_row_and_the_next_cell_runs` never returns / the cell is not cut |
 
-Green: `cargo test --locked` → `test result: ok. 30 passed; 0 failed; 1 ignored`
+Green: `cargo test --locked` → `test result: ok. 37 passed; 0 failed; 1 ignored` (unit) and
+`test result: ok. 2 passed` (`fbench/tests/child_cells.rs`: kill/pairing, plus a finished run).
+
+End to end, with the parent enforcing the limit:
+* `long-cell` (`--n 4096 --batch 2`, limit 3600 s): four cells, each 33.8-34.2 s timed plus
+  153-155 s check, all `ok`; total 12m31s; both child pids are gone from `ps` afterwards.
+* `long-cut` (`--n 4096 --batch 6`, limit 300 s): the first cell was killed at 300 s
+  (`CELL kill ... pid=21023`, `CELL done ... cut=timeout`, two `timeout 300` rows); the next build
+  started; pid 21023 and the next child were gone from `ps`.
 (`cargo-test.log`). The ignored one is the timing probe below.
 
 The clock is cooperative: a library call already in progress cannot be interrupted. What the
@@ -155,14 +180,20 @@ at all, so the run directory could not distinguish "not measured" from "hung".
   the process exits 2 (`main.rs:802`): a report missing a cell must not look like success. The test
   that pins this writes to a socket whose peer is already closed, so the write really fails; it
   asserts the recorded failure, not just the exit-code arithmetic.
-* `heartbeat` (`main.rs:876`) writes one line per cell to **stderr** (`CELL start …` /
-  `CELL done … <status> total_ms=…`), never to stdout, which the recorder parses for `MISMATCH` and
-  `all comparisons within tolerance`. `CELL start` is printed **before** the reference construction,
-  so a construction stall is a cell that started and has not finished, not a silence.
-* A cut cell is a row with the existing `status = timeout` value; no column was added for the cut,
-  so a reader that predates it keeps working. The separate timing change in this PR does append
-  `timed_ms` and `check_ms` to the CSV, so a reader that requires exactly 18 fields rejects the
-  20-field rows; none of the repository readings does.
+* `heartbeat` (`main.rs`) writes to **stderr**, never to stdout, which the recorder parses for
+  `MISMATCH` and `all comparisons within tolerance`. The parent prints one `CELL build` (with the
+  child pid), one `CELL start` per variant (with `id=` and `variant=<k>/<n>`), and exactly one
+  `CELL done` per variant with the same id and variant. A deadline-killed variant is closed by the
+  parent with `CELL done ... status=timeout cut=timeout`, so every start has a done; `cut-run.log`
+  has 8 starts and 8 dones. If the *parent* is killed externally there is no done for the variant
+  that was running -- the parent is the writer -- and `kill-after.log` shows that shape (5 starts,
+  4 dones); its child exits via the watchdog.
+* A cut cell is a row with the existing `status = timeout` value; no column was added for the cut.
+  This PR *did* append `timed_ms` and `check_ms`, so rows are 20 fields instead of 18: readers that
+  require exactly 18 fields reject them. The repository's readers (`scripts/report_run.py`,
+  `scripts/timing_evidence.py`, `summarize_samples`, `gen_comparison`) take columns by name or
+  ignore trailing ones. `scripts/validate_run.py` does not read the CSV; the recorder checks the
+  process exit and the `MISMATCH` word. I did not run those readers against both schemas here.
 
 Evidence (`docs/reviews/20261109-cell-timeout-logs/`):
 
@@ -172,8 +203,8 @@ Evidence (`docs/reviews/20261109-cell-timeout-logs/`):
 * `kill-before.log` (empty, no CSV at all) against `kill-after.log`: the same invocation
   (`--n 512,4096`, no limit) killed with `SIGKILL` 15 s in. Before this change the killed process
   left **no CSV and no log line**; now it leaves **4 finished rows on disk** (one per `n = 512`
-  variant) and 7 heartbeat lines, the last of which is `CELL start … 4096` — the cell that was still
-  running when the process died.
+  variant) and 7 heartbeat lines (3 starts / 4 dones; the last line is `CELL start … 4096`, the cell
+  that was still running when the process died).
 
 ## What this does not change
 
@@ -182,13 +213,18 @@ Evidence (`docs/reviews/20261109-cell-timeout-logs/`):
   `check_ms` stay appended diagnostics, and a cut cell has neither.
 * The verification *method*: whether `gram_residual` should sample columns rather than run the full
   product is a separate decision (a random-projection mode is a separate issue, not this PR).
-* A library call in progress is not interruptible; the limit is enforced at poll points.
+* A library call in progress is not interruptible; the limit is enforced at poll points. Every
+  polled wait is listed in `docs/reviews/20261110-cell-timeout-waiting-points.md`, and a test keeps
+  that table equal to the source's poll sites.
+* Nothing here measures the path-linked campaign build (`scripts/build_for_faer_rev.sh`) or either
+  vendor arm; CI's `harness` job builds the registry arm only. No timeout or number is claimed for
+  those.
 
 ## Checks
 
 ```
 cargo build --locked          # Finished, 0 errors
-cargo test --locked           # test result: ok. 30 passed; 0 failed; 1 ignored
+cargo test --locked           # 37 unit passed (1 ignored) + 2 child-process tests passed
 ```
 
 `cargo-test.log` holds the second. CI's `harness` job (#60) runs `cargo check -p fbench --locked`

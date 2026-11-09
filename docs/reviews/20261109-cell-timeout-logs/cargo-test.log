@@ -6,17 +6,31 @@ warning: type alias `Run` is never used
    |
    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
 
+warning: function `gram_adj_residual` is never used
+   --> fbench/src/shared.rs:495:8
+    |
+495 | pub fn gram_adj_residual<T: Scalar>(q: &[T], m: usize, n: usize, order: Order) -> f64 {
+    |        ^^^^^^^^^^^^^^^^^
+
+warning: function `gram_adj_residual_rows` is never used
+   --> fbench/src/shared.rs:505:4
+    |
+505 | fn gram_adj_residual_rows<T: Scalar>(q: &[T], m: usize, n: usize) -> f64 {
+    |    ^^^^^^^^^^^^^^^^^^^^^^
+
 warning: function `nancheck` is never used
    --> fbench/src/vendor.rs:104:8
     |
 104 | pub fn nancheck() -> Option<bool> {
     |        ^^^^^^^^
 
-warning: `fbench` (bin "fbench" test) generated 2 warnings
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.04s
+   Compiling fbench v0.1.0 (/Users/hiroshi/projects/tensor4all/faer-benchmark-58/fbench)
+warning: `fbench` (bin "fbench") generated 4 warnings
+warning: `fbench` (bin "fbench" test) generated 2 warnings (2 duplicates)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.80s
      Running unittests src/main.rs (target/debug/deps/fbench-afcf7c3923d6491d)
 
-running 31 tests
+running 38 tests
 test op::tests::checks_reject_a_missing_execution ... ok
 test op::tests::fork_calls_run_on_the_lent_team ... ok
 test shared::tests::an_expired_limit_stops_the_reference_math_before_it_writes ... ok
@@ -33,14 +47,19 @@ test tests::a_cut_cell_is_a_timeout_row_and_the_next_cell_still_runs ... ok
 test tests::a_multithreaded_row_reads_its_clock_on_the_worker ... ok
 test tests::a_prepare_that_factorizes_does_not_start_the_next_member_after_the_limit ... ok
 test tests::a_stage_that_fails_after_the_limit_is_a_cut_not_a_failure ... ok
+test tests::an_unrepresentable_limit_cuts_the_cell ... ok
+test tests::compound_library_calls_are_guarded ... ok
+test tests::householder_check_polls_before_applying_the_factor ... ok
 test tests::probe_flags_and_ordered_csv_samples ... ok
 test tests::qr_does_not_form_q_after_the_limit ... ok
 test tests::the_cell_clock_covers_the_reference_construction ... ok
 test tests::the_cell_deadline_includes_the_reference_construction ... ok
 test tests::the_cell_limit_is_configured_with_a_default ... ok
 test tests::the_fork_owning_solve_polls_between_factor_and_solve ... ok
+test tests::the_high_level_qr_polls_between_factor_and_thin_q ... ok
 test tests::the_high_level_solve_polls_between_factor_and_solve ... ok
 test tests::verification_does_not_run_after_a_prepare_past_the_limit ... ok
+test tests::waiting_points_are_enumerated_and_polled ... ok
 test timing::tests::a_stage_error_after_the_limit_is_a_cut ... ok
 test timing::tests::a_successful_stage_past_the_limit_is_not_a_measurement ... ok
 test timing::tests::a_timed_prepare_past_the_limit_does_not_run ... ok
@@ -48,6 +67,16 @@ test timing::tests::retains_repetitions_and_checks_the_last_run ... ok
 test timing::tests::the_cell_clock_cuts_a_check_that_outruns_it ... ok
 test timing::tests::the_check_time_is_reported_apart_from_the_timed_calls ... ok
 test timing::tests::the_final_prepare_past_the_limit_cuts_the_cell ... ok
+test variant_budget_tests::an_unrepresentable_limit_is_still_a_limit ... ok
+test variant_budget_tests::two_variants_do_not_share_one_deadline ... ok
 
-test result: ok. 30 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 32.09s
+test result: ok. 37 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 36.07s
+
+     Running tests/child_cells.rs (target/debug/deps/child_cells-d3186778d0198ca4)
+
+running 2 tests
+test a_finished_run_pairs_every_start_with_a_done ... ok
+test a_killed_cell_leaves_a_row_and_the_next_cell_runs ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.23s
 
