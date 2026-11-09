@@ -168,6 +168,7 @@ macro_rules! define_backend {
             use super::ParCfg;
             use crate::op::{op_from, Op};
             use crate::shared::*;
+            use crate::timing::{cut_error, expired};
             use num_complex::Complex64;
 
             use $krate::dyn_stack::{MemBuffer, MemStack, StackReq};
@@ -362,6 +363,9 @@ macro_rules! define_backend {
                     },
                     move |s, mut tk| {
                         for bi in 0..s.batch {
+                            if expired() {
+                                return Err(cut_error());
+                            }
                             let dst = mmut(&mut s.c[bi * s.m * s.n..], s.m, s.n, s.order);
                             let lhs = mref(&s.a[bi * s.m * s.k..], s.m, s.k, s.order);
                             let rhs = mref(&s.b[bi * s.k * s.n..], s.k, s.n, s.order);
@@ -450,6 +454,9 @@ macro_rules! define_backend {
                     },
                     |s, mut tk| {
                         for bi in 0..s.batch {
+                            if expired() {
+                                return Err(cut_error());
+                            }
                             let a = mmut(&mut s.a[bi * s.m * s.n..], s.m, s.n, s.order);
                             let qc = mmut(
                                 &mut s.qc[bi * s.block_size * s.size..],
@@ -469,6 +476,9 @@ macro_rules! define_backend {
                     },
                     |s| {
                         for bi in 0..s.batch {
+                            if expired() {
+                                return Err(cut_error());
+                            }
                             let a0 = &s.a0[bi * s.m * s.n..(bi + 1) * s.m * s.n];
                             let a = &s.a[bi * s.m * s.n..(bi + 1) * s.m * s.n];
                             let qc = &s.qc[bi * s.block_size * s.size
@@ -615,6 +625,11 @@ macro_rules! define_backend {
                         s.qc.fill(T::zero());
                         s.c.copy_from_slice(&s.c0);
                         for bi in 0..s.batch {
+                            // `prepare` is not free here: it factorizes every member. A member the
+                            // limit has already passed is not factored.
+                            if expired() {
+                                return Err(cut_error());
+                            }
                             let a = mmut(&mut s.a[bi * s.m * s.n..], s.m, s.n, s.order);
                             let qc = mmut(&mut s.qc[bi * s.size * s.size..], s.size, s.size, Order::F);
                             qrf::qr_in_place(a, qc, parmod::verify_par(s.par), MemStack::new(&mut s.mem), Default::default());
@@ -623,6 +638,9 @@ macro_rules! define_backend {
                     },
                     move |s, mut tk| {
                         for bi in 0..s.batch {
+                            if expired() {
+                                return Err(cut_error());
+                            }
                             let basis = mref(&s.a[bi * s.m * s.n..], s.m, s.n, s.order).get(.., ..s.size);
                             let factor = mref(&s.qc[bi * s.size * s.size..], s.size, s.size, Order::F);
                             let dst = mmut(&mut s.c[bi * s.m * s.target..], s.m, s.target, s.order);
@@ -639,6 +657,9 @@ macro_rules! define_backend {
                     move |s| {
                         // Compare the actual timed result with the other public form.
                         for bi in 0..s.batch {
+                            if expired() {
+                                return Err(cut_error());
+                            }
                             let mut a = s.a0[bi * s.m * s.n..(bi + 1) * s.m * s.n].to_vec();
                             let mut qc = vec![T::zero(); s.size * s.size];
                             qrf::qr_in_place(
@@ -814,6 +835,9 @@ macro_rules! define_backend {
                     |s, mut tk| {
                         let len = s.m * s.n;
                         for bi in 0..s.batch {
+                            if expired() {
+                                return Err(cut_error());
+                            }
                             let (fwd, bwd) = &mut s.perms[bi];
                             plu::lu_in_place(
                                 mmut(&mut s.a[bi * len..(bi + 1) * len], s.m, s.n, s.order),
@@ -869,6 +893,9 @@ macro_rules! define_backend {
                     |s, mut tk| {
                         let len = s.n * s.n;
                         for bi in 0..s.batch {
+                            if expired() {
+                                return Err(cut_error());
+                            }
                             llt::cholesky_in_place(
                                 mmut(&mut s.a[bi * len..(bi + 1) * len], s.n, s.n, s.order),
                                 Default::default(),
@@ -950,6 +977,9 @@ macro_rules! define_backend {
                     |s, mut tk| {
                         let len = s.n * s.n;
                         for bi in 0..s.batch {
+                            if expired() {
+                                return Err(cut_error());
+                            }
                             let (fwd, bwd) = &mut s.perms[bi];
                             let a = &mut s.a[bi * len..(bi + 1) * len];
                             let (_, perm) = plu::lu_in_place(
@@ -961,6 +991,11 @@ macro_rules! define_backend {
                                 Default::default(),
                             );
                             let lu = mref(a, s.n, s.n, s.order);
+                            // One member is two library calls; the poll at the top of the member
+                            // does not cover the second one.
+                            if expired() {
+                                return Err(cut_error());
+                            }
                             plu_solve::solve_in_place_with_conj(
                                 lu,
                                 lu,
@@ -1065,6 +1100,9 @@ macro_rules! define_backend {
                     |s, mut tk| {
                         let len = s.m * s.n;
                         for bi in 0..s.batch {
+                            if expired() {
+                                return Err(cut_error());
+                            }
                             let [rf, rb, cf, cb] = &mut s.perms[bi];
                             flu::lu_in_place(
                                 mmut(&mut s.a[bi * len..(bi + 1) * len], s.m, s.n, s.order),
@@ -1150,6 +1188,9 @@ macro_rules! define_backend {
                     },
                     |s, mut tk| {
                         for bi in 0..s.batch {
+                            if expired() {
+                                return Err(cut_error());
+                            }
                             let a0 = &s.a0[bi * s.m * s.n..(bi + 1) * s.m * s.n];
                             let (u, v) = if s.thin {
                                 (Some(s.u[bi].as_mut()), Some(s.v[bi].as_mut()))
@@ -1244,6 +1285,9 @@ macro_rules! define_backend {
                     },
                     |s, mut tk| {
                         for bi in 0..s.batch {
+                            if expired() {
+                                return Err(cut_error());
+                            }
                             let a0 = &s.a0[bi * s.n * s.n..(bi + 1) * s.n * s.n];
                             fk::linalg::evd::self_adjoint_evd(
                                 mref(a0, s.n, s.n, s.order),
@@ -1327,6 +1371,9 @@ macro_rules! highlevel_ops {
                     |s, _tk| {
                         s.stash.clear(); // the previous call's outputs are freed inside the clock
                         for bi in 0..s.batch {
+                            if expired() {
+                                return Err(cut_error());
+                            }
                             let a0 = &s.a0[bi * s.m * s.n..(bi + 1) * s.m * s.n];
                             // The composite the vendor route's `orgqr` arm matches:
                             // factor, then form the compact `m x min(m, n)` Q. Both the
@@ -1399,6 +1446,9 @@ macro_rules! highlevel_ops {
                     |s, _tk| {
                         s.stash.clear(); // the previous call's outputs are freed inside the clock
                         for bi in 0..s.batch {
+                            if expired() {
+                                return Err(cut_error());
+                            }
                             let a0 = &s.a0[bi * s.m * s.n..(bi + 1) * s.m * s.n];
                             let lu = mref(a0, s.m, s.n, s.order).partial_piv_lu();
                             s.lus.push(lu);
@@ -1453,6 +1503,9 @@ macro_rules! highlevel_ops {
                     |s, _tk| {
                         s.stash.clear(); // the previous call's outputs are freed inside the clock
                         for bi in 0..s.batch {
+                            if expired() {
+                                return Err(cut_error());
+                            }
                             let a0 = &s.a0[bi * s.m * s.n..(bi + 1) * s.m * s.n];
                             let lu = mref(a0, s.m, s.n, s.order).full_piv_lu();
                             s.lus.push(lu);
@@ -1506,6 +1559,9 @@ macro_rules! highlevel_ops {
                     |s, _tk| {
                         s.stash.clear(); // the previous call's outputs are freed inside the clock
                         for bi in 0..s.batch {
+                            if expired() {
+                                return Err(cut_error());
+                            }
                             let a0 = &s.a0[bi * s.n * s.n..(bi + 1) * s.n * s.n];
                             let llt = mref(a0, s.n, s.n, s.order)
                                 .llt(Side::Lower)
@@ -1557,8 +1613,15 @@ macro_rules! highlevel_ops {
                     },
                     |s, _tk| {
                         for bi in 0..s.batch {
+                            if expired() {
+                                return Err(cut_error());
+                            }
                             let a = mref(&s.a0[bi * s.n * s.n..], s.n, s.n, s.order);
                             let lu = a.partial_piv_lu();
+                            // Factor, then solve: two library calls in one member.
+                            if expired() {
+                                return Err(cut_error());
+                            }
                             let rhs = mmut(&mut s.b[bi * s.n..], s.n, 1, s.order);
                             lu.solve_in_place(rhs);
                             acc(&mut s.sink, s.b[bi * s.n].clone());
@@ -1615,6 +1678,9 @@ macro_rules! highlevel_ops {
                     },
                     |s, _tk| {
                         for bi in 0..s.batch {
+                            if expired() {
+                                return Err(cut_error());
+                            }
                             let u = mref(&s.u0[bi * s.n * s.n..], s.n, s.n, s.order);
                             let rhs = mmut(&mut s.b[bi * s.n..], s.n, 1, s.order);
                             u.solve_upper_triangular_in_place(rhs);
@@ -1673,6 +1739,9 @@ macro_rules! highlevel_ops {
                     |s, _tk| {
                         s.stash.clear(); // the previous call's outputs are freed inside the clock
                         for bi in 0..s.batch {
+                            if expired() {
+                                return Err(cut_error());
+                            }
                             let a0 = &s.a0[bi * s.m * s.n..(bi + 1) * s.m * s.n];
                             let sv = mref(a0, s.m, s.n, s.order)
                                 .singular_values()
@@ -1754,6 +1823,9 @@ macro_rules! highlevel_ops {
                     |s, _tk| {
                         s.stash.clear(); // the previous call's outputs are freed inside the clock
                         for bi in 0..s.batch {
+                            if expired() {
+                                return Err(cut_error());
+                            }
                             let a0 = &s.a0[bi * s.m * s.n..(bi + 1) * s.m * s.n];
                             let svd = mref(a0, s.m, s.n, s.order)
                                 .thin_svd()
@@ -1811,6 +1883,9 @@ macro_rules! highlevel_ops {
                     |s, _tk| {
                         s.stash.clear(); // the previous call's outputs are freed inside the clock
                         for bi in 0..s.batch {
+                            if expired() {
+                                return Err(cut_error());
+                            }
                             let a0 = &s.a0[bi * s.n * s.n..(bi + 1) * s.n * s.n];
                             let evd = mref(a0, s.n, s.n, s.order)
                                 .self_adjoint_eigen(Side::Lower)
@@ -1967,6 +2042,9 @@ macro_rules! explicit_ops {
                 |s, mut tk| {
                     s.stash.clear(); // the previous call's outputs are freed inside the clock
                     for bi in 0..s.batch {
+                        if expired() {
+                            return Err(cut_error());
+                        }
                         let a0 = &s.a0[bi * s.m * s.n..(bi + 1) * s.m * s.n];
                         // `Qr::new` then `compute_thin_Q`, with the row's parallelism.
                         let mut qr = mref(a0, s.m, s.n, s.order).to_owned();
@@ -1987,6 +2065,10 @@ macro_rules! explicit_ops {
                             Default::default(),
                         );
                         let (basis, r) = split_lu(qr);
+                        // As in `solve_in_place`: the Q construction is a second call in the member.
+                        if expired() {
+                            return Err(cut_error());
+                        }
                         let mut q = fk::Mat::<T>::identity(s.m, s.size);
                         householder::apply_block_householder_sequence_on_the_left_in_place_with_conj(
                             basis.as_ref(),
@@ -2059,6 +2141,9 @@ macro_rules! explicit_ops {
                 |s, mut tk| {
                     s.stash.clear(); // the previous call's outputs are freed inside the clock
                     for bi in 0..s.batch {
+                        if expired() {
+                            return Err(cut_error());
+                        }
                         let a0 = &s.a0[bi * s.m * s.n..(bi + 1) * s.m * s.n];
                         s.lus.push(partial_lu_of(mref(a0, s.m, s.n, s.order), &mut tk, s.par));
                     }
@@ -2127,6 +2212,9 @@ macro_rules! explicit_ops {
                 |s, mut tk| {
                     s.stash.clear(); // the previous call's outputs are freed inside the clock
                     for bi in 0..s.batch {
+                        if expired() {
+                            return Err(cut_error());
+                        }
                         let a0 = &s.a0[bi * s.m * s.n..(bi + 1) * s.m * s.n];
                         let mut lu = mref(a0, s.m, s.n, s.order).to_owned();
                         let (m, n) = lu.shape();
@@ -2216,6 +2304,9 @@ macro_rules! explicit_ops {
                 |s, mut tk| {
                     s.stash.clear(); // the previous call's outputs are freed inside the clock
                     for bi in 0..s.batch {
+                        if expired() {
+                            return Err(cut_error());
+                        }
                         let a0 = &s.a0[bi * s.n * s.n..(bi + 1) * s.n * s.n];
                         // `Llt::new(A, Side::Lower)`: copy the lower triangle, factor, clear the upper.
                         let mut l = fk::Mat::<T>::zeros(s.n, s.n);
@@ -2304,8 +2395,15 @@ macro_rules! explicit_ops {
                 },
                 |s, mut tk| {
                     for bi in 0..s.batch {
+                        if expired() {
+                            return Err(cut_error());
+                        }
                         let a = mref(&s.a0[bi * s.n * s.n..], s.n, s.n, s.order);
                         let (l, u, fwd, bwd) = partial_lu_of(a, &mut tk, s.par);
+                        // Factor, then solve: two library calls in one member.
+                        if expired() {
+                            return Err(cut_error());
+                        }
                         let rhs = mmut(&mut s.b[bi * s.n..], s.n, 1, s.order);
                         plu_solve::solve_in_place_with_conj(
                             l.as_ref(),
@@ -2374,6 +2472,9 @@ macro_rules! explicit_ops {
                 },
                 |s, mut tk| {
                     for bi in 0..s.batch {
+                        if expired() {
+                            return Err(cut_error());
+                        }
                         let u = mref(&s.u0[bi * s.n * s.n..], s.n, s.n, s.order);
                         let rhs = mmut(&mut s.b[bi * s.n..], s.n, 1, s.order);
                         fk::linalg::triangular_solve::solve_upper_triangular_in_place(u, rhs, parmod::mk_from(&mut tk, s.par));
@@ -2437,6 +2538,9 @@ macro_rules! explicit_ops {
                 |s, mut tk| {
                     s.stash.clear(); // the previous call's outputs are freed inside the clock
                     for bi in 0..s.batch {
+                        if expired() {
+                            return Err(cut_error());
+                        }
                         let a0 = &s.a0[bi * s.m * s.n..(bi + 1) * s.m * s.n];
                         // `MatRef::singular_values`, with the row's parallelism.
                         let a = mref(a0, s.m, s.n, s.order);
@@ -2513,6 +2617,9 @@ macro_rules! explicit_ops {
                 |s, mut tk| {
                     s.stash.clear(); // the previous call's outputs are freed inside the clock
                     for bi in 0..s.batch {
+                        if expired() {
+                            return Err(cut_error());
+                        }
                         let a0 = &s.a0[bi * s.m * s.n..(bi + 1) * s.m * s.n];
                         // `MatRef::thin_svd`, with the row's parallelism.
                         let a = mref(a0, s.m, s.n, s.order);
@@ -2596,6 +2703,9 @@ macro_rules! explicit_ops {
                 |s, mut tk| {
                     s.stash.clear(); // the previous call's outputs are freed inside the clock
                     for bi in 0..s.batch {
+                        if expired() {
+                            return Err(cut_error());
+                        }
                         let a0 = &s.a0[bi * s.n * s.n..(bi + 1) * s.n * s.n];
                         // `MatRef::self_adjoint_eigen(Side::Lower)`, with the row's parallelism.
                         let a = mref(a0, s.n, s.n, s.order);
