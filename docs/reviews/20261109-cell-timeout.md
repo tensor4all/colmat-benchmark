@@ -266,6 +266,28 @@ Evidence (`docs/reviews/20261109-cell-timeout-logs/`):
   SIGKILLed at unix 1794252745, then `ps -p 41153 -o pid=,ppid=,stat=` returned rc=1 (empty output)
   2 s later.
 
+## 5巡目裁定 (owner, 2026-11-09): scope of this PR
+
+This PR closes: an externally enforced per-cell deadline (child + parent kill); exactly one terminal
+row per variant (`ok` / `cut=timeout` / `error`); broken output is never recorded as success
+(numeric parse/NaN/protocol violations become `error` rows and fail the run); and the final
+variant's `reap_child` exit status is not discarded.
+
+**Not closed here (follow-up issue; see the PR body for the explicit list):** the late-`SKIP`
+double-finalisation, the deadline-vs-queued-message priority, and heartbeat/CSV column
+completeness. The first two are already implemented and tested as defensive guards of the
+one-terminal-row invariant, but they are not acceptance gates for this PR; the third is unchanged.
+
+Acceptance measured for the ruling (`docs/reviews/20261109-cell-timeout-logs/`):
+
+1. `acceptance-5min`: limit 3600 s, `svd_thin --n 4096 --batch 3 --reps 2`: four cells of
+   ~5.7 min each completed (`ok`), total 22m45.3s; child pids 13664/2223 gone from `ps` (rc=1).
+2. `acceptance-garbage`: a fake child returns `garbage`/`NaN` for one order: run exit 1,
+   **exactly one failed row** (the other order is `ok`).
+3. `acceptance-final-crash`: a fake child reports its last result and exits 3: run exit 1, rows
+   failed (not exit 0).
+4. `cargo test --all --locked`: 39 unit passed (1 ignored) + 15 child-process tests passed.
+
 ## What this does not change
 
 * The measurement: the timed *call*, priming, repetition count, statistic, thread budget, and the
