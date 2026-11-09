@@ -885,17 +885,58 @@ fn variant_count(row: &str, family: &str) -> usize {
 
 /// Reap a child without an unbounded wait: `try_wait` first, then `SIGKILL` and wait. A child that
 /// closed stdout but kept running must not hold the run open.
-fn reap_child(mut child: std::process::Child) -> String {
-    match child.try_wait() {
-        Ok(Some(status)) => status.to_string(),
-        _ => {
-            let _ = child.kill();
-            child
-                .wait()
-                .map(|status| status.to_string())
-                .unwrap_or_else(|e| format!("wait error: {e}"))
+/// How long a reap may take before the child is abandoned. There is no blocking `wait()`: a
+/// process that cannot be killed (uninterruptible I/O) would otherwise hold the run forever.
+const REAP_BOUND: Duration = Duration::from_secs(5);
+
+enum Reaped {
+    Status(std::process::ExitStatus),
+    TimedOut { kill_error: Option<String> },
+}
+
+impl Reaped {
+    fn success(&self) -> bool {
+        matches!(self, Reaped::Status(status) if status.success())
+    }
+
+    fn text(&self) -> String {
+        match self {
+            Reaped::Status(status) => status.to_string(),
+            Reaped::TimedOut { kill_error } => match kill_error {
+                Some(e) => format!("reap timed out; kill failed: {e}"),
+                None => "reap timed out".to_owned(),
+            },
         }
     }
+}
+
+fn try_wait_until(child: &mut std::process::Child, bound: Duration) -> Option<std::process::ExitStatus> {
+    let deadline = Instant::now() + bound;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Some(status),
+            Ok(None) => {}
+            Err(_) => return None,
+        }
+        if Instant::now() >= deadline {
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn reap_child(mut child: std::process::Child) -> Reaped {
+    // One non-blocking check first: an already-exited child is reaped without a signal.
+    if let Ok(Some(status)) = child.try_wait() {
+        return Reaped::Status(status);
+    }
+    let kill_error = child.kill().err().map(|e| e.to_string());
+    if let Some(status) = try_wait_until(&mut child, REAP_BOUND) {
+        return Reaped::Status(status);
+    }
+    // The child did not die inside the bound. Abandon it rather than block; the caller records a
+    // failed row and logs the timeout. (SIGKILL is uninterruptible, so this is the pathological case.)
+    Reaped::TimedOut { kill_error }
 }
 
 fn unix_millis() -> u128 {
@@ -1020,6 +1061,9 @@ fn run_build_in_child(
     // after a result (for example the construction-cut child, which reports one `timeout` and
     // stops) has not failed the next variant: the next variant is respawned.
     let mut completed_in_child = false;
+    // The last result this child reported. The cooperative construction cut is exactly
+    // "a timeout result, then a successful exit"; any other exit after a result is a crash.
+    let mut last_result_timeout = false;
     let mut spawn_time = Instant::now();
     let mut construction = Duration::ZERO;
     let mut deadline = variant_deadline(spawn_time, limit, construction);
@@ -1088,6 +1132,7 @@ fn run_build_in_child(
                 spawn_time = Instant::now();
                 construction = Duration::ZERO;
                 completed_in_child = false;
+                last_result_timeout = false;
                 let spec = spec_at(next);
                 let handle = match spawn_cell(&exe, &spec) {
                     Ok(handle) => handle,
@@ -1151,13 +1196,55 @@ fn run_build_in_child(
                         return Ok(());
                     }
                     Some("RESULT") => {
-                        let (result_index, result) = parse_result(&fields)?;
-                        if result_index != next {
-                            return Err(format!(
-                                "the cell child reported variant {} while {next} was running",
-                                result_index + 1
-                            ));
-                        }
+                        let parsed = parse_result(&fields).and_then(|(result_index, result)| {
+                            if result_index == next {
+                                Ok(result)
+                            } else {
+                                Err(format!(
+                                    "the cell child reported variant {} while {} was running",
+                                    result_index + 1,
+                                    next + 1
+                                ))
+                            }
+                        });
+                        let result = match parsed {
+                            Ok(result) => result,
+                            Err(e) => {
+                                let pid = handle.pid;
+                                let reaped = reap_child(handle.child);
+                                drop(handle.reader);
+                                heartbeat(
+                                    "protocol-error",
+                                    row,
+                                    family,
+                                    dtype,
+                                    order,
+                                    case,
+                                    format!(
+                                        " id={id} pid={pid} variant={}/{n} error={e} status={}",
+                                        next + 1,
+                                        reaped.text()
+                                    ),
+                                );
+                                finish(
+                                    csv,
+                                    Cell {
+                                        status: "failed",
+                                        note: e,
+                                        samples: Vec::new(),
+                                        timed_ms: None,
+                                        check_ms: None,
+                                    },
+                                    next,
+                                );
+                                next += 1;
+                                current = None;
+                                if next < n {
+                                    start(next);
+                                }
+                                continue;
+                            }
+                        };
                         let cell = Cell {
                             status: result.status,
                             note: result.note,
@@ -1165,6 +1252,7 @@ fn run_build_in_child(
                             timed_ms: result.timed_ms,
                             check_ms: result.check_ms,
                         };
+                        last_result_timeout = cell.status == "timeout";
                         finish(csv, cell, next);
                         completed_in_child = true;
                         next += 1;
@@ -1182,7 +1270,8 @@ fn run_build_in_child(
             Wake::Timeout => {
                 let killed_at = unix_millis();
                 let pid = handle.pid;
-                let status = reap_child(handle.child);
+                let reaped = reap_child(handle.child);
+                let status = reaped.text();
                 let reaped_at = unix_millis();
                 drop(handle.reader);
                 heartbeat(
@@ -1206,7 +1295,9 @@ fn run_build_in_child(
             }
             Wake::Closed => {
                 let pid = handle.pid;
-                let status = reap_child(handle.child);
+                let reaped = reap_child(handle.child);
+                let status = reaped.text();
+                let cooperative = completed_in_child && reaped.success() && last_result_timeout;
                 drop(handle.reader);
                 heartbeat(
                     "exit",
@@ -1215,12 +1306,15 @@ fn run_build_in_child(
                     dtype,
                     order,
                     case,
-                    format!(" id={id} pid={pid} status={status} at_ms={}", unix_millis()),
+                    format!(
+                        " id={id} pid={pid} status={status} cooperative={cooperative} at_ms={}",
+                        unix_millis()
+                    ),
                 );
                 current = None;
-                if completed_in_child {
-                    // The child ended after a result (a construction cut reports one timeout and
-                    // stops). It did not fail the next variant: respawn it, without a new start.
+                if cooperative {
+                    // The construction-cut child reports exactly one timeout and exits successfully.
+                    // It did not fail the next variant: respawn it, without a new start.
                     continue;
                 }
                 let cell = Cell {
@@ -1850,6 +1944,37 @@ mod tests {
         assert!(row.ends_with(",zen2-64-smt-off,,"), "{row}");
         std::env::remove_var("FBENCH_PROFILE");
         std::fs::remove_file(&path).ok();
+    }
+
+    /// Reaping a child that is still running kills it and returns a non-success status within the
+    /// bound; it does not call a blocking `wait()`.
+    #[cfg(unix)]
+    #[test]
+    fn reap_child_kills_a_running_child_within_the_bound() {
+        let child = std::process::Command::new("sleep")
+            .arg("300")
+            .spawn()
+            .expect("spawn sleep");
+        let started = Instant::now();
+        let reaped = reap_child(child);
+        assert!(
+            started.elapsed() < REAP_BOUND + Duration::from_secs(1),
+            "reap took {:?}",
+            started.elapsed()
+        );
+        assert!(!reaped.success(), "a killed child is not a success: {}", reaped.text());
+    }
+
+    /// An already-finished child is reaped without a signal and reports its real status.
+    #[cfg(unix)]
+    #[test]
+    fn reap_child_reports_a_finished_child() {
+        let child = std::process::Command::new("true")
+            .spawn()
+            .expect("spawn true");
+        std::thread::sleep(Duration::from_millis(50));
+        let reaped = reap_child(child);
+        assert!(reaped.success(), "true should succeed: {}", reaped.text());
     }
 
     #[test]

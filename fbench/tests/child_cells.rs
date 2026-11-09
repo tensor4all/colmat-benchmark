@@ -85,6 +85,13 @@ fn run_fake_with_deadline(
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(seconds);
     loop {
         if let Some(status) = child.try_wait().expect("try_wait") {
+            // The parent is gone; any child it failed to reap (the regression this test is for) is
+            // in the parent's process group. Clean it so the test leaves no orphan.
+            let _ = Command::new("kill")
+                .args(["-KILL", &format!("-{pid}")])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
             let stderr = std::fs::read_to_string(&err_path).unwrap_or_default();
             let csv_text = std::fs::read_to_string(&csv).unwrap_or_default();
             std::fs::remove_file(&csv).ok();
@@ -96,6 +103,8 @@ fn run_fake_with_deadline(
             // outlive the test.
             let _ = Command::new("kill")
                 .args(["-KILL", &format!("-{pid}")])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
                 .status();
             let _ = child.kill();
             let _ = child.wait();
@@ -446,5 +455,56 @@ fn a_child_that_cannot_start_closes_the_variant_with_a_failed_row() {
     assert!(
         stderr.contains("spawn-failed"),
         "the spawn failure is logged: {stderr}"
+    );
+}
+
+/// A child that crashes after reporting a result is not the cooperative construction cut. Only
+/// "a timeout result, then a successful exit" gets the respawn-without-a-row exception; a non-zero
+/// exit after an `ok` result closes the pending variant as failed.
+#[test]
+fn a_crash_after_a_result_is_not_a_cooperative_exit() {
+    let (stderr, csv, code) = run_fake("crash-after-result", "error_once", 1, 3);
+    assert_eq!(code, 1, "the crash is a failed run: {stderr}");
+    let rows: Vec<&str> = csv.lines().skip(1).collect();
+    assert_eq!(rows.len(), 6, "two orders x three variants: {csv}");
+    for (build, chunk) in rows.chunks(3).enumerate() {
+        let statuses: Vec<&str> = chunk
+            .iter()
+            .map(|row| row.split(',').nth(12).unwrap_or("?"))
+            .collect();
+        assert_eq!(
+            statuses,
+            ["ok", "failed", "ok"],
+            "build {build}: the crash must close variant 2 as failed: {csv}"
+        );
+    }
+    assert_eq!(count_lines(&stderr, "CELL start"), 6, "{stderr}");
+    assert_eq!(count_lines(&stderr, "CELL done"), 6, "{stderr}");
+}
+
+/// A malformed `RESULT` (or an index that is not the running variant) closes that variant as
+/// failed, writes its done, and reaps the child; it does not return early with no row.
+#[test]
+fn a_malformed_result_closes_the_variant_and_reaps_the_child() {
+    let (stderr, csv, code) = run_fake("bad-result", "bad_result", 0, 2);
+    assert_eq!(code, 1, "a protocol error is a failed run: {stderr}");
+    let rows: Vec<&str> = csv.lines().skip(1).collect();
+    assert_eq!(rows.len(), 4, "two orders x two variants: {csv}");
+    for (build, chunk) in rows.chunks(2).enumerate() {
+        let statuses: Vec<&str> = chunk
+            .iter()
+            .map(|row| row.split(',').nth(12).unwrap_or("?"))
+            .collect();
+        assert_eq!(
+            statuses,
+            ["failed", "ok"],
+            "build {build}: the malformed result is a failed cell: {csv}"
+        );
+    }
+    assert_eq!(count_lines(&stderr, "CELL start"), 4, "{stderr}");
+    assert_eq!(count_lines(&stderr, "CELL done"), 4, "{stderr}");
+    assert!(
+        stderr.contains("protocol-error"),
+        "the protocol error is logged: {stderr}"
     );
 }

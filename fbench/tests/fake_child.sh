@@ -29,6 +29,15 @@ while [ "$i" -lt "$n" ]; do
                 fi
                 exec sleep 300 ;;
             error) exit 3 ;;
+            error_once)
+                # A crash after one result, only for the first attempt; a replacement child is fine.
+                if [ "$from" -eq 0 ]; then exit 3; fi ;;
+            bad_result)
+                # A malformed RESULT followed by a hang, only for the first attempt.
+                if [ "$from" -eq 0 ]; then
+                    printf 'RESULT\t999\tok\t\t1\t2\t1\n'
+                    exec sleep 300
+                fi ;;
         esac
     fi
     printf 'RESULT\t%s\tok\t\t1.0\t2.0\t1.0\n' "$i"
