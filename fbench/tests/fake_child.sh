@@ -38,6 +38,16 @@ while [ "$i" -lt "$n" ]; do
                     printf 'RESULT\t999\tok\t\t1\t2\t1\n'
                     exec sleep 300
                 fi ;;
+            bad_numbers)
+                if [ "$from" -eq 0 ]; then
+                    printf 'RESULT\t0\tok\t\tgarbage\tNaN\tgarbage\n'
+                    exit 0
+                fi ;;
+            short_samples)
+                if [ "$from" -eq 0 ]; then
+                    printf 'RESULT\t0\tok\t\t1\t2\t1\n'
+                    exit 0
+                fi ;;
         esac
     fi
     printf 'RESULT\t%s\tok\t\t1.0\t2.0\t1.0\n' "$i"
@@ -45,5 +55,8 @@ while [ "$i" -lt "$n" ]; do
 done
 if [ "$mode" = "hang_after" ]; then
     exec sleep 300
+fi
+if [ "$mode" = "crash_after_last" ]; then
+    exit 3
 fi
 exit 0

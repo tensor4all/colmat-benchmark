@@ -51,11 +51,12 @@ fn count_lines(text: &str, prefix: &str) -> usize {
 /// Run the parent with a fake child under a wall deadline. Every wait inside the parent is
 /// bounded; this is the outer bound for the test itself, so a regression that removes the parent's
 /// deadline fails instead of hanging in `sleep 300`.
-fn run_fake_with_deadline(
+fn run_fake_with_options(
     name: &str,
     mode: &str,
     at: usize,
     n: usize,
+    reps: usize,
     seconds: u64,
 ) -> (Option<i32>, String, String) {
     use std::os::unix::process::CommandExt;
@@ -68,8 +69,8 @@ fn run_fake_with_deadline(
     command
         .args([
             "run", "--threads", "1", "--n", "8", "--family", "gemm", "--dtype", "f64",
-            "--rows", "faer-fork", "--reps", "1", "--prime-ms", "0", "--cell-timeout", "1",
-            "--csv",
+            "--rows", "faer-fork", "--reps", &reps.to_string(), "--prime-ms", "0",
+            "--cell-timeout", "1", "--csv",
         ])
         .arg(&csv)
         .env("FBENCH_CELL_CHILD", script)
@@ -116,6 +117,16 @@ fn run_fake_with_deadline(
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
+}
+
+fn run_fake_with_deadline(
+    name: &str,
+    mode: &str,
+    at: usize,
+    n: usize,
+    seconds: u64,
+) -> (Option<i32>, String, String) {
+    run_fake_with_options(name, mode, at, n, 1, seconds)
 }
 
 fn run_fake(name: &str, mode: &str, at: usize, n: usize) -> (String, String, i32) {
@@ -507,4 +518,43 @@ fn a_malformed_result_closes_the_variant_and_reaps_the_child() {
         stderr.contains("protocol-error"),
         "the protocol error is logged: {stderr}"
     );
+}
+
+/// A child that reports its last result and then exits non-zero must not leave an `ok` run.
+#[test]
+fn a_crash_after_the_last_result_is_a_failed_row() {
+    let (stderr, csv, code) = run_fake("crash-after-last", "crash_after_last", 0, 1);
+    assert_eq!(code, 1, "the post-result crash is a failed run: {stderr}");
+    let rows: Vec<&str> = csv.lines().skip(1).collect();
+    assert_eq!(rows.len(), 2, "one row per order: {csv}");
+    for row in &rows {
+        let status = row.split(',').nth(12).unwrap_or("?");
+        assert_eq!(status, "failed", "{row}");
+    }
+    assert_eq!(count_lines(&stderr, "CELL start"), 2, "{stderr}");
+    assert_eq!(count_lines(&stderr, "CELL done"), 2, "{stderr}");
+}
+
+/// Garbage/NaN timings and samples are not an accepted measurement.
+#[test]
+fn garbage_numbers_are_not_an_ok_row() {
+    let (stderr, csv, code) = run_fake("bad-numbers", "bad_numbers", 0, 1);
+    assert_eq!(code, 1, "a bad numeric result is a failed run: {stderr}");
+    for row in csv.lines().skip(1) {
+        let status = row.split(',').nth(12).unwrap_or("?");
+        assert_eq!(status, "failed", "{row}");
+    }
+    assert!(stderr.contains("protocol-error"), "{stderr}");
+}
+
+/// An `ok` result with fewer samples than repetitions is not accepted.
+#[test]
+fn a_short_sample_count_is_not_an_ok_row() {
+    let (code, stderr, csv) = run_fake_with_options("short-samples", "short_samples", 0, 1, 3, 10);
+    assert_eq!(code, Some(1), "a short sample set is a failed run: {stderr}");
+    for row in csv.lines().skip(1) {
+        let status = row.split(',').nth(12).unwrap_or("?");
+        assert_eq!(status, "failed", "{row}");
+    }
+    assert!(stderr.contains("expected 3"), "{stderr}");
 }

@@ -817,6 +817,19 @@ struct ChildResult {
     samples: Vec<f64>,
 }
 
+fn parse_number(field: &str, name: &str) -> Result<Option<f64>, String> {
+    if field.is_empty() {
+        return Ok(None);
+    }
+    let value: f64 = field
+        .parse()
+        .map_err(|e| format!("RESULT {name}: {e}"))?;
+    if !value.is_finite() || value < 0.0 {
+        return Err(format!("RESULT {name} is not a finite non-negative number: {field}"));
+    }
+    Ok(Some(value))
+}
+
 fn parse_result(fields: &[&str]) -> Result<(usize, ChildResult), String> {
     let index: usize = fields
         .get(1)
@@ -826,31 +839,57 @@ fn parse_result(fields: &[&str]) -> Result<(usize, ChildResult), String> {
     let status = match *fields.get(2).ok_or("RESULT without a status")? {
         "ok" => "ok",
         "timeout" => "timeout",
-        _ => "failed",
+        "failed" => "failed",
+        other => return Err(format!("RESULT has an unknown status {other:?}")),
     };
-    let number = |value: &str| -> Option<f64> {
-        if value.is_empty() {
-            None
-        } else {
-            value.parse().ok()
+    let timed_ms = parse_number(fields.get(4).unwrap_or(&""), "timed_ms")?;
+    let check_ms = parse_number(fields.get(5).unwrap_or(&""), "check_ms")?;
+    let samples_field = fields.get(6).unwrap_or(&"");
+    let samples = if samples_field.is_empty() {
+        Vec::new()
+    } else {
+        let mut samples = Vec::new();
+        for value in samples_field.split(',') {
+            let parsed: f64 = value
+                .parse()
+                .map_err(|e| format!("RESULT sample {value:?}: {e}"))?;
+            if !parsed.is_finite() || parsed < 0.0 {
+                return Err(format!(
+                    "RESULT sample is not a finite non-negative number: {value}"
+                ));
+            }
+            samples.push(parsed);
         }
+        samples
     };
-    let samples = fields
-        .get(6)
-        .unwrap_or(&"")
-        .split(',')
-        .filter_map(|v| v.parse().ok())
-        .collect();
     Ok((
         index,
         ChildResult {
             status,
             note: fields.get(3).unwrap_or(&"").to_string(),
-            timed_ms: number(fields.get(4).unwrap_or(&"")),
-            check_ms: number(fields.get(5).unwrap_or(&"")),
+            timed_ms,
+            check_ms,
             samples,
         },
     ))
+}
+
+/// A result is only `ok` if it has the shape an `ok` row promises: finite timed/check times and,
+/// in run mode, one sample per repetition. Anything else goes down the failed-cell path.
+fn validate_result(result: &ChildResult, run: bool, reps: usize) -> Result<(), String> {
+    if result.status != "ok" {
+        return Ok(());
+    }
+    if result.timed_ms.is_none() || result.check_ms.is_none() {
+        return Err("RESULT ok without finite timed_ms and check_ms".to_owned());
+    }
+    if run && result.samples.len() != reps {
+        return Err(format!(
+            "RESULT ok with {} sample(s), expected {reps}",
+            result.samples.len()
+        ));
+    }
+    Ok(())
 }
 
 /// Run one `build_ops` batch in a child process and enforce each cell's limit by killing it.
@@ -888,20 +927,26 @@ fn variant_count(row: &str, family: &str) -> usize {
 /// How long a reap may take before the child is abandoned. There is no blocking `wait()`: a
 /// process that cannot be killed (uninterruptible I/O) would otherwise hold the run forever.
 const REAP_BOUND: Duration = Duration::from_secs(5);
+/// How long a child that has nothing more to report gets to exit on its own before it is killed.
+/// This is what distinguishes "reported its last result, then exited 3" from "still running".
+const REAP_GRACE: Duration = Duration::from_millis(250);
 
 enum Reaped {
-    Status(std::process::ExitStatus),
+    /// The child exited on its own.
+    Exited(std::process::ExitStatus),
+    /// The parent killed it because it had nothing more to report (or was over its limit).
+    Killed(std::process::ExitStatus),
     TimedOut { kill_error: Option<String> },
 }
 
 impl Reaped {
     fn success(&self) -> bool {
-        matches!(self, Reaped::Status(status) if status.success())
+        matches!(self, Reaped::Exited(status) if status.success())
     }
 
     fn text(&self) -> String {
         match self {
-            Reaped::Status(status) => status.to_string(),
+            Reaped::Exited(status) | Reaped::Killed(status) => status.to_string(),
             Reaped::TimedOut { kill_error } => match kill_error {
                 Some(e) => format!("reap timed out; kill failed: {e}"),
                 None => "reap timed out".to_owned(),
@@ -925,17 +970,30 @@ fn try_wait_until(child: &mut std::process::Child, bound: Duration) -> Option<st
     }
 }
 
+/// Reap a child that should be finished (stdout closed, or the last result received). It gets
+/// [`REAP_GRACE`] to exit on its own, so a real exit status is seen; only then is it killed.
 fn reap_child(mut child: std::process::Child) -> Reaped {
-    // One non-blocking check first: an already-exited child is reaped without a signal.
-    if let Ok(Some(status)) = child.try_wait() {
-        return Reaped::Status(status);
+    if let Some(status) = try_wait_until(&mut child, REAP_GRACE) {
+        return Reaped::Exited(status);
     }
     let kill_error = child.kill().err().map(|e| e.to_string());
     if let Some(status) = try_wait_until(&mut child, REAP_BOUND) {
-        return Reaped::Status(status);
+        return Reaped::Killed(status);
     }
     // The child did not die inside the bound. Abandon it rather than block; the caller records a
     // failed row and logs the timeout. (SIGKILL is uninterruptible, so this is the pathological case.)
+    Reaped::TimedOut { kill_error }
+}
+
+/// Reap at a deadline: kill now, then wait a bounded time for the signal to land.
+fn reap_now(mut child: std::process::Child) -> Reaped {
+    if let Ok(Some(status)) = child.try_wait() {
+        return Reaped::Exited(status);
+    }
+    let kill_error = child.kill().err().map(|e| e.to_string());
+    if let Some(status) = try_wait_until(&mut child, REAP_BOUND) {
+        return Reaped::Killed(status);
+    }
     Reaped::TimedOut { kill_error }
 }
 
@@ -1061,6 +1119,9 @@ fn run_build_in_child(
     // after a result (for example the construction-cut child, which reports one `timeout` and
     // stops) has not failed the next variant: the next variant is respawned.
     let mut completed_in_child = false;
+    // The last variant's result is held until the child's exit is known: a child that reports the
+    // last result and then crashes must make that row failed, not successful.
+    let mut pending_final: Option<Cell> = None;
     // The last result this child reported. The cooperative construction cut is exactly
     // "a timeout result, then a successful exit"; any other exit after a result is a crash.
     let mut last_result_timeout = false;
@@ -1197,15 +1258,15 @@ fn run_build_in_child(
                     }
                     Some("RESULT") => {
                         let parsed = parse_result(&fields).and_then(|(result_index, result)| {
-                            if result_index == next {
-                                Ok(result)
-                            } else {
-                                Err(format!(
+                            if result_index != next {
+                                return Err(format!(
                                     "the cell child reported variant {} while {} was running",
                                     result_index + 1,
                                     next + 1
-                                ))
+                                ));
                             }
+                            validate_result(&result, run, args.reps)?;
+                            Ok(result)
                         });
                         let result = match parsed {
                             Ok(result) => result,
@@ -1253,14 +1314,16 @@ fn run_build_in_child(
                             check_ms: result.check_ms,
                         };
                         last_result_timeout = cell.status == "timeout";
-                        finish(csv, cell, next);
                         completed_in_child = true;
-                        next += 1;
-                        if next < n {
+                        if next + 1 == n {
+                            pending_final = Some(cell);
+                            next += 1;
+                            deadline = None;
+                        } else {
+                            finish(csv, cell, next);
+                            next += 1;
                             start(next);
                             deadline = variant_deadline(Instant::now(), limit, construction);
-                        } else {
-                            deadline = None;
                         }
                     }
                     _ => {}
@@ -1270,7 +1333,7 @@ fn run_build_in_child(
             Wake::Timeout => {
                 let killed_at = unix_millis();
                 let pid = handle.pid;
-                let reaped = reap_child(handle.child);
+                let reaped = reap_now(handle.child);
                 let status = reaped.text();
                 let reaped_at = unix_millis();
                 drop(handle.reader);
@@ -1334,10 +1397,37 @@ fn run_build_in_child(
     }
 
     if let Some(handle) = current {
-        // Every variant has a result; the child has nothing left to say. Reap it with a kill rather
-        // than waiting for a destructor or a thread that never returns.
-        let _ = reap_child(handle.child);
+        // Every variant has a result; the child has nothing left to say. Reap it (kill if it is
+        // still running) and only then settle the held last row.
+        let reaped = reap_child(handle.child);
         drop(handle.reader);
+        if let Some(cell) = pending_final.take() {
+            let cell = match &reaped {
+                Reaped::Exited(status) if !status.success() => Cell {
+                    status: "failed",
+                    note: format!(
+                        "the cell child exited with {status} after reporting its last result"
+                    ),
+                    samples: Vec::new(),
+                    timed_ms: None,
+                    check_ms: None,
+                },
+                Reaped::TimedOut { .. } => {
+                    heartbeat(
+                        "final-reap",
+                        row,
+                        family,
+                        dtype,
+                        order,
+                        case,
+                        format!(" id={id} variant={}/{n} status={}", n, reaped.text()),
+                    );
+                    cell
+                }
+                _ => cell,
+            };
+            finish(csv, cell, n - 1);
+        }
     }
     Ok(())
 }
