@@ -27,8 +27,9 @@ This note covers the PR that follows #60 (`3b58258`). Evidence logs are in
 * One `CELL start` and one terminal row per variant; the kill path never re-emits a start. The only
   exception to "a child exit is a failure" is the **cooperative construction cut**: a `timeout`
   result followed by a **successful** exit. A crash after an `ok` result, or any exit with no
-  result, closes the pending variant as `failed`. The **last** variant's row is held until the
-  child's exit is known, so a crash after the final result is failed too. A malformed `RESULT`
+  result, closes the pending variant as `failed`. The **last** variant's row and a **SKIP** row are
+  held until the child's exit is known, so a crash after the final result, or a SKIP followed by a
+  non-zero exit, is failed too. A malformed `RESULT`
   (unknown status, unparseable/NaN/infinite/negative number, or an `ok` without finite
   timed/check times and exactly `--reps` samples) or an unexpected variant index takes the same
   failed-cell path and also reaps the child.
@@ -123,12 +124,16 @@ Red, per item, with the fix removed (`docs/reviews/20261109-cell-timeout-logs/`)
 | `red-1l-final-crash.log` | the last row is settled without looking at the child's exit | the crash-after-last-result test FAILED (ok rows, exit 0) |
 | `red-2n-bad-numbers.log` | permissive numeric parsing and no result validation | the garbage/NaN test FAILED (ok row) |
 | `red-2o-short-samples.log` | no `--reps` sample-count check | the short-sample test FAILED (ok row) |
+| `red-1m-skip-crash.log` | the SKIP row is written before the reap and its status ignored | the skip-then-crash test FAILED (skipped rows, exit 0) |
+| `red-2p-header-only.log` | protocol errors write no row, with the new row-count assert | the garbage/NaN and short-sample tests FAILED (header-only CSV) |
+| `red-2q-header-only-old-test.log` | the same header-only CSV with the old tests (no row-count assert) | they **passed**, which is the gap the assert closes |
 
 Green: `cargo test --locked` → `test result: ok. 37 passed; 0 failed; 1 ignored` (unit) and
-`test result: ok. 12 passed` (`fbench/tests/child_cells.rs`: first-variant hard kill with the fake
+`test result: ok. 13 passed` (`fbench/tests/child_cells.rs`: first-variant hard kill with the fake
 child, finished run, the 9-row transition table, the wrong-parent pid check, the
 hang-after-last-result reap, the spawn-failure row, a crash after a result, a malformed child
-result, a crash after the last result, garbage/NaN numbers, and a short sample set).
+result, a crash after the last result, garbage/NaN numbers, a short sample set, and a SKIP followed
+by a crash).
 
 End to end, with the parent enforcing the limit:
 * `long-cell` (`--n 4096 --batch 2`, limit 3600 s), regenerated at head `ad8280d`: four cells,
@@ -277,7 +282,7 @@ Evidence (`docs/reviews/20261109-cell-timeout-logs/`):
 
 ```
 cargo build --locked          # Finished, 0 errors
-cargo test --locked           # 39 unit passed (1 ignored) + 12 child-process tests passed
+cargo test --locked           # 39 unit passed (1 ignored) + 13 child-process tests passed
 ```
 
 `cargo-test.log` holds the second. CI's `harness` job (#60) runs `cargo check -p fbench --locked`
