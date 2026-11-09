@@ -670,6 +670,10 @@ macro_rules! define_backend {
                                 Default::default(),
                             );
                             let mut reference = s.c0[bi * s.m * s.target..(bi + 1) * s.m * s.target].to_vec();
+                            // The factorization above is one call; applying it below is another.
+                            if expired() {
+                                return Err(cut_error());
+                            }
                             let basis = mref(&a, s.m, s.n, s.order).get(.., ..s.size);
                             let factor = mref(&qc, s.size, s.size, Order::F);
                             let dst = mmut(&mut reference, s.m, s.target, s.order);
@@ -1380,6 +1384,10 @@ macro_rules! highlevel_ops {
                             // actual Q and R this call returns are retained, so the
                             // check below sees the run's own output.
                             let qr = mref(a0, s.m, s.n, s.order).qr();
+                            // Factor, then form the thin Q: two library calls in one member.
+                            if expired() {
+                                return Err(cut_error());
+                            }
                             let q = qr.compute_thin_Q();
                             s.outputs.push((qr, q));
                         }

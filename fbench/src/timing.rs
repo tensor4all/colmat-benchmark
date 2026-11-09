@@ -36,14 +36,11 @@ pub fn deadline_at(start: Instant, limit: Option<Duration>) -> Option<Instant> {
     if let Some(deadline) = start.checked_add(limit) {
         return Some(deadline);
     }
-    // A limit the platform clock cannot reach is still a limit, and `None` means "no
-    // limit" to every caller: saturate at one year, far past any cell the harness waits for.
-    const SATURATED: Duration = Duration::from_secs(365 * 24 * 60 * 60);
-    Some(
-        start
-            .checked_add(SATURATED)
-            .expect("a one-year deadline is representable on this clock"),
-    )
+    // A limit the platform clock cannot represent is a limit that has already expired, not a
+    // reason to run without one: `None` means "no limit" to every caller, and disarming a cell
+    // silently is the failure this clock exists to prevent. (`parse` refuses such a
+    // `--cell-timeout` up front; this is the backstop for a programmatic caller.)
+    Some(start)
 }
 
 /// The absolute deadline `limit` from now.

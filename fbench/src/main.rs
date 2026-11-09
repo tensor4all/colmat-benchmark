@@ -1560,6 +1560,167 @@ mod tests {
         timing::disarm();
     }
 
+    /// Every poll site in the sources is exactly the set listed in the waiting-point table, so a
+    /// new wait that forgets its poll (or a deleted poll) fails here instead of in a campaign.
+    #[test]
+    fn waiting_points_are_enumerated_and_polled() {
+        use std::collections::BTreeMap;
+        let table = include_str!("../../docs/reviews/20261110-cell-timeout-waiting-points.md");
+        let sources = [
+            ("main.rs", include_str!("main.rs")),
+            ("backend.rs", include_str!("backend.rs")),
+            ("lapack.rs", include_str!("lapack.rs")),
+            ("shared.rs", include_str!("shared.rs")),
+            ("timing.rs", include_str!("timing.rs")),
+        ];
+        let is_poll = |line: &str| {
+            let t = line.trim_start();
+            t.starts_with("if expired()")
+                || t.starts_with("if timing::expired()")
+                || t.starts_with("Ok(()) if timing::expired()")
+                || t.starts_with("Err(_e) if timing::expired()")
+        };
+        let mut listed: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
+        for line in table.lines() {
+            let Some(rest) = line.trim().strip_prefix("| `fbench/src/") else {
+                continue;
+            };
+            let Some(end) = rest.find('`') else { continue };
+            let Some((file, number)) = rest[..end].split_once(':') else {
+                continue;
+            };
+            listed
+                .entry(file)
+                .or_default()
+                .push(number.parse().expect("line number"));
+        }
+        for (file, source) in sources {
+            let actual: Vec<usize> = source
+                .lines()
+                .enumerate()
+                .filter(|(_, line)| is_poll(line))
+                .map(|(i, _)| i + 1)
+                .collect();
+            assert_eq!(
+                listed.get(file).cloned().unwrap_or_default(),
+                actual,
+                "{file}: the waiting-point table and the poll sites disagree                  (update docs/reviews/20261110-cell-timeout-waiting-points.md)"
+            );
+            for number in actual {
+                assert!(
+                    source.lines().nth(number - 1).unwrap().contains("expired()"),
+                    "{file}:{number} is listed as a poll but is not one"
+                );
+            }
+        }
+    }
+
+    /// The high-level `qr` (upstream) factorizes and then forms the thin `Q`: the poll between the
+    /// two calls is what stops the second one after the limit.
+    #[test]
+    fn the_high_level_qr_polls_between_factor_and_thin_q() {
+        let mut ops = ops_for(
+            "faer-upstream",
+            Dtype::F64,
+            "qr",
+            Case {
+                m: 512,
+                n: 512,
+                k: None,
+                batch: 1,
+            },
+            Order::C,
+        )
+        .unwrap();
+        timing::arm(Some(Duration::from_millis(1)));
+        let called = ops[0].run(op::Token::none());
+        assert!(
+            called.is_err(),
+            "forming Q must not start after the factor crossed the limit"
+        );
+        assert!(timing::cut());
+        timing::disarm();
+    }
+
+    /// `householder_apply`'s check factorizes and then applies the factor: the poll between them
+    /// stops the apply once the factorization has crossed the limit.
+    #[test]
+    fn householder_check_polls_before_applying_the_factor() {
+        let mut ops = ops_for(
+            "faer-fork",
+            Dtype::F64,
+            "householder_apply",
+            Case {
+                m: 512,
+                n: 512,
+                k: None,
+                batch: 1,
+            },
+            Order::C,
+        )
+        .unwrap();
+        ops[0].prepare().unwrap();
+        ops[0].run(op::Token::none()).unwrap();
+        timing::arm(Some(Duration::from_millis(1)));
+        let checked = ops[0].check();
+        assert!(
+            checked.is_err(),
+            "the householder apply must not start after the factorization crossed the limit"
+        );
+        assert!(timing::cut());
+        timing::disarm();
+    }
+
+    /// A limit the platform clock cannot represent is an already-expired limit, not "no limit":
+    /// disarming the cell here is the failure the clock exists to prevent.
+    #[test]
+    fn an_unrepresentable_limit_cuts_the_cell() {
+        let start = Instant::now();
+        let deadline = timing::deadline_at(start, Some(Duration::from_secs(u64::MAX)));
+        assert!(deadline.is_some(), "an overflowed limit must stay a limit");
+        timing::arm_at(deadline);
+        assert!(timing::expired(), "an overflowed limit must cut, not disarm");
+        assert!(timing::cut());
+        timing::disarm();
+    }
+
+    /// The compound calls that cost three review rounds: a member that factorizes and then applies,
+    /// solves or forms `Q`. Each must have a poll before the second call, within the block that
+    /// runs it.
+    #[test]
+    fn compound_library_calls_are_guarded() {
+        let source = include_str!("backend.rs");
+        let compounds = [
+            "compute_thin_Q()",
+            "solve_in_place(",
+            "solve_in_place_with_conj(",
+            "apply_block_householder_sequence_on_the_left_in_place_with_conj(",
+            "apply_block_householder_on_the_left_in_place_with_conj(",
+            "partial_piv_lu()",
+            "partial_lu_of(",
+            "qr_in_place(",
+        ];
+        for (i, line) in source.lines().enumerate() {
+            if line.trim_start().starts_with("//")
+                || !compounds.iter().any(|pattern| line.contains(pattern))
+            {
+                continue;
+            }
+            let start = i.saturating_sub(40);
+            let guarded = source
+                .lines()
+                .skip(start)
+                .take(i - start)
+                .any(|previous| previous.contains("expired()"));
+            assert!(
+                guarded,
+                "backend.rs:{}: no expired() poll within 40 lines of `{}`",
+                i + 1,
+                line.trim()
+            );
+        }
+    }
+
     /// The high-level `solve` route (upstream) factors and then solves in one member: the poll
     /// between the two calls is what stops the solve after the factor crossed the limit.
     #[test]

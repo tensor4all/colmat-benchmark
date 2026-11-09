@@ -21,10 +21,11 @@ This note covers the PR that follows #60 (`3b58258`). Evidence logs are in
 Review item 1 of #58: the expensive reference calculations that build an `Op`
 (`fbench/src/main.rs:440` `build_ops`, called at `:698`) — `cholesky`/`solve` build their input
 with the cubic `shared::mul_adj_b`, and the LAPACK `gemm` builds its whole reference product — used
-to run *before* the clock was armed, so no limit applied to them. The cell's **one absolute
-deadline is fixed before construction**, construction runs under it, and the same `Instant` is
-passed unchanged to `run_cell` and `measure_row` (`main.rs:1006` `Budget`, `:1032` `run_cell`): the
-deadline is never recomputed, so construction time is charged to the cell. If construction crossed
+to run *before* the clock was armed, so no limit applied to them. The cell's **absolute
+deadline is fixed before construction**, construction runs under it, and each op `build_ops`
+produced gets its own deadline from that same stamp, less the construction time
+(`variant_deadline`, `main.rs:1014`; `Budget`, `main.rs:1006`): every variant pays the construction,
+and no variant spends the budget of the ones after it. If construction crossed
 the limit, **every** op it produced is cut without running, including the second variant of `lu`,
 `cholesky`, `solve`, `svd_*` and `eigh`: those ops stand on reference math that gave up part-way
 (a Cholesky input of `(n+1)I` instead of `M M^H + (n+1)I` factorizes and checks fine, so nothing
@@ -158,8 +159,10 @@ at all, so the run directory could not distinguish "not measured" from "hung".
   `CELL done … <status> total_ms=…`), never to stdout, which the recorder parses for `MISMATCH` and
   `all comparisons within tolerance`. `CELL start` is printed **before** the reference construction,
   so a construction stall is a cell that started and has not finished, not a silence.
-* A cut cell is a row with the existing `status = timeout` column; no column was added, so every
-  existing reader keeps working.
+* A cut cell is a row with the existing `status = timeout` value; no column was added for the cut,
+  so a reader that predates it keeps working. The separate timing change in this PR does append
+  `timed_ms` and `check_ms` to the CSV, so a reader that requires exactly 18 fields rejects the
+  20-field rows; none of the repository readings does.
 
 Evidence (`docs/reviews/20261109-cell-timeout-logs/`):
 
@@ -190,7 +193,7 @@ cargo test --locked           # test result: ok. 30 passed; 0 failed; 1 ignored
 
 `cargo-test.log` holds the second. CI's `harness` job (#60) runs `cargo check -p fbench --locked`
 and `cargo test -p fbench --bins --locked` against the committed lock, so the test result is a
-green check on the PR, not a claim about a local run.
+local run; the merge gate is the `harness` job being green on this PR head.
 
 The timing probe is `#[ignore]`d so it never slows the suite:
 `cargo test --release --locked reference_math_cost -- --ignored --nocapture`.
