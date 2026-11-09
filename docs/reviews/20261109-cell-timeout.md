@@ -288,6 +288,23 @@ Acceptance measured for the ruling (`docs/reviews/20261109-cell-timeout-logs/`):
    failed (not exit 0).
 4. `cargo test --all --locked`: 39 unit passed (1 ignored) + 15 child-process tests passed.
 
+### 6巡目: the two review findings, fixed inside that scope
+
+1. **A broken `RESULT` index must not kill the parent.** `18446744073709551615` parses as a
+   `usize`, so the "wrong variant" error message computed `index + 1` and aborted the parent in
+   debug builds: exit 101, no CSV rows, no reason. The index is now range-checked where it is
+   parsed, once, and an out-of-range index is a protocol error like any other.
+2. **Output after the last result was read and discarded.** The receive loop ended as soon as
+   `next == n`, so a child that reported its last result and then printed anything else was
+   recorded `ok`. The parent now reads the child out (bounded by `REAP_GRACE`) before reaping, and
+   any extra line fails the held last row -- the same root as acceptance item 3.
+
+Red → green, both against a fake child: `huge_index` (old: `panicked at main.rs:1352: attempt to
+add with overflow`, exit 101; new: exit 1, rows `failed,ok`) and `garbage_after_last` (old: exit 0
+with three `ok` rows; new: exit 1, rows `ok,ok,failed`). `cargo test --locked` is now
+39 unit passed (1 ignored) + 17 child-process tests. Neither fix extends what the PR closes: the
+three follow-up items above are unchanged.
+
 ## What this does not change
 
 * The measurement: the timed *call*, priming, repetition count, statistic, thread budget, and the
@@ -309,7 +326,7 @@ Acceptance measured for the ruling (`docs/reviews/20261109-cell-timeout-logs/`):
 
 ```
 cargo build --locked          # Finished, 0 errors
-cargo test --locked           # 39 unit passed (1 ignored) + 15 child-process tests passed
+cargo test --locked           # 39 unit passed (1 ignored) + 17 child-process tests passed
 ```
 
 `cargo-test.log` holds the second. CI's `harness` job (#60) runs `cargo check -p fbench --locked`

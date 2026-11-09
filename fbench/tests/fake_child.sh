@@ -29,6 +29,16 @@ if [ "$mode" = "late_skip" ] && [ "$from" -eq 0 ]; then
     printf 'SKIP\tlate skip\n'
     exit 0
 fi
+if [ "$mode" = "garbage_after_last" ] && [ "$from" -eq 0 ]; then
+    # Every variant's result, then a line that is not part of the protocol at all.
+    i=0
+    while [ "$i" -lt "$n" ]; do
+        printf 'RESULT\t%s\tok\t\t1.0\t2.0\t1.0\n' "$i"
+        i=$((i + 1))
+    done
+    printf 'garbage\n'
+    exit 0
+fi
 while [ "$i" -lt "$n" ]; do
     if [ "$i" -eq "$at" ]; then
         case "$mode" in
@@ -50,6 +60,13 @@ while [ "$i" -lt "$n" ]; do
                 if [ "$from" -eq 0 ]; then
                     printf 'RESULT\t999\tok\t\t1\t2\t1\n'
                     exec sleep 300
+                fi ;;
+            huge_index)
+                # An index a `usize` holds but this build cannot: the parent must not do arithmetic
+                # on it (it used to overflow while formatting the error message and panic).
+                if [ "$from" -eq 0 ]; then
+                    printf 'RESULT\t18446744073709551615\tok\t\t1\t2\t1\n'
+                    exit 0
                 fi ;;
             bad_numbers)
                 if [ "$from" -eq 0 ]; then

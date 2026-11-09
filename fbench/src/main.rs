@@ -830,12 +830,19 @@ fn parse_number(field: &str, name: &str) -> Result<Option<f64>, String> {
     Ok(Some(value))
 }
 
-fn parse_result(fields: &[&str]) -> Result<(usize, ChildResult), String> {
-    let index: usize = fields
-        .get(1)
-        .ok_or("RESULT without an index")?
+/// The index is the caller's variant number, so it is checked here, once, right after it is parsed:
+/// an index a `usize` can hold but this build cannot (`18446744073709551615` from a broken child)
+/// must be a failed row, not an arithmetic overflow in the caller's error message.
+fn parse_result(fields: &[&str], n: usize) -> Result<(usize, ChildResult), String> {
+    let index_text = fields.get(1).ok_or("RESULT without an index")?;
+    let index: usize = index_text
         .parse()
         .map_err(|e| format!("RESULT index: {e}"))?;
+    if index >= n {
+        return Err(format!(
+            "RESULT index {index_text} is out of range; this build has {n} variant(s)"
+        ));
+    }
     let status = match *fields.get(2).ok_or("RESULT without a status")? {
         "ok" => "ok",
         "timeout" => "timeout",
@@ -1345,7 +1352,7 @@ fn run_build_in_child(
                         continue;
                     }
                     Some("RESULT") => {
-                        let parsed = parse_result(&fields).and_then(|(result_index, result)| {
+                        let parsed = parse_result(&fields, n).and_then(|(result_index, result)| {
                             if result_index != next {
                                 return Err(format!(
                                     "the cell child reported variant {} while {} was running",
@@ -1485,34 +1492,70 @@ fn run_build_in_child(
     }
 
     if let Some(handle) = current {
-        // Every variant has a result; the child has nothing left to say. Reap it (kill if it is
-        // still running) and only then settle the held last row.
+        // Every variant has a result, but the child may still be talking: read it out to the end
+        // (bounded) before reaping. Finishing with `next == n` used to end the loop here, so a
+        // child that reported its last result and then printed anything else was accepted as `ok`.
+        let drain_deadline = Instant::now() + REAP_GRACE;
+        let mut extra: Option<(usize, String)> = None;
+        while let Wake::Line(line) = wait_line(&handle.rx, Some(drain_deadline)) {
+            match &mut extra {
+                Some((count, _)) => *count += 1,
+                None => extra = Some((1, line)),
+            }
+        }
+        // The child has nothing left to say (or the bound passed). Reap it (kill if it is still
+        // running) and only then settle the held last row.
         let reaped = reap_child(handle.child);
         drop(handle.reader);
         if let Some(cell) = pending_final.take() {
-            let cell = match &reaped {
-                Reaped::Exited(status) if !status.success() => Cell {
-                    status: "failed",
-                    note: format!(
-                        "the cell child exited with {status} after reporting its last result"
-                    ),
-                    samples: Vec::new(),
-                    timed_ms: None,
-                    check_ms: None,
-                },
-                Reaped::TimedOut { .. } => {
+            let cell = match &extra {
+                Some((count, first)) => {
                     heartbeat(
-                        "final-reap",
+                        "extra-output",
                         row,
                         family,
                         dtype,
                         order,
                         case,
-                        format!(" id={id} variant={}/{n} status={}", n, reaped.text()),
+                        format!(
+                            " id={id} variant={n}/{n} lines={count} first={first:?} status={}",
+                            reaped.text()
+                        ),
                     );
-                    cell
+                    Cell {
+                        status: "failed",
+                        note: format!(
+                            "the cell child reported {count} extra line(s) after its last result, starting with {first:?}"
+                        ),
+                        samples: Vec::new(),
+                        timed_ms: None,
+                        check_ms: None,
+                    }
                 }
-                _ => cell,
+                None => match &reaped {
+                    Reaped::Exited(status) if !status.success() => Cell {
+                        status: "failed",
+                        note: format!(
+                            "the cell child exited with {status} after reporting its last result"
+                        ),
+                        samples: Vec::new(),
+                        timed_ms: None,
+                        check_ms: None,
+                    },
+                    Reaped::TimedOut { .. } => {
+                        heartbeat(
+                            "final-reap",
+                            row,
+                            family,
+                            dtype,
+                            order,
+                            case,
+                            format!(" id={id} variant={}/{n} status={}", n, reaped.text()),
+                        );
+                        cell
+                    }
+                    _ => cell,
+                },
             };
             finish(csv, cell, n - 1);
         }

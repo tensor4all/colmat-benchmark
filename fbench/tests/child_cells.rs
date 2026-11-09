@@ -520,6 +520,38 @@ fn a_malformed_result_closes_the_variant_and_reaps_the_child() {
     );
 }
 
+/// An index a `usize` can hold but this build cannot is a failed row, not a panic: the parent used
+/// to abort while formatting "variant 18446744073709551615 while 1 was running", which left no row
+/// and no reason. The index is checked where it is parsed, once.
+#[test]
+fn an_index_beyond_the_variants_is_a_failed_row_not_a_panic() {
+    let (stderr, csv, code) = run_fake("huge-index", "huge_index", 0, 2);
+    assert_eq!(
+        code, 1,
+        "a protocol error is a failed run, not a crash: {stderr}"
+    );
+    assert!(
+        !stderr.contains("panicked"),
+        "the parent must not panic on a broken index: {stderr}"
+    );
+    let rows: Vec<&str> = csv.lines().skip(1).collect();
+    assert_eq!(rows.len(), 4, "two orders x two variants: {csv}");
+    for (build, chunk) in rows.chunks(2).enumerate() {
+        let statuses: Vec<&str> = chunk
+            .iter()
+            .map(|row| row.split(',').nth(12).unwrap_or("?"))
+            .collect();
+        assert_eq!(
+            statuses,
+            ["failed", "ok"],
+            "build {build}: the out-of-range index is a failed cell: {csv}"
+        );
+    }
+    assert_eq!(count_lines(&stderr, "CELL start"), 4, "{stderr}");
+    assert_eq!(count_lines(&stderr, "CELL done"), 4, "{stderr}");
+    assert!(stderr.contains("out of range"), "{stderr}");
+}
+
 /// A child that reports its last result and then exits non-zero must not leave an `ok` run.
 #[test]
 fn a_crash_after_the_last_result_is_a_failed_row() {
@@ -533,6 +565,33 @@ fn a_crash_after_the_last_result_is_a_failed_row() {
     }
     assert_eq!(count_lines(&stderr, "CELL start"), 2, "{stderr}");
     assert_eq!(count_lines(&stderr, "CELL done"), 2, "{stderr}");
+}
+
+/// The child is read to the end after its last result, so extra output there is not silently
+/// accepted: the last row is only `ok` if the child said nothing more.
+#[test]
+fn output_after_the_last_result_is_a_failed_row() {
+    let (stderr, csv, code) = run_fake("garbage-after-last", "garbage_after_last", 0, 3);
+    assert_eq!(
+        code, 1,
+        "extra output after the last result is a failed run: {stderr}"
+    );
+    let rows: Vec<&str> = csv.lines().skip(1).collect();
+    assert_eq!(rows.len(), 6, "two orders x three variants: {csv}");
+    for (build, chunk) in rows.chunks(3).enumerate() {
+        let statuses: Vec<&str> = chunk
+            .iter()
+            .map(|row| row.split(',').nth(12).unwrap_or("?"))
+            .collect();
+        assert_eq!(
+            statuses,
+            ["ok", "ok", "failed"],
+            "build {build}: the extra line after the last result fails it: {csv}"
+        );
+    }
+    assert_eq!(count_lines(&stderr, "CELL start"), 6, "{stderr}");
+    assert_eq!(count_lines(&stderr, "CELL done"), 6, "{stderr}");
+    assert!(stderr.contains("extra-output"), "{stderr}");
 }
 
 /// Garbage/NaN timings and samples are not an accepted measurement.
