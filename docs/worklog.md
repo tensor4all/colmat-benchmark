@@ -2,6 +2,64 @@
 
 Decisions, fixed failures and open items for this campaign. Newest first.
 
+## 2026-11-07 — the joined page joins one protocol, and prints what it divides by (#54 review)
+
+`gen_comparison.py` refused two arms from different hosts and nothing else, so two arms recorded
+under different timing policies (one best-of call with no priming on CPUs 0-7, against 5 calls, a
+median and 250 ms priming on CPUs 8-15) were joined into one table that printed **one** protocol —
+the MKL arm's — above it. `require_one_host` became `require_one_protocol`: it compares the host
+block, `timing_policy` (version, repetitions, statistic, priming), the **idle guard** (`guards`:
+window, busy ceiling, attempts, and `sibling_aware` — a run that accepted a 100%-busy machine, or let
+a measured core's SMT sibling stay busy, is not a quiet run's peer), the measured CPU sets per thread
+budget and the observer's affinity, `host.power` (boost on and off are incomparable), the revisions of
+library, upstream, harness and toolkit, and the dtype each arm was asked for, `skipped` rows
+included. Every differing field is printed with both values, and nothing is written.
+
+A thread budget is evidence about the CPUs it ran on, so both halves of that check follow the budget
+**the arm actually measured** (its cells and its `skipped` rows): an entry for an unrelated 1-thread
+budget used to excuse an 8-thread cell with no recorded CPU set at all, and a leftover 1-thread entry
+the two arms disagree on used to refuse a join over CPUs neither of them measured a cell with.
+A thread budget (and a family) one arm was not asked for is a smaller grid, not a different protocol
+— that is what a partial run is — while a dtype disagreement is refused in both directions, because
+an f32 cell never joins its f64 cell and the dash would be read as "that arm had no driver for it".
+The check used to be one-directional: an arm asked for *more* thread budgets than the MKL arm was
+refused, though the same grid difference in the other direction was accepted.
+
+The arm's columns are labelled `MKL` and `OpenBLAS` while the row read for each arm comes from that
+arm's own manifest, so an arm handed to the wrong flag (`--openblas <an mkl run>`) is now refused
+instead of printed under the wrong heading; the two arms keep their own page as `AGENTS.md` requires.
+
+The page also used to print one `fork (ms)` column and divide `OpenBLAS/fork` by the fork the
+**OpenBLAS** arm measured, which was not the number printed: on the published 1356-cell page the two
+arms' fork values differ in 1327 cells (median gap 0.7%, worst 17.7%). The fork is now shown per arm
+(`fork MKL`, `fork OpenBLAS`) and every ratio divides by the value printed beside it, in its own arm.
+
+Two more counting fixes, and one statement that was missing:
+
+- the summary counted OpenBLAS cells by the `upstream/fork` ratio, so it claimed an OpenBLAS row for
+  every cell the MKL arm carried, and printed the upstream median as the OpenBLAS one: the published
+  page said `1356 cells ... OpenBLAS 1.956` where 972 cells carry an OpenBLAS row and their median is
+  `1.230`. Verified by regenerating that page from
+  `data/results/zen5-cpu/faer-kernels/20261031T224040Z-pub-71b25ffb-20261031-mkl` +
+  `20261101T031016Z-…-openblas`: every one of the 1356 rows keeps every value it had, and the
+  OpenBLAS row count and median are the corrected pair.
+- a cell asked for by at least one arm and measured by neither is now counted and named (`360 of
+  1716` cells on that page: the declared skips — `eig`, `upgrade_factor`, and non-square shapes of
+  `cholesky`, `eigh`, `solve`, `triangular_solve`), instead of being dropped from a page whose dash
+  rule only speaks about cells one arm did carry.
+- the page renders the statistic, repetitions, priming and guard from the manifest and states which
+  reduction it applied, instead of hardcoding v2 in the prose.
+
+Still open: the reduction over a run's process sets is still the last set (`last_set`), because an
+existing page is a record of what was published; the median-of-sets reduction is the right one for
+both arms and is its own change. `threads.cpu_sets` is compared as the recorded string, so two
+spellings of the same CPU set would be refused rather than recognised as equal.
+
+The AOCL arm this page was originally written for does not land: `--aocl`, the per-cell "faster of
+MKL and AOCL" reference and the harness's `link-aocl` build (AMD host gate, `libflame`/`libblis-mt`
+link line) are not in this branch, so the page is what it always was — the two arms of the recording
+— with the correctness fixes above.
+
 ## 2026-10-29 — the fork `lu` and `solve` rows ran sequentially under `fork-team` (#36)
 
 Since #35, the timed `lu` call ignored its token. `partial_lu_of` handed `lu_in_place` the result of
