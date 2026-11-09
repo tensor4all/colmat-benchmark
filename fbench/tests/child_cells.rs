@@ -667,6 +667,24 @@ fn an_unknown_line_before_a_result_is_a_failed_row() {
     assert!(stderr.contains("protocol-error"), "{stderr}");
 }
 
+/// A `RESULT` line has a fixed shape: seven tab-separated fields. A stray field is broken output
+/// (and it would otherwise carry `garbage` past both the number checks and the extra-output check,
+/// because it belongs to the same line), and so is a missing one.
+#[test]
+fn a_result_with_the_wrong_field_count_is_a_failed_row() {
+    for (name, mode) in [("extra-field", "extra_field"), ("short-result", "short_result")] {
+        let (stderr, csv, code) = run_fake(name, mode, 0, 1);
+        assert_eq!(code, 1, "{mode}: a malformed RESULT is a failed run: {stderr}");
+        let rows: Vec<&str> = csv.lines().skip(1).collect();
+        assert_eq!(rows.len(), 2, "{mode}: one row per order: {csv}");
+        for row in &rows {
+            let status = row.split(',').nth(12).unwrap_or("?");
+            assert_eq!(status, "failed", "{mode}: {row}");
+        }
+        assert!(stderr.contains("field(s)"), "{mode}: {stderr}");
+    }
+}
+
 /// A `SKIP` is not a licence to say anything else: output after it is broken output, so the row is
 /// `failed`, not `skipped`.
 #[test]

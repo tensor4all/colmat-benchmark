@@ -286,8 +286,8 @@ Acceptance measured for the ruling (`docs/reviews/20261109-cell-timeout-logs/`):
    **exactly one failed row** (the other order is `ok`).
 3. `acceptance-final-crash`: a fake child reports its last result and exits 3: run exit 1, rows
    failed (not exit 0).
-4. `cargo test --all --locked`: 39 unit passed (1 ignored) + 15 child-process tests passed (24 now;
-   the review fixes added 9).
+4. `cargo test --all --locked`: 39 unit passed (1 ignored) + 15 child-process tests passed (25 now;
+   the review fixes added 10).
 
 ### 6巡目: the review findings, fixed inside that scope
 
@@ -318,6 +318,12 @@ Acceptance measured for the ruling (`docs/reviews/20261109-cell-timeout-logs/`):
    saw the `SKIP`, so `SKIP` followed by `garbage` and a clean exit was recorded `skipped` -- the
    same gap as item 2, on the other settlement path. The branch now drains the child around its
    reap too and writes a `failed` row when anything followed the skip.
+5. **A `RESULT` line with the wrong number of fields was accepted.** `parse_result` read the fields
+   it knew (`get(1)`..`get(6)`) and ignored whatever else was on the line, so
+   `RESULT 0 ok "" 1 2 1 garbage` -- one field too many -- was an `ok` measurement: the stray text
+   travelled on the same line, past both the number checks and the extra-output check. The line's
+   shape is now checked where it is parsed (seven fields, the shape the child writes in one
+   `println!`), and a field more or fewer is broken output, hence a `failed` row.
 
 Red → green, both against a fake child: `huge_index` (old: `panicked at main.rs:1352: attempt to
 add with overflow`, exit 101; new: exit 1, rows `failed,ok`) and `garbage_after_last` (old: exit 0
@@ -327,8 +333,9 @@ the last row `failed`), and `bad_utf8_before_result` / `extra_cr_sample` / `bare
 reader regressions (all three were exit 0; now exit 1 with a `failed` row), and
 `garbage_before_result` for item 3 (old: `garbage` then a valid `RESULT` -> exit 0 and two `ok`
 rows; new: exit 1 with `failed,ok,ok`), and `garbage_after_skip` for item 4 (old: exit 0 with a
-`skipped` row; new: exit 1 with a `failed` row). `cargo test --locked` is now 39 unit passed
-(1 ignored) + 24 child-process tests. None of these extends what the PR closes: the three follow-up
+`skipped` row; new: exit 1 with a `failed` row), and `extra_field` / `short_result` for item 5 (old:
+exit 0 with `ok` rows; new: exit 1 with `failed` rows). `cargo test --locked` is now 39 unit passed
+(1 ignored) + 25 child-process tests. None of these extends what the PR closes: the three follow-up
 items above are unchanged.
 
 Two further review notes were checked and left alone, with the reason recorded here:
@@ -375,7 +382,7 @@ head, so the index says so per file rather than implying they measure the curren
 
 ```
 cargo build --locked          # Finished, 0 errors
-cargo test --locked           # 39 unit passed (1 ignored) + 24 child-process tests passed
+cargo test --locked           # 39 unit passed (1 ignored) + 25 child-process tests passed
 ```
 
 `cargo-test.log` holds the first command's run at `42a90be`, the historical 15-child-test version;

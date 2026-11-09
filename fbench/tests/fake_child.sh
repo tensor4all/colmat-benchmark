@@ -56,6 +56,16 @@ if [ "$mode" = "bad_utf8_before_result" ] && [ "$from" -eq 0 ]; then
     printf 'RESULT\t0\tok\t\t1.0\t2.0\t1.0\n'
     exit 0
 fi
+if [ "$mode" = "extra_field" ] && [ "$from" -eq 0 ]; then
+    # A well-shaped line with one field too many: the stray text belongs to the same line.
+    printf 'RESULT\t0\tok\t\t1.0\t2.0\t1.0\tgarbage\n'
+    exit 0
+fi
+if [ "$mode" = "short_result" ] && [ "$from" -eq 0 ]; then
+    # The same, one field short.
+    printf 'RESULT\t0\tok\t\t1.0\t2.0\n'
+    exit 0
+fi
 if [ "$mode" = "garbage_after_skip" ] && [ "$from" -eq 0 ]; then
     # A skip, then a line the protocol does not define, then a clean exit.
     printf 'SKIP\tfake skip\n'

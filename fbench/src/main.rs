@@ -817,6 +817,9 @@ struct ChildResult {
     samples: Vec<f64>,
 }
 
+/// How many tab-separated fields a `RESULT` line has: see the child's single `println!` for it.
+const RESULT_FIELDS: usize = 7;
+
 fn parse_number(field: &str, name: &str) -> Result<Option<f64>, String> {
     if field.is_empty() {
         return Ok(None);
@@ -834,6 +837,16 @@ fn parse_number(field: &str, name: &str) -> Result<Option<f64>, String> {
 /// an index a `usize` can hold but this build cannot (`18446744073709551615` from a broken child)
 /// must be a failed row, not an arithmetic overflow in the caller's error message.
 fn parse_result(fields: &[&str], n: usize) -> Result<(usize, ChildResult), String> {
+    // The line has a fixed shape, written by the child in one place:
+    // `RESULT<TAB>index<TAB>status<TAB>note<TAB>timed_ms<TAB>check_ms<TAB>samples`. A field more or
+    // fewer is broken output: an extra one would carry arbitrary text past both the number checks
+    // and the extra-output check, because it belongs to this line.
+    if fields.len() != RESULT_FIELDS {
+        return Err(format!(
+            "RESULT has {} field(s), expected {RESULT_FIELDS}",
+            fields.len()
+        ));
+    }
     let index_text = fields.get(1).ok_or("RESULT without an index")?;
     let index: usize = index_text
         .parse()
