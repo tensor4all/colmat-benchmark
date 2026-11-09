@@ -48,10 +48,24 @@ fn count_lines(text: &str, prefix: &str) -> usize {
     text.lines().filter(|line| line.starts_with(prefix)).count()
 }
 
-fn run_fake(name: &str, mode: &str, at: usize, n: usize) -> (String, String, i32) {
+/// Run the parent with a fake child under a wall deadline. Every wait inside the parent is
+/// bounded; this is the outer bound for the test itself, so a regression that removes the parent's
+/// deadline fails instead of hanging in `sleep 300`.
+fn run_fake_with_deadline(
+    name: &str,
+    mode: &str,
+    at: usize,
+    n: usize,
+    seconds: u64,
+) -> (Option<i32>, String, String) {
+    use std::os::unix::process::CommandExt;
+    use std::process::Stdio;
     let csv = csv_path(name);
+    let err_path = std::env::temp_dir().join(format!("fbench-{}-{name}.err", std::process::id()));
+    let err_file = std::fs::File::create(&err_path).unwrap();
     let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_child.sh");
-    let output = Command::new(env!("CARGO_BIN_EXE_fbench"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_fbench"));
+    command
         .args([
             "run", "--threads", "1", "--n", "8", "--family", "gemm", "--dtype", "f64",
             "--rows", "faer-fork", "--reps", "1", "--prime-ms", "0", "--cell-timeout", "1",
@@ -63,12 +77,45 @@ fn run_fake(name: &str, mode: &str, at: usize, n: usize) -> (String, String, i32
         .env("FAKE_MODE", mode)
         .env("FAKE_AT", at.to_string())
         .env("FAKE_N", n.to_string())
-        .output()
-        .expect("run fbench with the fake child");
-    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-    let csv_text = std::fs::read_to_string(&csv).unwrap_or_default();
-    std::fs::remove_file(&csv).ok();
-    (stderr, csv_text, output.status.code().unwrap_or(-1))
+        .stdout(Stdio::null())
+        .stderr(Stdio::from(err_file))
+        .process_group(0);
+    let mut child = command.spawn().expect("spawn fbench");
+    let pid = child.id();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(seconds);
+    loop {
+        if let Some(status) = child.try_wait().expect("try_wait") {
+            let stderr = std::fs::read_to_string(&err_path).unwrap_or_default();
+            let csv_text = std::fs::read_to_string(&csv).unwrap_or_default();
+            std::fs::remove_file(&csv).ok();
+            std::fs::remove_file(&err_path).ok();
+            return (status.code(), stderr, csv_text);
+        }
+        if std::time::Instant::now() >= deadline {
+            // The parent is in its own process group; kill the group so the fake child cannot
+            // outlive the test.
+            let _ = Command::new("kill")
+                .args(["-KILL", &format!("-{pid}")])
+                .status();
+            let _ = child.kill();
+            let _ = child.wait();
+            let stderr = std::fs::read_to_string(&err_path).unwrap_or_default();
+            let csv_text = std::fs::read_to_string(&csv).unwrap_or_default();
+            std::fs::remove_file(&csv).ok();
+            std::fs::remove_file(&err_path).ok();
+            return (None, stderr, csv_text);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
+fn run_fake(name: &str, mode: &str, at: usize, n: usize) -> (String, String, i32) {
+    let (code, stderr, csv) = run_fake_with_deadline(name, mode, at, n, 10);
+    (
+        stderr,
+        csv,
+        code.expect("the fake-child run must finish within the test's 10 s deadline"),
+    )
 }
 
 /// The first variant of a build is hard-killed by the parent, deterministically: the fake child
@@ -186,31 +233,17 @@ fn every_cell_event_leaves_exactly_one_terminal_row() {
         "the event table changed: update docs/reviews/20261110-cell-timeout-invariant.md and this test"
     );
 
-    let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_child.sh");
     for (event, at, expected) in cases {
         assert!(
             matches!(event.as_str(), "fast" | "cut" | "hang" | "error" | "skip"),
             "the event table has an event this test does not implement: {event}"
         );
         let name = format!("table-{event}-{at}");
-        let csv = csv_path(&name);
-        let output = Command::new(env!("CARGO_BIN_EXE_fbench"))
-            .args([
-                "run", "--threads", "1", "--n", "8", "--family", "gemm", "--dtype", "f64",
-                "--rows", "faer-fork", "--reps", "1", "--prime-ms", "0", "--cell-timeout", "1",
-                "--csv",
-            ])
-            .arg(&csv)
-            .env("FBENCH_CELL_CHILD", script)
-            .env("FBENCH_TEST_VARIANTS", "3")
-            .env("FAKE_MODE", &event)
-            .env("FAKE_AT", at.to_string())
-            .env("FAKE_N", "3")
-            .output()
-            .expect("run fbench with the fake child");
-        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-        let body = std::fs::read_to_string(&csv).unwrap_or_default();
-        std::fs::remove_file(&csv).ok();
+        let (code, stderr, body) = run_fake_with_deadline(&name, &event, at, 3, 10);
+        assert!(
+            code.is_some(),
+            "{name}: the parent did not finish within the test's 10 s deadline: {stderr}"
+        );
 
         let mut starts: BTreeMap<String, Vec<usize>> = BTreeMap::new();
         let mut dones: BTreeMap<String, Vec<(usize, String)>> = BTreeMap::new();
@@ -341,59 +374,9 @@ fn the_child_exits_when_the_given_parent_is_not_its_parent() {
     );
 }
 
-fn run_with_deadline(name: &str, seconds: u64) -> (Option<i32>, String) {
-    use std::os::unix::process::CommandExt;
-    use std::process::Stdio;
-    let csv = csv_path(name);
-    let err_path = std::env::temp_dir().join(format!("fbench-{}-{name}.err", std::process::id()));
-    let err_file = std::fs::File::create(&err_path).unwrap();
-    let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_child.sh");
-    let mut command = Command::new(env!("CARGO_BIN_EXE_fbench"));
-    command
-        .args([
-            "run", "--threads", "1", "--n", "8", "--family", "gemm", "--dtype", "f64",
-            "--rows", "faer-fork", "--reps", "1", "--prime-ms", "0", "--cell-timeout", "1",
-            "--csv",
-        ])
-        .arg(&csv)
-        .env("FBENCH_CELL_CHILD", script)
-        .env("FBENCH_TEST_VARIANTS", "3")
-        .env("FAKE_MODE", "hang_after")
-        .env("FAKE_N", "3")
-        .stdout(Stdio::null())
-        .stderr(Stdio::from(err_file))
-        .process_group(0);
-    let mut child = command.spawn().expect("spawn fbench");
-    let pid = child.id();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(seconds);
-    loop {
-        if let Some(status) = child.try_wait().expect("try_wait") {
-            let err = std::fs::read_to_string(&err_path).unwrap_or_default();
-            std::fs::remove_file(&csv).ok();
-            std::fs::remove_file(&err_path).ok();
-            return (status.code(), err);
-        }
-        if std::time::Instant::now() >= deadline {
-            let _ = Command::new("kill")
-                .args(["-KILL", &format!("-{pid}")])
-                .status();
-            let _ = child.kill();
-            let _ = child.wait();
-            let err = std::fs::read_to_string(&err_path).unwrap_or_default();
-            std::fs::remove_file(&csv).ok();
-            std::fs::remove_file(&err_path).ok();
-            return (None, err);
-        }
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    }
-}
-
-/// A child that never exits after reporting its last result must not hold the run: the parent
-/// reaps it instead of waiting without a bound. Without that, this run hangs and the test's own
-/// deadline (`None`) fires.
 #[test]
 fn a_child_that_hangs_after_its_last_result_does_not_stall_the_run() {
-    let (code, stderr) = run_with_deadline("hang-after", 10);
+    let (code, stderr, _csv) = run_fake_with_deadline("hang-after", "hang_after", 0, 3, 10);
     assert_eq!(
         code,
         Some(0),
@@ -401,4 +384,27 @@ fn a_child_that_hangs_after_its_last_result_does_not_stall_the_run() {
     );
     assert_eq!(count_lines(&stderr, "CELL start"), 6, "{stderr}");
     assert_eq!(count_lines(&stderr, "CELL done"), 6, "{stderr}");
+}
+
+/// An unsupported family is a `skip` in `verify`, not a wrong answer: the reporter reads
+/// `MISMATCH` from stdout, so a skipped route must not print it.
+#[test]
+fn verify_reports_an_unsupported_family_as_skip_not_mismatch() {
+    let output = Command::new(env!("CARGO_BIN_EXE_fbench"))
+        .args([
+            "verify", "--threads", "1", "--family", "eig", "--dtype", "f64", "--rows",
+            "faer-fork", "--n", "8",
+        ])
+        .output()
+        .expect("run fbench verify");
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    assert!(
+        stdout.contains("skip faer-fork eig"),
+        "the unsupported family must be a skip line: {stdout}"
+    );
+    assert!(
+        !stdout.contains("MISMATCH"),
+        "a skip must not print MISMATCH: {stdout}"
+    );
+    assert_eq!(output.status.code(), Some(0), "a skip is not a failure");
 }

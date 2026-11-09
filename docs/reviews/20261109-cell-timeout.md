@@ -105,6 +105,8 @@ Red, per item, with the fix removed (`docs/reviews/20261109-cell-timeout-logs/`)
 | `red-1g-done-keys-old-test.log` | the same mutation with the key-set assert removed (the old test) | it **passed**, which is the gap the assert closes |
 | `red-2h-fast-cell.log` | the old first-variant kill test with a cell that finishes under 1 s | it FAILED: the old test depended on the host being slow |
 | `red-3h-no-hard-kill.log` | the fake `hang` made to report a cooperative timeout instead of sleeping | the hard-kill test FAILED: no `CELL kill`, no pid |
+| `red-1i-verify-skip.log` | a skipped family is printed as `MISMATCH` | `verify_reports_an_unsupported_family_as_skip_not_mismatch` FAILED |
+| `red-2i-no-parent-deadline.log` | the parent does not arm a deadline (the test's 10 s bound fires) | the hard-kill test FAILED instead of hanging |
 
 Green: `cargo test --locked` → `test result: ok. 37 passed; 0 failed; 1 ignored` (unit) and
 `test result: ok. 5 passed` (`fbench/tests/child_cells.rs`: first-variant hard kill with the fake
@@ -254,12 +256,13 @@ Evidence (`docs/reviews/20261109-cell-timeout-logs/`):
 
 ```
 cargo build --locked          # Finished, 0 errors
-cargo test --locked           # 37 unit passed (1 ignored) + 2 child-process tests passed
+cargo test --locked           # 37 unit passed (1 ignored) + 6 child-process tests passed
 ```
 
 `cargo-test.log` holds the second. CI's `harness` job (#60) runs `cargo check -p fbench --locked`
-and `cargo test -p fbench --bins --locked` against the committed lock, so the test result is a
-local run; the merge gate is the `harness` job being green on this PR head.
+and `cargo test -p fbench --locked` against the committed lock (no `--bins`, so
+`fbench/tests/child_cells.rs` runs too), so the test result is a local run; the merge gate is the
+`harness` job being green on this PR head.
 
 The timing probe is `#[ignore]`d so it never slows the suite:
 `cargo test --release --locked reference_math_cost -- --ignored --nocapture`.

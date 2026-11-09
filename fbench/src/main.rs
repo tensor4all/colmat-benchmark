@@ -1054,6 +1054,8 @@ fn run_build_in_child(
             match cell.status {
                 "ok" => println!("ok {label} {}", cell.note),
                 "timeout" => println!("TIMEOUT {label} {}", cell.note),
+                // A provider that cannot take the family is a skip, not a wrong answer.
+                "skipped" => println!("skip {label} {}", cell.note),
                 _ => println!("MISMATCH {label} {}", cell.note),
             }
         }
