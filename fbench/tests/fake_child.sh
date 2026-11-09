@@ -20,6 +20,15 @@ if [ "$mode" = "skip_exit3" ]; then
     printf 'SKIP\tfake skip\n'
     exit 3
 fi
+if [ "$mode" = "count_flood" ]; then
+    # `yes` keeps the pipe full, so the old parent's recv always had a queued message to return.
+    exec yes 'COUNT	1'
+fi
+if [ "$mode" = "late_skip" ] && [ "$from" -eq 0 ]; then
+    printf 'RESULT\t0\tok\t\t1\t2\t1\n'
+    printf 'SKIP\tlate skip\n'
+    exit 0
+fi
 while [ "$i" -lt "$n" ]; do
     if [ "$i" -eq "$at" ]; then
         case "$mode" in

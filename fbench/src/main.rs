@@ -1048,6 +1048,13 @@ enum Wake {
 
 fn wait_line(rx: &std::sync::mpsc::Receiver<String>, deadline: Option<Instant>) -> Wake {
     use std::sync::mpsc::RecvTimeoutError;
+    // `recv_timeout` returns an already-queued message before its deadline, so a child that floods
+    // COUNT lines would never reach the timeout branch. Check the clock before receiving.
+    if let Some(deadline) = deadline {
+        if Instant::now() >= deadline {
+            return Wake::Timeout;
+        }
+    }
     match deadline {
         Some(deadline) => {
             let remaining = deadline.saturating_duration_since(Instant::now());
@@ -1251,38 +1258,91 @@ fn run_build_in_child(
                     }
                     Some("SKIP") => {
                         let note = fields.get(1).unwrap_or(&"").to_string();
-                        // A skip is only a skip if the child then exits successfully. Hold the row
-                        // until the reap is known; a crash after SKIP is a failed cell.
                         let reaped = reap_child(handle.child);
                         drop(handle.reader);
-                        if reaped.success() {
-                            finish(csv, Cell::skipped(note), 0);
-                        } else {
-                            let status = reaped.text();
-                            heartbeat(
-                                "skip-failed",
-                                row,
-                                family,
-                                dtype,
-                                order,
-                                case,
-                                format!(" id={id} variant=1/{n} status={status}"),
-                            );
-                            finish(
-                                csv,
-                                Cell {
-                                    status: "failed",
-                                    note: format!(
-                                        "the cell child reported a skip and then exited with {status}: {note}"
-                                    ),
-                                    samples: Vec::new(),
-                                    timed_ms: None,
-                                    check_ms: None,
-                                },
-                                0,
-                            );
+                        current = None;
+                        if !completed_in_child {
+                            // A genuine build-level skip: settle it only after the reap.
+                            if reaped.success() {
+                                finish(csv, Cell::skipped(note), 0);
+                            } else {
+                                let status = reaped.text();
+                                heartbeat(
+                                    "skip-failed",
+                                    row,
+                                    family,
+                                    dtype,
+                                    order,
+                                    case,
+                                    format!(" id={id} variant=1/{n} status={status}"),
+                                );
+                                finish(
+                                    csv,
+                                    Cell {
+                                        status: "failed",
+                                        note: format!(
+                                            "the cell child reported a skip and then exited with {status}: {note}"
+                                        ),
+                                        samples: Vec::new(),
+                                        timed_ms: None,
+                                        check_ms: None,
+                                    },
+                                    0,
+                                );
+                            }
+                            return Ok(());
                         }
-                        return Ok(());
+                        if next >= n {
+                            // Every variant already reported; the late SKIP is extra output. Settle
+                            // the held last row by the exit status and stop.
+                            if let Some(cell) = pending_final.take() {
+                                let cell = match &reaped {
+                                    Reaped::Exited(status) if !status.success() => Cell {
+                                        status: "failed",
+                                        note: format!(
+                                            "the cell child exited with {status} after reporting its last result"
+                                        ),
+                                        samples: Vec::new(),
+                                        timed_ms: None,
+                                        check_ms: None,
+                                    },
+                                    _ => cell,
+                                };
+                                finish(csv, cell, n - 1);
+                            }
+                            return Ok(());
+                        }
+                        // A SKIP after a result is a protocol error for the pending variant; a
+                        // replacement child (from=) runs the rest.
+                        let status = reaped.text();
+                        heartbeat(
+                            "late-skip",
+                            row,
+                            family,
+                            dtype,
+                            order,
+                            case,
+                            format!(
+                                " id={id} variant={}/{n} status={status} note={note}",
+                                next + 1
+                            ),
+                        );
+                        finish(
+                            csv,
+                            Cell {
+                                status: "failed",
+                                note: format!("the cell child sent SKIP after a result: {note}"),
+                                samples: Vec::new(),
+                                timed_ms: None,
+                                check_ms: None,
+                            },
+                            next,
+                        );
+                        next += 1;
+                        if next < n {
+                            start(next);
+                        }
+                        continue;
                     }
                     Some("RESULT") => {
                         let parsed = parse_result(&fields).and_then(|(result_index, result)| {

@@ -579,3 +579,56 @@ fn a_skip_followed_by_a_crash_is_a_failed_row() {
     assert_eq!(count_lines(&stderr, "CELL done"), 2, "{stderr}");
     assert!(stderr.contains("skip-failed"), "{stderr}");
 }
+
+/// A child that floods COUNT lines without a result must still be killed at the variant deadline:
+/// `recv_timeout` returns queued messages before its deadline, so the clock is checked first.
+#[test]
+fn a_count_flood_does_not_escape_the_deadline() {
+    let (stderr, csv, code) = run_fake("count-flood", "count_flood", 0, 1);
+    assert_eq!(code, 1, "the deadline cuts the flooding child: {stderr}");
+    let rows: Vec<&str> = csv.lines().skip(1).collect();
+    assert_eq!(rows.len(), 2, "one cut row per order: {csv}");
+    for row in &rows {
+        assert!(row.contains(",timeout,"), "{row}");
+    }
+    assert_eq!(count_lines(&stderr, "CELL start"), 2, "{stderr}");
+    assert_eq!(count_lines(&stderr, "CELL done"), 2, "{stderr}");
+    assert!(
+        count_lines(&stderr, "CELL kill") >= 2,
+        "the flooding child is killed: {stderr}"
+    );
+}
+
+/// A SKIP that arrives after a result is a protocol error for the pending variant; it must not
+/// finish variant 1 a second time or drop the remaining variants.
+#[test]
+fn a_late_skip_is_a_failed_cell_and_the_rest_run() {
+    let (stderr, csv, code) = run_fake("late-skip", "late_skip", 0, 3);
+    assert_eq!(code, 1, "a late SKIP is a failed run: {stderr}");
+    let rows: Vec<&str> = csv.lines().skip(1).collect();
+    assert_eq!(rows.len(), 6, "two orders x three variants: {csv}");
+    for (build, chunk) in rows.chunks(3).enumerate() {
+        let statuses: Vec<&str> = chunk
+            .iter()
+            .map(|row| row.split(',').nth(12).unwrap_or("?"))
+            .collect();
+        assert_eq!(
+            statuses,
+            ["ok", "failed", "ok"],
+            "build {build}: the late SKIP fails variant 2 and variant 3 runs: {csv}"
+        );
+    }
+    for id in ["id=1", "id=2"] {
+        let starts: Vec<&str> = stderr
+            .lines()
+            .filter(|l| l.starts_with("CELL start") && l.contains(id))
+            .collect();
+        assert_eq!(starts.len(), 3, "{id}: one start per variant: {stderr}");
+        assert!(
+            starts.iter().any(|l| l.contains("variant=3/3")),
+            "{id}: variant 3 must start: {stderr}"
+        );
+    }
+    assert_eq!(count_lines(&stderr, "CELL start"), 6, "{stderr}");
+    assert_eq!(count_lines(&stderr, "CELL done"), 6, "{stderr}");
+}
