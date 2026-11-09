@@ -16,6 +16,10 @@ if [ "$mode" = "skip" ]; then
     printf 'SKIP\tfake skip\n'
     exit 0
 fi
+if [ "$mode" = "skip_exit3" ]; then
+    printf 'SKIP\tfake skip\n'
+    exit 3
+fi
 while [ "$i" -lt "$n" ]; do
     if [ "$i" -eq "$at" ]; then
         case "$mode" in

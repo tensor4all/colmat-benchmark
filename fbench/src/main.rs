@@ -1251,9 +1251,37 @@ fn run_build_in_child(
                     }
                     Some("SKIP") => {
                         let note = fields.get(1).unwrap_or(&"").to_string();
-                        finish(csv, Cell::skipped(note), 0);
-                        let _ = reap_child(handle.child);
+                        // A skip is only a skip if the child then exits successfully. Hold the row
+                        // until the reap is known; a crash after SKIP is a failed cell.
+                        let reaped = reap_child(handle.child);
                         drop(handle.reader);
+                        if reaped.success() {
+                            finish(csv, Cell::skipped(note), 0);
+                        } else {
+                            let status = reaped.text();
+                            heartbeat(
+                                "skip-failed",
+                                row,
+                                family,
+                                dtype,
+                                order,
+                                case,
+                                format!(" id={id} variant=1/{n} status={status}"),
+                            );
+                            finish(
+                                csv,
+                                Cell {
+                                    status: "failed",
+                                    note: format!(
+                                        "the cell child reported a skip and then exited with {status}: {note}"
+                                    ),
+                                    samples: Vec::new(),
+                                    timed_ms: None,
+                                    check_ms: None,
+                                },
+                                0,
+                            );
+                        }
                         return Ok(());
                     }
                     Some("RESULT") => {

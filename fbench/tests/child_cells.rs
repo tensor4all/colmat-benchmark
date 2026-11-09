@@ -540,7 +540,9 @@ fn a_crash_after_the_last_result_is_a_failed_row() {
 fn garbage_numbers_are_not_an_ok_row() {
     let (stderr, csv, code) = run_fake("bad-numbers", "bad_numbers", 0, 1);
     assert_eq!(code, 1, "a bad numeric result is a failed run: {stderr}");
-    for row in csv.lines().skip(1) {
+    let rows: Vec<&str> = csv.lines().skip(1).collect();
+    assert_eq!(rows.len(), 2, "one row per order, not a header-only CSV: {csv}");
+    for row in &rows {
         let status = row.split(',').nth(12).unwrap_or("?");
         assert_eq!(status, "failed", "{row}");
     }
@@ -552,9 +554,28 @@ fn garbage_numbers_are_not_an_ok_row() {
 fn a_short_sample_count_is_not_an_ok_row() {
     let (code, stderr, csv) = run_fake_with_options("short-samples", "short_samples", 0, 1, 3, 10);
     assert_eq!(code, Some(1), "a short sample set is a failed run: {stderr}");
-    for row in csv.lines().skip(1) {
+    let rows: Vec<&str> = csv.lines().skip(1).collect();
+    assert_eq!(rows.len(), 2, "one row per order, not a header-only CSV: {csv}");
+    for row in &rows {
         let status = row.split(',').nth(12).unwrap_or("?");
         assert_eq!(status, "failed", "{row}");
     }
     assert!(stderr.contains("expected 3"), "{stderr}");
+}
+
+/// A skip is only a skip if the child exits successfully. SKIP followed by exit 3 is a failed cell,
+/// not a successful skipped row.
+#[test]
+fn a_skip_followed_by_a_crash_is_a_failed_row() {
+    let (stderr, csv, code) = run_fake("skip-exit3", "skip_exit3", 0, 1);
+    assert_eq!(code, 1, "a skip that crashes is a failed run: {stderr}");
+    let rows: Vec<&str> = csv.lines().skip(1).collect();
+    assert_eq!(rows.len(), 2, "one row per order: {csv}");
+    for row in &rows {
+        let status = row.split(',').nth(12).unwrap_or("?");
+        assert_eq!(status, "failed", "{row}");
+    }
+    assert_eq!(count_lines(&stderr, "CELL start"), 2, "{stderr}");
+    assert_eq!(count_lines(&stderr, "CELL done"), 2, "{stderr}");
+    assert!(stderr.contains("skip-failed"), "{stderr}");
 }
