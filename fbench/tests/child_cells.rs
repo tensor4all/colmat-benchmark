@@ -58,6 +58,7 @@ fn run_fake_with_options(
     n: usize,
     reps: usize,
     seconds: u64,
+    extra: &[&str],
 ) -> (Option<i32>, String, String) {
     use std::os::unix::process::CommandExt;
     use std::process::Stdio;
@@ -78,6 +79,7 @@ fn run_fake_with_options(
         .env("FAKE_MODE", mode)
         .env("FAKE_AT", at.to_string())
         .env("FAKE_N", n.to_string())
+        .args(extra)
         .stdout(Stdio::null())
         .stderr(Stdio::from(err_file))
         .process_group(0);
@@ -126,7 +128,7 @@ fn run_fake_with_deadline(
     n: usize,
     seconds: u64,
 ) -> (Option<i32>, String, String) {
-    run_fake_with_options(name, mode, at, n, 1, seconds)
+    run_fake_with_options(name, mode, at, n, 1, seconds, &[])
 }
 
 fn run_fake(name: &str, mode: &str, at: usize, n: usize) -> (String, String, i32) {
@@ -667,6 +669,57 @@ fn an_unknown_line_before_a_result_is_a_failed_row() {
     assert!(stderr.contains("protocol-error"), "{stderr}");
 }
 
+/// An `ok` row is only a measurement if the numbers it *derives* are numbers too. Every field of the
+/// result is finite, but `per_item_us` scales it by 1000 and the median averages two samples, so
+/// finite samples can still overflow to `inf` -- which then reached the CSV on an `ok` row.
+#[test]
+fn a_sample_that_overflows_the_derived_measurement_is_a_failed_row() {
+    // `best` keeps the sample itself and overflows at the scale; `median` overflows in the summary.
+    for (name, mode, reps, extra, refused) in [
+        ("huge-sample", "huge_sample", 1, &[][..], "per_item_us"),
+        (
+            "huge-sample-median",
+            "huge_sample_pair",
+            2,
+            &["--statistic", "median"][..],
+            "total_ms",
+        ),
+    ] {
+        let (code, stderr, csv) = run_fake_with_options(name, mode, 0, 1, reps, 10, extra);
+        assert_eq!(code, Some(1), "{mode}: a non-finite measurement is a failed run: {stderr}");
+        let rows: Vec<&str> = csv.lines().skip(1).collect();
+        assert_eq!(rows.len(), 2, "{mode}: one row per order: {csv}");
+        for row in &rows {
+            let status = row.split(',').nth(12).unwrap_or("?");
+            assert_eq!(status, "failed", "{mode}: {row}");
+        }
+        // The note may name the value it rejected; the numeric columns may not carry one.
+        for row in &rows {
+            let fields: Vec<&str> = row.split(',').collect();
+            for (index, name) in [
+                (10, "total_ms"),
+                (11, "per_item_us"),
+                (14, "samples_ms"),
+                (18, "timed_ms"),
+                (19, "check_ms"),
+            ] {
+                let value = fields.get(index).copied().unwrap_or("");
+                assert!(
+                    !value.contains("inf") && !value.contains("NaN"),
+                    "{mode}: {name} is not a number: {row}"
+                );
+            }
+        }
+        // The row says which derived number it refused.
+        for row in &rows {
+            let note = row.split(',').nth(13).unwrap_or("");
+            assert!(note.contains("not finite"), "{mode}: {row}");
+            assert!(note.contains(refused), "{mode}: the note should name {refused}: {row}");
+        }
+        assert_eq!(count_lines(&stderr, "CELL done"), 2, "{mode}: {stderr}");
+    }
+}
+
 /// A `RESULT` line has a fixed shape: seven tab-separated fields. A stray field is broken output
 /// (and it would otherwise carry `garbage` past both the number checks and the extra-output check,
 /// because it belongs to the same line), and so is a missing one.
@@ -764,7 +817,8 @@ fn garbage_numbers_are_not_an_ok_row() {
 /// An `ok` result with fewer samples than repetitions is not accepted.
 #[test]
 fn a_short_sample_count_is_not_an_ok_row() {
-    let (code, stderr, csv) = run_fake_with_options("short-samples", "short_samples", 0, 1, 3, 10);
+    let (code, stderr, csv) =
+        run_fake_with_options("short-samples", "short_samples", 0, 1, 3, 10, &[]);
     assert_eq!(code, Some(1), "a short sample set is a failed run: {stderr}");
     let rows: Vec<&str> = csv.lines().skip(1).collect();
     assert_eq!(rows.len(), 2, "one row per order, not a header-only CSV: {csv}");

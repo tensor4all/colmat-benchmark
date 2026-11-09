@@ -56,6 +56,16 @@ if [ "$mode" = "bad_utf8_before_result" ] && [ "$from" -eq 0 ]; then
     printf 'RESULT\t0\tok\t\t1.0\t2.0\t1.0\n'
     exit 0
 fi
+if [ "$mode" = "huge_sample" ] && [ "$from" -eq 0 ]; then
+    # A finite sample whose derived per-item value overflows: 1e308 ms x 1000 is inf.
+    printf 'RESULT\t0\tok\t\t1.0\t2.0\t1e308\n'
+    exit 0
+fi
+if [ "$mode" = "huge_sample_pair" ] && [ "$from" -eq 0 ]; then
+    # Two finite samples that the median's mean overflows: (1e308 + 1e308) / 2 is inf.
+    printf 'RESULT\t0\tok\t\t1.0\t2.0\t1e308,1e308\n'
+    exit 0
+fi
 if [ "$mode" = "extra_field" ] && [ "$from" -eq 0 ]; then
     # A well-shaped line with one field too many: the stray text belongs to the same line.
     printf 'RESULT\t0\tok\t\t1.0\t2.0\t1.0\tgarbage\n'

@@ -204,6 +204,29 @@ fn measure_armed(
     (measured, cut)
 }
 
+/// An `ok` row is a measurement only if the numbers it *derives* are finite. Every field is checked
+/// where it is parsed (`parse_number`), but `per_item_us` scales the summary by 1000 and the median
+/// averages two samples, so finite inputs can still overflow: `1e308` samples became `inf` in the
+/// CSV on an `ok` row. Used by `finish`, which writes every row a cell protocol produces.
+fn derived_ok_values_are_finite(
+    cell: &Cell,
+    batch: usize,
+    statistic: Statistic,
+) -> Result<(), String> {
+    let total_ms = summarize(&cell.samples, statistic);
+    let per_item_us = total_ms.map(|ms| ms * 1000.0 / batch as f64);
+    for (name, value) in [("total_ms", total_ms), ("per_item_us", per_item_us)] {
+        if let Some(value) = value {
+            if !value.is_finite() {
+                return Err(format!(
+                    "the {name} this cell derives is not finite ({value}); the raw fields are"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn summarize(samples: &[f64], statistic: Statistic) -> Option<f64> {
     if samples.is_empty() {
         return None;
@@ -1203,6 +1226,19 @@ fn run_build_in_child(
     let mut deadline = variant_deadline(spawn_time, limit, construction);
 
     let mut finish = |csv: &mut Csv, cell: Cell, index: usize| {
+        let cell = match cell.status {
+            "ok" => match derived_ok_values_are_finite(&cell, case.batch, args.statistic) {
+                Ok(()) => cell,
+                Err(note) => Cell {
+                    status: "failed",
+                    note,
+                    samples: Vec::new(),
+                    timed_ms: None,
+                    check_ms: None,
+                },
+            },
+            _ => cell,
+        };
         heartbeat(
             "done",
             row,

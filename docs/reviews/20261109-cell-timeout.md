@@ -286,8 +286,8 @@ Acceptance measured for the ruling (`docs/reviews/20261109-cell-timeout-logs/`):
    **exactly one failed row** (the other order is `ok`).
 3. `acceptance-final-crash`: a fake child reports its last result and exits 3: run exit 1, rows
    failed (not exit 0).
-4. `cargo test --all --locked`: 39 unit passed (1 ignored) + 15 child-process tests passed (25 now;
-   the review fixes added 10).
+4. `cargo test --all --locked`: 39 unit passed (1 ignored) + 15 child-process tests passed (26 now;
+   the review fixes added 11).
 
 ### 6巡目: the review findings, fixed inside that scope
 
@@ -324,6 +324,12 @@ Acceptance measured for the ruling (`docs/reviews/20261109-cell-timeout-logs/`):
    travelled on the same line, past both the number checks and the extra-output check. The line's
    shape is now checked where it is parsed (seven fields, the shape the child writes in one
    `println!`), and a field more or fewer is broken output, hence a `failed` row.
+6. **A finite sample whose derived value overflowed was written as `inf` on an `ok` row.** Each
+   field was checked where it is parsed, but the row also carries derived numbers: `per_item_us`
+   scales the summary by 1000 (so `1e308` ms became `inf`), and the median averages two samples (so
+   two `1e308` samples did too). The CSV then held `inf` under `status = ok`. `finish` now runs one
+   check on every row it is about to write -- `total_ms`, `per_item_us`, `timed_ms`, `check_ms` must
+   be finite -- and an `ok` row that fails it becomes a `failed` row, which fails the run.
 
 Red → green, both against a fake child: `huge_index` (old: `panicked at main.rs:1352: attempt to
 add with overflow`, exit 101; new: exit 1, rows `failed,ok`) and `garbage_after_last` (old: exit 0
@@ -333,9 +339,11 @@ the last row `failed`), and `bad_utf8_before_result` / `extra_cr_sample` / `bare
 reader regressions (all three were exit 0; now exit 1 with a `failed` row), and
 `garbage_before_result` for item 3 (old: `garbage` then a valid `RESULT` -> exit 0 and two `ok`
 rows; new: exit 1 with `failed,ok,ok`), and `garbage_after_skip` for item 4 (old: exit 0 with a
-`skipped` row; new: exit 1 with a `failed` row), and `extra_field` / `short_result` for item 5 (old:
-exit 0 with `ok` rows; new: exit 1 with `failed` rows). `cargo test --locked` is now 39 unit passed
-(1 ignored) + 25 child-process tests. None of these extends what the PR closes: the three follow-up
+`skipped` row; new: exit 1 with a `failed` row), `extra_field` / `short_result` for item 5 (old:
+exit 0 with `ok` rows; new: exit 1 with `failed` rows), and `huge_sample` / `huge_sample_pair` for
+item 6 (old: exit 0 with `per_item_us=inf` on an `ok` row; new: exit 1, `failed` rows whose note names
+the number it refused). `cargo test --locked` is now 39 unit passed (1 ignored) + 26 child-process
+tests. None of these extends what the PR closes: the three follow-up
 items above are unchanged.
 
 Two further review notes were checked and left alone, with the reason recorded here:
@@ -361,7 +369,7 @@ the commits that added them (`e4ef8ef`, `c9b5a60`) are docs-only, and the later 
 the parent's protocol handling and the child's stdout reader, not the timed path, the reference math
 or the CSV columns. Those runs have not been repeated at the review-fix head and nothing here claims
 they were; the index says which head each file belongs to. `cargo-test.log` is the exception: it was
-re-run at `c3ce585` and names that head in its first line.
+re-run at this head's code commit and names that head in its first line.
 
 ## What this does not change
 
@@ -384,11 +392,11 @@ re-run at `c3ce585` and names that head in its first line.
 
 ```
 cargo build --locked          # Finished, 0 errors
-cargo test --locked           # 39 unit passed (1 ignored) + 25 child-process tests passed
+cargo test --locked           # 39 unit passed (1 ignored) + 26 child-process tests passed
 ```
 
-`cargo-test.log` holds the test run at `c3ce585` (the head is in the file's first line) -- 39 unit
-passed, 1 ignored, 25 child-process tests. CI's `harness` job (#60) runs `cargo check -p fbench --locked`
+`cargo-test.log` holds the test run at `3f3eca8` (the head is in the file's first line; the commit
+after it adds that log and nothing else) -- 39 unit passed, 1 ignored, 26 child-process tests. CI's `harness` job (#60) runs `cargo check -p fbench --locked`
 and `cargo test -p fbench --locked` against the committed lock (no `--bins`, so
 `fbench/tests/child_cells.rs` runs too), so the test result is a local run; the merge gate is the
 `harness` job being green on this PR head.
