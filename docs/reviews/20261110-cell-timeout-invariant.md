@@ -27,5 +27,8 @@ adding its row (or the reverse) fails. `n = 3` is supplied through the test-only
 | error | last | ok, ok, failed |
 | skip | all | skipped |
 
-`cut` at first is also the construction-kill case: the child hangs before reporting any result for
-variant 1, the parent cuts variant 1, then respawns at variant 2 and both 2 and 3 run (`ok`).
+`cut` at first is the construction-cut case: the child reports one `timeout` result for variant 1
+and exits; the parent respawns at variant 2 and both 2 and 3 run (`ok`). `cut` at middle/last is the
+parent's `SIGKILL` at the deadline. A separate test (`a_child_that_hangs_after_its_last_result_...`)
+covers a child that stays alive after reporting every result: the parent reaps it instead of
+waiting without a bound, and the run finishes.

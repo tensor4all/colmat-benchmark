@@ -883,6 +883,21 @@ fn variant_count(row: &str, family: &str) -> usize {
     }
 }
 
+/// Reap a child without an unbounded wait: `try_wait` first, then `SIGKILL` and wait. A child that
+/// closed stdout but kept running must not hold the run open.
+fn reap_child(mut child: std::process::Child) -> String {
+    match child.try_wait() {
+        Ok(Some(status)) => status.to_string(),
+        _ => {
+            let _ = child.kill();
+            child
+                .wait()
+                .map(|status| status.to_string())
+                .unwrap_or_else(|e| format!("wait error: {e}"))
+        }
+    }
+}
+
 fn unix_millis() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1001,6 +1016,10 @@ fn run_build_in_child(
 
     let mut next = 0usize;
     let mut current: Option<CellChild> = None;
+    // Whether the child currently running has produced a result in this spawn. A child that exits
+    // after a result (for example the construction-cut child, which reports one `timeout` and
+    // stops) has not failed the next variant: the next variant is respawned.
+    let mut completed_in_child = false;
     let mut spawn_time = Instant::now();
     let mut construction = Duration::ZERO;
     let mut deadline = variant_deadline(spawn_time, limit, construction);
@@ -1061,11 +1080,12 @@ fn run_build_in_child(
     start(0);
 
     while next < n {
-        let mut handle = match current.take() {
+        let handle = match current.take() {
             Some(handle) => handle,
             None => {
                 spawn_time = Instant::now();
                 construction = Duration::ZERO;
+                completed_in_child = false;
                 let spec = spec_at(next);
                 let handle = spawn_cell(&exe, &spec)?;
                 heartbeat(
@@ -1092,7 +1112,7 @@ fn run_build_in_child(
                     Some("SKIP") => {
                         let note = fields.get(1).unwrap_or(&"").to_string();
                         finish(csv, Cell::skipped(note), 0);
-                        let _ = handle.child.wait();
+                        let _ = reap_child(handle.child);
                         drop(handle.reader);
                         return Ok(());
                     }
@@ -1112,6 +1132,7 @@ fn run_build_in_child(
                             check_ms: result.check_ms,
                         };
                         finish(csv, cell, next);
+                        completed_in_child = true;
                         next += 1;
                         if next < n {
                             start(next);
@@ -1127,12 +1148,7 @@ fn run_build_in_child(
             Wake::Timeout => {
                 let killed_at = unix_millis();
                 let pid = handle.pid;
-                let _ = handle.child.kill();
-                let status = handle
-                    .child
-                    .wait()
-                    .map(|status| status.to_string())
-                    .unwrap_or_else(|e| format!("wait error: {e}"));
+                let status = reap_child(handle.child);
                 let reaped_at = unix_millis();
                 drop(handle.reader);
                 heartbeat(
@@ -1155,10 +1171,8 @@ fn run_build_in_child(
                 }
             }
             Wake::Closed => {
-                let status = handle
-                    .child
-                    .wait()
-                    .map_err(|e| format!("waiting for the cell child: {e}"))?;
+                let pid = handle.pid;
+                let status = reap_child(handle.child);
                 drop(handle.reader);
                 heartbeat(
                     "exit",
@@ -1167,8 +1181,14 @@ fn run_build_in_child(
                     dtype,
                     order,
                     case,
-                    format!(" id={id} pid={} status={status} at_ms={}", handle.pid, unix_millis()),
+                    format!(" id={id} pid={pid} status={status} at_ms={}", unix_millis()),
                 );
+                current = None;
+                if completed_in_child {
+                    // The child ended after a result (a construction cut reports one timeout and
+                    // stops). It did not fail the next variant: respawn it, without a new start.
+                    continue;
+                }
                 let cell = Cell {
                     status: "failed",
                     note: format!("the cell child exited with {status} before its result"),
@@ -1178,7 +1198,6 @@ fn run_build_in_child(
                 };
                 finish(csv, cell, next);
                 next += 1;
-                current = None;
                 if next < n {
                     start(next);
                 }
@@ -1186,8 +1205,10 @@ fn run_build_in_child(
         }
     }
 
-    if let Some(mut handle) = current {
-        let _ = handle.child.wait();
+    if let Some(handle) = current {
+        // Every variant has a result; the child has nothing left to say. Reap it with a kill rather
+        // than waiting for a destructor or a thread that never returns.
+        let _ = reap_child(handle.child);
         drop(handle.reader);
     }
     Ok(())

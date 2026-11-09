@@ -19,11 +19,21 @@ fi
 while [ "$i" -lt "$n" ]; do
     if [ "$i" -eq "$at" ]; then
         case "$mode" in
-            cut) exec sleep 300 ;;
+            cut)
+                if [ "$i" -eq 0 ]; then
+                    # The construction-cut child reports one timeout and stops; the parent must
+                    # respawn the remaining variants, not mark them failed.
+                    printf 'RESULT\t0\ttimeout\ttimeout 1\t\t\t\n'
+                    exit 0
+                fi
+                exec sleep 300 ;;
             error) exit 3 ;;
         esac
     fi
     printf 'RESULT\t%s\tok\t\t1.0\t2.0\t1.0\n' "$i"
     i=$((i + 1))
 done
+if [ "$mode" = "hang_after" ]; then
+    exec sleep 300
+fi
 exit 0

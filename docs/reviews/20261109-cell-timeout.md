@@ -24,8 +24,12 @@ This note covers the PR that follows #60 (`3b58258`). Evidence logs are in
   and on a 500 ms watchdog, and exits immediately if it is not that parent. An external `SIGKILL`
   of the parent therefore leaves no orphan; a `getppid()` read after the parent already died (which
   returns 1) is never mistaken for a live parent.
-* One `CELL start` and one terminal row per variant; the kill path never re-emits a start. The
-  invariant and its transition table are in `docs/reviews/20261110-cell-timeout-invariant.md`.
+* One `CELL start` and one terminal row per variant; the kill path never re-emits a start. A child
+  that reports a cooperative `timeout` and then exits (the construction-cut case) is **respawned**
+  for the next variant, not recorded as a failure of it. Every wait on a child is bounded:
+  `try_wait`, then `SIGKILL` and `wait`, including the child that has reported its last result, so a
+  hang after the last result cannot stall the run. The invariant and its transition table are in
+  `docs/reviews/20261110-cell-timeout-invariant.md`.
 * The recorder's interface does not change: `--locked`/`--no-verify`/`--publish` and the `--csv`
   path stay where they were. The CSV is still written by the parent, at the same path, and only
   the hidden `--cell-spec` argument exists between parent and child.
@@ -90,13 +94,17 @@ Red, per item, with the fix removed (`docs/reviews/20261109-cell-timeout-logs/`)
 | `red-3d-overflow.log` | an unrepresentable limit returns `None` again | `an_unrepresentable_limit_cuts_the_cell` FAILED |
 | `red-2d-child-kill.log` | the parent waits for the child without a deadline (no kill) | `a_killed_cell_leaves_a_row_and_the_next_cell_runs` FAILED |
 | `red-1d-kill-remaining.log` | a kill cuts every remaining variant (old) | the transition table FAILED (a cut variant is followed by `ok`, not by cut rows) |
-| `red-2e-construction-count.log` | the variant count wrongly fixed at 1 | the transition table FAILED (variants 2/3 lose their rows) |
+| `red-2e-construction-count.log` | the variant count wrongly fixed at 1 (compiling mutation) | the transition table FAILED: one start per variant is `1/1`, so variants 2/3 have no rows |
 | `red-3e-double-start.log` | the spawn path emits a second start | the transition table FAILED (one start per variant) |
 | `red-4e-parent-pid.log` | the child records `getppid()` after it starts instead of the passed pid | `the_child_exits_when_the_given_parent_is_not_its_parent` FAILED |
+| `red-1e-coop-cut-failed.log` | a cooperative timeout result is not respawned; the next variant is marked failed | the transition table FAILED (`cut first` expects `timeout,ok,ok`) |
+| `red-2f-final-wait.log` | the last child is waited for without a kill | the hang-after-last-result test FAILED (`None` after its 10 s deadline) |
+| `red-3f-done-status.log` | every done says `status=ok` | the transition table FAILED on the done status |
+| `red-3g-missing-done.log` | the done line for the second variant is omitted | the transition table FAILED on the done count |
 
 Green: `cargo test --locked` → `test result: ok. 37 passed; 0 failed; 1 ignored` (unit) and
-`test result: ok. 4 passed` (`fbench/tests/child_cells.rs`: kill/pairing, finished run, the 8-row
-transition table, and the wrong-parent pid check).
+`test result: ok. 5 passed` (`fbench/tests/child_cells.rs`: kill/pairing, finished run, the 8-row
+transition table, the wrong-parent pid check, and the hang-after-last-result reap).
 
 End to end, with the parent enforcing the limit:
 * `long-cell` (`--n 4096 --batch 2`, limit 3600 s): four cells, each 33.8-34.2 s timed plus

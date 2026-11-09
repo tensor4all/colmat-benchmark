@@ -1,0 +1,66 @@
+   Compiling fbench v0.1.0 (/Users/hiroshi/projects/tensor4all/faer-benchmark-58/fbench)
+warning: type alias `Run` is never used
+  --> fbench/src/backend.rs:43:14
+   |
+43 |     pub type Run = Par<'static>;
+   |              ^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `gram_adj_residual` is never used
+   --> fbench/src/shared.rs:495:8
+    |
+495 | pub fn gram_adj_residual<T: Scalar>(q: &[T], m: usize, n: usize, order: Order) -> f64 {
+    |        ^^^^^^^^^^^^^^^^^
+
+warning: function `gram_adj_residual_rows` is never used
+   --> fbench/src/shared.rs:505:4
+    |
+505 | fn gram_adj_residual_rows<T: Scalar>(q: &[T], m: usize, n: usize) -> f64 {
+    |    ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `nancheck` is never used
+   --> fbench/src/vendor.rs:104:8
+    |
+104 | pub fn nancheck() -> Option<bool> {
+    |        ^^^^^^^^
+
+warning: `fbench` (bin "fbench") generated 4 warnings
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.75s
+     Running tests/child_cells.rs (target/debug/deps/child_cells-d3186778d0198ca4)
+
+running 1 test
+
+thread 'every_cell_event_leaves_exactly_one_terminal_row' (146874916) panicked at fbench/tests/child_cells.rs:257:17:
+assertion `left == right` failed: table-cut-0 id=1: variant 2 done status: CELL start faer-fork gemm f64 c 8x8x8 id=1 variant=1/3
+CELL build faer-fork gemm f64 c 8x8x8 id=1 pid=82570 from=1
+CELL done faer-fork gemm f64 c 8x8x8 id=1 variant=1 status=timeout cut=timeout
+CELL start faer-fork gemm f64 c 8x8x8 id=1 variant=2/3
+CELL exit faer-fork gemm f64 c 8x8x8 id=1 pid=82570 status=exit status: 0 at_ms=1794240372467
+CELL done faer-fork gemm f64 c 8x8x8 id=1 variant=2 status=failed
+CELL start faer-fork gemm f64 c 8x8x8 id=1 variant=3/3
+CELL build faer-fork gemm f64 c 8x8x8 id=1 pid=82575 from=3
+CELL done faer-fork gemm f64 c 8x8x8 id=1 variant=3 status=ok
+CELL start faer-fork gemm f64 f 8x8x8 id=2 variant=1/3
+CELL build faer-fork gemm f64 f 8x8x8 id=2 pid=82580 from=1
+CELL done faer-fork gemm f64 f 8x8x8 id=2 variant=1 status=timeout cut=timeout
+CELL start faer-fork gemm f64 f 8x8x8 id=2 variant=2/3
+CELL exit faer-fork gemm f64 f 8x8x8 id=2 pid=82580 status=exit status: 0 at_ms=1794240372477
+CELL done faer-fork gemm f64 f 8x8x8 id=2 variant=2 status=failed
+CELL start faer-fork gemm f64 f 8x8x8 id=2 variant=3/3
+CELL build faer-fork gemm f64 f 8x8x8 id=2 pid=82585 from=3
+CELL done faer-fork gemm f64 f 8x8x8 id=2 variant=3 status=ok
+
+  left: "failed"
+ right: "ok"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test every_cell_event_leaves_exactly_one_terminal_row ... FAILED
+
+failures:
+
+failures:
+    every_cell_event_leaves_exactly_one_terminal_row
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4 filtered out; finished in 1.21s
+
+error: test failed, to rerun pass `--test child_cells`

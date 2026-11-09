@@ -252,6 +252,14 @@ fn every_cell_event_leaves_exactly_one_terminal_row() {
             sorted.sort_unstable();
             let want: Vec<usize> = (1..=per_build).collect();
             assert_eq!(sorted, want, "{name} id={id}: dones are {variants:?}");
+            // A done with the wrong status (or a done for the wrong variant) is not an invariant.
+            for (k, status) in variants {
+                assert_eq!(
+                    status,
+                    &expected[k - 1],
+                    "{name} id={id}: variant {k} done status: {stderr}"
+                );
+            }
         }
 
         let rows: Vec<&str> = body.lines().skip(1).collect();
@@ -283,4 +291,66 @@ fn the_child_exits_when_the_given_parent_is_not_its_parent() {
         "the child must exit when its given parent is not its parent: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+fn run_with_deadline(name: &str, seconds: u64) -> (Option<i32>, String) {
+    use std::os::unix::process::CommandExt;
+    use std::process::Stdio;
+    let csv = csv_path(name);
+    let err_path = std::env::temp_dir().join(format!("fbench-{}-{name}.err", std::process::id()));
+    let err_file = std::fs::File::create(&err_path).unwrap();
+    let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_child.sh");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_fbench"));
+    command
+        .args([
+            "run", "--threads", "1", "--n", "8", "--family", "gemm", "--dtype", "f64",
+            "--rows", "faer-fork", "--reps", "1", "--prime-ms", "0", "--cell-timeout", "1",
+            "--csv",
+        ])
+        .arg(&csv)
+        .env("FBENCH_CELL_CHILD", script)
+        .env("FBENCH_TEST_VARIANTS", "3")
+        .env("FAKE_MODE", "hang_after")
+        .env("FAKE_N", "3")
+        .stdout(Stdio::null())
+        .stderr(Stdio::from(err_file))
+        .process_group(0);
+    let mut child = command.spawn().expect("spawn fbench");
+    let pid = child.id();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(seconds);
+    loop {
+        if let Some(status) = child.try_wait().expect("try_wait") {
+            let err = std::fs::read_to_string(&err_path).unwrap_or_default();
+            std::fs::remove_file(&csv).ok();
+            std::fs::remove_file(&err_path).ok();
+            return (status.code(), err);
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = Command::new("kill")
+                .args(["-KILL", &format!("-{pid}")])
+                .status();
+            let _ = child.kill();
+            let _ = child.wait();
+            let err = std::fs::read_to_string(&err_path).unwrap_or_default();
+            std::fs::remove_file(&csv).ok();
+            std::fs::remove_file(&err_path).ok();
+            return (None, err);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
+/// A child that never exits after reporting its last result must not hold the run: the parent
+/// reaps it instead of waiting without a bound. Without that, this run hangs and the test's own
+/// deadline (`None`) fires.
+#[test]
+fn a_child_that_hangs_after_its_last_result_does_not_stall_the_run() {
+    let (code, stderr) = run_with_deadline("hang-after", 10);
+    assert_eq!(
+        code,
+        Some(0),
+        "the parent must finish after the last result: {stderr}"
+    );
+    assert_eq!(count_lines(&stderr, "CELL start"), 6, "{stderr}");
+    assert_eq!(count_lines(&stderr, "CELL done"), 6, "{stderr}");
 }
