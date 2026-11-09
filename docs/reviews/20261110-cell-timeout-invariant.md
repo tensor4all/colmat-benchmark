@@ -10,9 +10,11 @@ For every `(build, variant)` the parent must emit:
 * the variant count is known **before** construction (`variant_count`), so a build killed during
   construction still leaves one terminal row per variant.
 
+`hang` is the explicit first-variant hard kill: the fake child sleeps before reporting anything, so
+only the parent's `SIGKILL` can end it; the test also asserts the kill line's pid is gone from `ps`.
 The table is executed by `fbench/tests/child_cells.rs` with a fake child
 (`fbench/tests/fake_child.sh`) that can finish immediately, hang while building/running, exit with
-an error, or skip. The test asserts the number of table rows is exactly 8: adding an event without
+an error, or skip. The test asserts the number of table rows is exactly 9: adding an event without
 adding its row (or the reverse) fails. `n = 3` is supplied through the test-only
 `FBENCH_TEST_VARIANTS`, so first/middle/last are all covered.
 
@@ -20,6 +22,7 @@ adding its row (or the reverse) fails. `n = 3` is supplied through the test-only
 |---|---|---|
 | fast | all | ok, ok, ok |
 | cut | first | timeout, ok, ok |
+| hang | first | timeout, ok, ok |
 | cut | middle | ok, timeout, ok |
 | cut | last | ok, ok, timeout |
 | error | first | failed, ok, ok |

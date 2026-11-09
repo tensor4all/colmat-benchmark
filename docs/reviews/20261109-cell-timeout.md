@@ -101,15 +101,23 @@ Red, per item, with the fix removed (`docs/reviews/20261109-cell-timeout-logs/`)
 | `red-2f-final-wait.log` | the last child is waited for without a kill | the hang-after-last-result test FAILED (`None` after its 10 s deadline) |
 | `red-3f-done-status.log` | every done says `status=ok` | the transition table FAILED on the done status |
 | `red-3g-missing-done.log` | the done line for the second variant is omitted | the transition table FAILED on the done count |
+| `red-1f-done-keys.log` | all done lines for build id 1 are dropped | the transition table FAILED on the start/done key sets |
+| `red-1g-done-keys-old-test.log` | the same mutation with the key-set assert removed (the old test) | it **passed**, which is the gap the assert closes |
+| `red-2h-fast-cell.log` | the old first-variant kill test with a cell that finishes under 1 s | it FAILED: the old test depended on the host being slow |
+| `red-3h-no-hard-kill.log` | the fake `hang` made to report a cooperative timeout instead of sleeping | the hard-kill test FAILED: no `CELL kill`, no pid |
 
 Green: `cargo test --locked` → `test result: ok. 37 passed; 0 failed; 1 ignored` (unit) and
-`test result: ok. 5 passed` (`fbench/tests/child_cells.rs`: kill/pairing, finished run, the 8-row
-transition table, the wrong-parent pid check, and the hang-after-last-result reap).
+`test result: ok. 5 passed` (`fbench/tests/child_cells.rs`: first-variant hard kill with the fake
+child, finished run, the 9-row transition table, the wrong-parent pid check, and the
+hang-after-last-result reap).
 
 End to end, with the parent enforcing the limit:
 * `long-cell` (`--n 4096 --batch 2`, limit 3600 s): four cells, each 33.8-34.2 s timed plus
   153-155 s check, all `ok`; total 12m31s; both child pids are gone from `ps` afterwards.
 * `cut-run` (`--n 512,1024 --cell-timeout 1`): 512 runs `ok`, 1024 is cut; 8 starts / 8 dones.
+* The first-variant hard kill is deterministic: the fake child sleeps before reporting anything, so
+  the parent's `SIGKILL` (not a slow real cell) is what the test requires. `hang first` is a table
+  row (the table is now 9 rows) and the test asserts the kill line's pid is gone from `ps`.
   The kill line records `pid`, `variant`, `at_ms` and `reaped_at`, so the `ps` check has its time
   and pid in the log (the integration test also runs `ps -p` and asserts it is gone).
 (`cargo-test.log`). The ignored one is the timing probe below.

@@ -48,34 +48,61 @@ fn count_lines(text: &str, prefix: &str) -> usize {
     text.lines().filter(|line| line.starts_with(prefix)).count()
 }
 
-/// A cell that outlives its 1 s limit is killed, its row is `timeout`, its `CELL done` pairs with
-/// the `CELL start`, the kill names the pid, that pid is gone, and the next build still runs.
+fn run_fake(name: &str, mode: &str, at: usize, n: usize) -> (String, String, i32) {
+    let csv = csv_path(name);
+    let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_child.sh");
+    let output = Command::new(env!("CARGO_BIN_EXE_fbench"))
+        .args([
+            "run", "--threads", "1", "--n", "8", "--family", "gemm", "--dtype", "f64",
+            "--rows", "faer-fork", "--reps", "1", "--prime-ms", "0", "--cell-timeout", "1",
+            "--csv",
+        ])
+        .arg(&csv)
+        .env("FBENCH_CELL_CHILD", script)
+        .env("FBENCH_TEST_VARIANTS", n.to_string())
+        .env("FAKE_MODE", mode)
+        .env("FAKE_AT", at.to_string())
+        .env("FAKE_N", n.to_string())
+        .output()
+        .expect("run fbench with the fake child");
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    let csv_text = std::fs::read_to_string(&csv).unwrap_or_default();
+    std::fs::remove_file(&csv).ok();
+    (stderr, csv_text, output.status.code().unwrap_or(-1))
+}
+
+/// The first variant of a build is hard-killed by the parent, deterministically: the fake child
+/// sleeps before reporting anything, so this never depends on a real cell taking longer than the
+/// limit on a particular host. The remaining variants are respawned and run.
 #[test]
-fn a_killed_cell_leaves_a_row_and_the_next_cell_runs() {
-    let (stderr, csv, code) = run("kill", "512", "svd_thin", &["--cell-timeout", "1"]);
-    assert_eq!(code, 1, "a cut cell is a non-zero run: {stderr}");
+fn a_first_variant_hard_kill_leaves_a_row_and_the_next_variant_runs() {
+    let (stderr, csv, code) = run_fake("hard-kill", "hang", 0, 3);
+    assert_eq!(code, 1, "a cut variant is a non-zero run: {stderr}");
 
     let rows: Vec<&str> = csv.lines().skip(1).collect();
-    assert_eq!(rows.len(), 4, "two orders x two svd_thin variants: {csv}");
-    for row in &rows {
-        assert!(
-            row.contains(",timeout,timeout 1,"),
-            "a killed cell must be a timeout row: {row}"
+    assert_eq!(rows.len(), 6, "two orders x three variants: {csv}");
+    for (build, chunk) in rows.chunks(3).enumerate() {
+        let statuses: Vec<&str> = chunk
+            .iter()
+            .map(|row| row.split(',').nth(12).unwrap_or("?"))
+            .collect();
+        assert_eq!(
+            statuses,
+            ["timeout", "ok", "ok"],
+            "build {build} after a first-variant kill: {csv}"
         );
     }
 
-    let starts = count_lines(&stderr, "CELL start");
-    let dones = count_lines(&stderr, "CELL done");
-    assert_eq!(
-        starts, dones,
-        "every start needs a done, including the killed cell:\n{stderr}"
-    );
-    for line in stderr.lines().filter(|l| l.starts_with("CELL done")) {
-        assert!(
-            line.contains("variant=") && line.contains("status=timeout") && line.contains("cut=timeout"),
-            "a killed cell closes with its variant and cut=timeout: {line}"
-        );
-    }
+    let starts: Vec<&str> = stderr
+        .lines()
+        .filter(|l| l.starts_with("CELL start"))
+        .collect();
+    let dones: Vec<&str> = stderr
+        .lines()
+        .filter(|l| l.starts_with("CELL done"))
+        .collect();
+    assert_eq!(starts.len(), 6, "one start per variant: {stderr}");
+    assert_eq!(dones.len(), 6, "one done per variant: {stderr}");
 
     let pids: Vec<&str> = stderr
         .lines()
@@ -85,10 +112,7 @@ fn a_killed_cell_leaves_a_row_and_the_next_cell_runs() {
                 .find_map(|field| field.strip_prefix("pid="))
         })
         .collect();
-    assert!(
-        pids.len() >= 2,
-        "each cut variant is killed and respawned, so at least one kill per order: {stderr}"
-    );
+    assert_eq!(pids.len(), 2, "one hard kill per order: {stderr}");
     for pid in pids {
         let alive = Command::new("ps")
             .args(["-p", pid, "-o", "pid="])
@@ -100,17 +124,6 @@ fn a_killed_cell_leaves_a_row_and_the_next_cell_runs() {
             String::from_utf8_lossy(&alive.stdout)
         );
     }
-
-    // The second order ran after the first was killed. A cut variant is respawned (`from=`), so
-    // there can be more than one build line per order.
-    assert!(
-        count_lines(&stderr, "CELL build") >= 2,
-        "the second order must run: {stderr}"
-    );
-    assert!(
-        stderr.lines().any(|l| l.starts_with("CELL start") && l.contains("id=2")),
-        "the run continued past the kill: {stderr}"
-    );
 }
 
 /// A run that finishes under its limit pairs every start with a done and writes `ok` rows.
@@ -169,14 +182,14 @@ fn every_cell_event_leaves_exactly_one_terminal_row() {
     }
     assert_eq!(
         cases.len(),
-        8,
+        9,
         "the event table changed: update docs/reviews/20261110-cell-timeout-invariant.md and this test"
     );
 
     let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_child.sh");
     for (event, at, expected) in cases {
         assert!(
-            matches!(event.as_str(), "fast" | "cut" | "error" | "skip"),
+            matches!(event.as_str(), "fast" | "cut" | "hang" | "error" | "skip"),
             "the event table has an event this test does not implement: {event}"
         );
         let name = format!("table-{event}-{at}");
@@ -201,6 +214,7 @@ fn every_cell_event_leaves_exactly_one_terminal_row() {
 
         let mut starts: BTreeMap<String, Vec<usize>> = BTreeMap::new();
         let mut dones: BTreeMap<String, Vec<(usize, String)>> = BTreeMap::new();
+        let mut kills: BTreeMap<String, Vec<String>> = BTreeMap::new();
         for line in stderr.lines() {
             let id = line
                 .split_whitespace()
@@ -216,6 +230,13 @@ fn every_cell_event_leaves_exactly_one_terminal_row() {
                     .unwrap_or(0);
                 if line.starts_with("CELL start") {
                     starts.entry(id.clone()).or_default().push(k);
+                } else if line.starts_with("CELL kill") {
+                    if let Some(pid) = line
+                        .split_whitespace()
+                        .find_map(|f| f.strip_prefix("pid="))
+                    {
+                        kills.entry(id.clone()).or_default().push(pid.to_owned());
+                    }
                 } else if line.starts_with("CELL done") {
                     let status = line
                         .split_whitespace()
@@ -227,8 +248,15 @@ fn every_cell_event_leaves_exactly_one_terminal_row() {
             }
         }
 
-        // Two orders, one build each.
+        // Two orders, one build each. The ids must match: a build whose done lines all went
+        // missing must fail here even though the remaining id still has a complete start/done set.
         assert_eq!(starts.len(), 2, "{name}: {stderr}");
+        let start_ids: Vec<&String> = starts.keys().collect();
+        let done_ids: Vec<&String> = dones.keys().collect();
+        assert_eq!(
+            start_ids, done_ids,
+            "{name}: every start id needs a done id: starts {start_ids:?} dones {done_ids:?}\n{stderr}"
+        );
         for (id, variants) in &starts {
             let per_build = if event == "skip" { 1 } else { 3 };
             assert_eq!(
@@ -260,6 +288,26 @@ fn every_cell_event_leaves_exactly_one_terminal_row() {
                     "{name} id={id}: variant {k} done status: {stderr}"
                 );
             }
+        }
+
+        if event == "hang" {
+            for (id, pids) in &kills {
+                assert_eq!(
+                    pids.len(),
+                    1,
+                    "{name} id={id}: the first variant is cut by one SIGKILL: {stderr}"
+                );
+                let alive = Command::new("ps")
+                    .args(["-p", &pids[0], "-o", "pid="])
+                    .output()
+                    .expect("ps");
+                assert!(
+                    !alive.status.success(),
+                    "{name} id={id}: killed child {} is still in ps",
+                    pids[0]
+                );
+            }
+            assert_eq!(kills.len(), 2, "{name}: one hard kill per build: {stderr}");
         }
 
         let rows: Vec<&str> = body.lines().skip(1).collect();

@@ -19,6 +19,7 @@ fi
 while [ "$i" -lt "$n" ]; do
     if [ "$i" -eq "$at" ]; then
         case "$mode" in
+            hang) exec sleep 300 ;;
             cut)
                 if [ "$i" -eq 0 ]; then
                     # The construction-cut child reports one timeout and stops; the parent must
