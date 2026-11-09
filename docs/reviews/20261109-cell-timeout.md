@@ -107,6 +107,9 @@ Red, per item, with the fix removed (`docs/reviews/20261109-cell-timeout-logs/`)
 | `red-3h-no-hard-kill.log` | the fake `hang` made to report a cooperative timeout instead of sleeping | the hard-kill test FAILED: no `CELL kill`, no pid |
 | `red-1i-verify-skip.log` | a skipped family is printed as `MISMATCH` | `verify_reports_an_unsupported_family_as_skip_not_mismatch` FAILED |
 | `red-2i-no-parent-deadline.log` | the parent does not arm a deadline (the test's 10 s bound fires) | the hard-kill test FAILED instead of hanging |
+| `red-1j-spawn-failure.log` | a spawn failure propagates with `?` | the spawn-failure test FAILED: exit 2, no row/done |
+| `red-2k-clock-bound.log` | `expired()` always false, with the test's 5 s bound | the clock test FAILED in 5.01 s (`cut` false) |
+| `red-2l-clock-unbounded.log` | the same with the bound removed | `timeout 12` exits 124: the test hangs |
 
 Green: `cargo test --locked` → `test result: ok. 37 passed; 0 failed; 1 ignored` (unit) and
 `test result: ok. 7 passed` (`fbench/tests/child_cells.rs`: first-variant hard kill with the fake
@@ -114,9 +117,9 @@ child, finished run, the 9-row transition table, the wrong-parent pid check, and
 hang-after-last-result reap).
 
 End to end, with the parent enforcing the limit:
-* `long-cell` (`--n 4096 --batch 2`, limit 3600 s), regenerated at head `6144d27`: four cells,
-  each 33.6-33.9 s timed plus 150.6-156.7 s check, all `ok`; total 12m30.8s; child pids 65169 and
-  69222 are gone from `ps` afterwards (rc=1).
+* `long-cell` (`--n 4096 --batch 2`, limit 3600 s), regenerated at head `34ff512`: four cells,
+  each 34.3-34.8 s timed plus 157.0-158.9 s check, all `ok`; total 12m49.1s. The log itself records
+  the check (`ps -p 11838`, `ps -p 9184`, both rc=1, empty, at unix 1794246703).
 * `cut-run` (`--n 512,1024 --cell-timeout 1`): 512 runs `ok`, 1024 is cut; 8 starts / 8 dones.
 * The first-variant hard kill is deterministic: the fake child sleeps before reporting anything, so
   the parent's `SIGKILL` (not a slow real cell) is what the test requires. `hang first` is a table
@@ -242,9 +245,12 @@ Evidence (`docs/reviews/20261109-cell-timeout-logs/`):
 
 ## What this does not change
 
-* The measurement: the timed region, priming, repetition count, statistic, thread budget, and the
-  columns the campaign declares in `benchmarks/campaign.yaml` are untouched. `timed_ms` and
-  `check_ms` stay appended diagnostics, and a cut cell has neither.
+* The measurement: the timed *call*, priming, repetition count, statistic, thread budget, and the
+  columns the campaign declares in `benchmarks/campaign.yaml` are unchanged. `timed_ms` and
+  `check_ms` stay appended diagnostics, and a cut cell has neither. The timed loop now polls the
+  clock once before each batch member: base (`3b58258`) vs head (`34ff512`) `gemm` at n=512, 1
+  thread, 7 reps, median of three alternating rounds: C 4.608 vs 4.615 ms (+0.14%), F 4.654 vs
+  4.594 ms (-1.28%) -- below noise at this size, not a general overhead bound.
 * The verification *method*: whether `gram_residual` should sample columns rather than run the full
   product is a separate decision (a random-projection mode is a separate issue, not this PR).
 * A library call in progress is not interruptible; the limit is enforced at poll points. Every
