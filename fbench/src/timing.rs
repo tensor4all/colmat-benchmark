@@ -30,9 +30,26 @@ pub fn arm(limit: Option<Duration>) {
     arm_at(deadline_in(limit));
 }
 
-/// The absolute deadline `limit` from now, for a cell whose clock is armed on more than one thread.
+/// The absolute deadline `start + limit`, for a cell whose clock is armed on more than one thread.
+pub fn deadline_at(start: Instant, limit: Option<Duration>) -> Option<Instant> {
+    let limit = limit?;
+    if let Some(deadline) = start.checked_add(limit) {
+        return Some(deadline);
+    }
+    // A limit the platform clock cannot reach is still a limit, and `None` means "no
+    // limit" to every caller: saturate at one year, far past any cell the harness waits for.
+    const SATURATED: Duration = Duration::from_secs(365 * 24 * 60 * 60);
+    Some(
+        start
+            .checked_add(SATURATED)
+            .expect("a one-year deadline is representable on this clock"),
+    )
+}
+
+/// The absolute deadline `limit` from now.
+#[cfg(test)]
 pub fn deadline_in(limit: Option<Duration>) -> Option<Instant> {
-    limit.and_then(|limit| Instant::now().checked_add(limit))
+    deadline_at(Instant::now(), limit)
 }
 
 /// Arm the clock with an already computed deadline. A cell may be armed on the caller before its

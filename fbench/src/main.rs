@@ -420,6 +420,15 @@ fn parse(args: &[String]) -> Result<Args, String> {
             Err(e) => return Err(format!("{CELL_TIMEOUT_ENV}: {e}")),
         },
     };
+    if a.cell_timeout > 0 {
+        let limit = Duration::from_secs(a.cell_timeout);
+        if Instant::now().checked_add(limit).is_none() {
+            return Err(format!(
+                "--cell-timeout {} s is not representable on this clock: it would disarm the cell instead of limiting it",
+                a.cell_timeout
+            ));
+        }
+    }
     Ok(a)
 }
 
@@ -690,13 +699,17 @@ fn main() -> ExitCode {
                                 format!(" threads={threads} reps={}", args.reps),
                             );
                             // The cell starts here: one deadline covers the reference
-                            // construction and the timed repetitions, and it is never recomputed.
+                            // construction and the timed repetitions. Each variant takes its own clock
+                            // from this construction stamp, so an earlier variant does not spend the
+                            // budget of the ones after it.
                             // If construction crossed it, every op it produced stands on reference
                             // math that gave up part-way, so none of them is measured.
-                            let deadline = timing::deadline_in(limit);
+                            let construction_start = Instant::now();
+                            let deadline = timing::deadline_at(construction_start, limit);
                             timing::arm_at(deadline);
                             let built = build_ops(row, *dtype, family, case, order);
                             let construction_cut = timing::expired();
+                            let construction_time = construction_start.elapsed();
                             let ops = match built {
                                 Ok(ops) => ops,
                                 Err(note) => {
@@ -724,6 +737,12 @@ fn main() -> ExitCode {
                                 }
                             };
                             for mut ops in ops {
+                                // Each variant is its own cell: it pays the construction, not the
+                                // execution of the variants before it.
+                                let cell_start = Instant::now();
+                                let deadline =
+                                    variant_deadline(cell_start, limit, construction_time);
+                                timing::arm_at(deadline);
                                 let cell = run_cell(
                                     &mut ops,
                                     run,
@@ -1000,6 +1019,50 @@ fn stopped_note(note: &str, reason: &str) -> String {
     }
 }
 
+/// One variant deadline: its own clock, less the construction every variant paid.
+/// The loop used to share one deadline across every op `build_ops` produced, so a slow earlier
+/// variant spent the budget of the ones after it.
+fn variant_deadline(
+    cell_start: Instant,
+    limit: Option<Duration>,
+    construction: Duration,
+) -> Option<Instant> {
+    timing::deadline_at(
+        cell_start,
+        limit.map(|limit| limit.saturating_sub(construction)),
+    )
+}
+
+#[cfg(test)]
+mod variant_budget_tests {
+    use super::*;
+
+    #[test]
+    fn two_variants_do_not_share_one_deadline() {
+        let limit = Some(Duration::from_secs(1));
+        let construction = Duration::from_millis(100);
+        let start = Instant::now();
+        let first = variant_deadline(start, limit, construction).unwrap();
+        // The second variant starts after the first has used 600 ms of wall time.
+        let second_start = start + Duration::from_millis(600);
+        let second = variant_deadline(second_start, limit, construction).unwrap();
+        assert_eq!(
+            second.duration_since(second_start),
+            Duration::from_millis(900),
+            "each variant gets the cell budget, less construction, from its own start"
+        );
+        assert!(
+            first < second,
+            "one shared deadline would leave the second variant 300 ms"
+        );
+    }
+
+    #[test]
+    fn an_unrepresentable_limit_is_still_a_limit() {
+        assert!(crate::timing::deadline_in(Some(Duration::from_secs(u64::MAX))).is_some());
+    }
+}
+
 /// One cell's budget: the configured limit (the note names it), and whether the reference
 /// construction that produced these ops already crossed it.
 #[derive(Clone, Copy)]
@@ -1238,6 +1301,10 @@ mod tests {
     fn the_cell_limit_is_configured_with_a_default() {
         assert_eq!(cli(&["--cell-timeout", "7"]).unwrap().cell_timeout, 7);
         assert_eq!(cli(&["--cell-timeout", "0"]).unwrap().cell_timeout, 0);
+        assert!(
+            cli(&["--cell-timeout", "18446744073709551615"]).is_err(),
+            "a limit the clock cannot represent is a configuration error, not an unlimited cell"
+        );
         assert!(cli(&["--cell-timeout", "soon"]).is_err());
         if std::env::var_os(CELL_TIMEOUT_ENV).is_none() {
             assert_eq!(
@@ -1327,10 +1394,7 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert!(rows[0].contains(",timeout,timeout 1,"));
         // an unfinished region has no time, so the two appended fields are empty
-        assert_eq!(
-            rows[0].rsplit(',').take(2).collect::<Vec<_>>(),
-            ["", ""]
-        );
+        assert_eq!(rows[0].rsplit(',').take(2).collect::<Vec<_>>(), ["", ""]);
         assert!(rows[1].contains(",ok,,"));
         std::fs::remove_file(&path).ok();
     }
