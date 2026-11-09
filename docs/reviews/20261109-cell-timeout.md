@@ -355,11 +355,13 @@ all fixed, each with the red run recorded above). The audit's round-2 review of 
 one finding (item 3, the position-dependent acceptance of an unknown line), fixed above; the audit
 also asked that the long acceptance runs be tied to a head, which the evidence index now does.
 
-**Which head the long runs belong to.** The logs in `docs/reviews/20261109-cell-timeout-logs/` were
-recorded at `42a90be`, the code head at the time; the commits that added them (`e4ef8ef`,
-`c9b5a60`) are docs-only, and the later review fixes touch the parent's protocol handling and the
-reader, not the timed path, the reference math or the CSV columns. The logs themselves record no
-head, so the index says so per file rather than implying they measure the current head.
+**Which head the long runs belong to.** The acceptance and profile logs in
+`docs/reviews/20261109-cell-timeout-logs/` were recorded at `42a90be`, the code head at the time;
+the commits that added them (`e4ef8ef`, `c9b5a60`) are docs-only, and the later review fixes touch
+the parent's protocol handling and the child's stdout reader, not the timed path, the reference math
+or the CSV columns. Those runs have not been repeated at the review-fix head and nothing here claims
+they were; the index says which head each file belongs to. `cargo-test.log` is the exception: it was
+re-run at `c3ce585` and names that head in its first line.
 
 ## What this does not change
 
@@ -385,8 +387,8 @@ cargo build --locked          # Finished, 0 errors
 cargo test --locked           # 39 unit passed (1 ignored) + 25 child-process tests passed
 ```
 
-`cargo-test.log` holds the first command's run at `42a90be`, the historical 15-child-test version;
-the counts above are the current head's. CI's `harness` job (#60) runs `cargo check -p fbench --locked`
+`cargo-test.log` holds the test run at `c3ce585` (the head is in the file's first line) -- 39 unit
+passed, 1 ignored, 25 child-process tests. CI's `harness` job (#60) runs `cargo check -p fbench --locked`
 and `cargo test -p fbench --locked` against the committed lock (no `--bins`, so
 `fbench/tests/child_cells.rs` runs too), so the test result is a local run; the merge gate is the
 `harness` job being green on this PR head.

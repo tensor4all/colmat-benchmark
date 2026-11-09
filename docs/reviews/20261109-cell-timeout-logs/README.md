@@ -3,15 +3,16 @@
 Every file here was produced by a command in that note, on the host it names (Apple M5 Max,
 macOS 26.7.2, rustc 1.96.0, the registry arm). Nothing here is a campaign measurement.
 
-**Which head each file belongs to.** The runs below were recorded at **`42a90be`**, the code head at
-the time; the commits that added these files (`e4ef8ef`, `c9b5a60`) are documentation only, and the
-later review fixes (parent protocol handling and the child's stdout reader) do not touch the timed
-path, the reference math or the CSV columns. None of these files names a head itself, so it is said
-here once, per file, instead of being implied: they are **not** measurements of the review-fix head.
+**Which head each file belongs to.** The acceptance and profile runs below were recorded at
+**`42a90be`**, the code head at the time; the commits that added them (`e4ef8ef`, `c9b5a60`) are
+documentation only, and the later review fixes (parent protocol handling and the child's stdout
+reader) do not touch the timed path, the reference math or the CSV columns. Those files do not name
+a head themselves, so it is said per file below: they are **not** measurements of the review-fix
+head. `cargo-test.log` is the exception -- it was re-run at the head in its own first line.
 
 | file | command |
 |---|---|
-| `cargo-test.log` | (head `42a90be`) `cargo test --locked -- --test-threads=1`; 15 child-process tests, the count before the review fixes |
+| `cargo-test.log` | (head `c3ce585`, recorded in the file's first line) `cargo test --locked -- --test-threads=1`: 39 unit passed (1 ignored) + 25 child-process tests. Replaces the `42a90be` version of this file, which had 15 child-process tests |
 | `reference-math-probe.txt` | (head `42a90be`) `cargo test --release --locked reference_math_cost -- --ignored --nocapture`, three rounds, then the medians |
 | `cut-run.log`, `cut-run.csv` | (head `42a90be`) `fbench run --threads 1 --family svd_thin --dtype f64 --rows faer-fork --n 512,1024 --reps 1 --prime-ms 0 --cell-timeout 1 --csv cut-run.csv` |
 | `kill-before.log` | the same run, `--n 512,4096 --cell-timeout 0`, built at `ef4bf4e`, `SIGKILL` after 15 s: no CSV was written at all, so there is none here |
