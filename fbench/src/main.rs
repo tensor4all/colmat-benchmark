@@ -616,6 +616,13 @@ fn args_from_env(argv: &[String]) -> Result<Args, String> {
 #[derive(Clone, Debug)]
 struct CellSpec {
     id: u64,
+    /// First variant this child runs (`0` unless the parent respawns after a kill).
+    from: usize,
+    /// How many variants the parent expects in total, known before construction.
+    n: usize,
+    /// The parent's pid: the child exits immediately if it is not its parent, and never leaves an
+    /// orphan when the parent dies.
+    parent_pid: u32,
     run: bool,
     row: String,
     family: String,
@@ -632,8 +639,11 @@ impl CellSpec {
     fn encode(&self) -> String {
         let k = self.case.k.map(|k| k.to_string()).unwrap_or_default();
         format!(
-            "id={};run={};row={};family={};dtype={};order={};m={};n={};k={};batch={};threads={};prime_ms={};reps={};limit_s={}",
+            "id={};from={};variants={};parent_pid={};run={};row={};family={};dtype={};order={};m={};column={};k={};batch={};threads={};prime_ms={};reps={};limit_s={}",
             self.id,
+            self.from,
+            self.n,
+            self.parent_pid,
             self.run as u8,
             self.row,
             self.family,
@@ -679,6 +689,9 @@ impl CellSpec {
         };
         Ok(CellSpec {
             id: number("id")?,
+            from: number("from")? as usize,
+            n: number("variants")? as usize,
+            parent_pid: number("parent_pid")? as u32,
             run: number("run")? != 0,
             row: get("row").ok_or("cell spec has no row")?.to_owned(),
             family: get("family").ok_or("cell spec has no family")?.to_owned(),
@@ -686,7 +699,7 @@ impl CellSpec {
             order,
             case: Case {
                 m: number("m")? as usize,
-                n: number("n")? as usize,
+                n: number("column")? as usize,
                 k,
                 batch: number("batch")? as usize,
             },
@@ -703,21 +716,24 @@ impl CellSpec {
 /// spending the measurement budget with nobody reading it. The parent's pid is checked on a
 /// watchdog thread because `getppid` changes when the process is reparented.
 #[cfg(unix)]
-fn watch_parent() {
+fn watch_parent(parent_pid: u32) {
     extern "C" {
         fn getppid() -> std::os::raw::c_int;
     }
-    let parent = unsafe { getppid() };
+    let expected = parent_pid as std::os::raw::c_int;
+    if unsafe { getppid() } != expected {
+        std::process::exit(137);
+    }
     std::thread::spawn(move || loop {
         std::thread::sleep(Duration::from_millis(500));
-        if unsafe { getppid() } != parent {
+        if unsafe { getppid() } != expected {
             std::process::exit(137);
         }
     });
 }
 
 #[cfg(not(unix))]
-fn watch_parent() {}
+fn watch_parent(_parent_pid: u32) {}
 
 fn child_main(spec_text: &str) -> ExitCode {
     let spec = match CellSpec::parse(spec_text) {
@@ -727,7 +743,7 @@ fn child_main(spec_text: &str) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    watch_parent();
+    watch_parent(spec.parent_pid);
     if let Err(e) = configure_threads(spec.threads) {
         eprintln!("{e}");
         return ExitCode::from(2);
@@ -749,13 +765,16 @@ fn child_main(spec_text: &str) -> ExitCode {
     };
     println!("COUNT\t{}", ops.len());
     let _ = std::io::stdout().flush();
+    if construction_cut {
+        println!(
+            "RESULT\t{}\ttimeout\ttimeout {}\t\t\t",
+            spec.from, spec.limit_s
+        );
+        let _ = std::io::stdout().flush();
+        return ExitCode::SUCCESS;
+    }
     for (index, mut op) in ops.into_iter().enumerate() {
-        if construction_cut {
-            println!(
-                "RESULT\t{index}\ttimeout\ttimeout {}\t\t\t",
-                spec.limit_s
-            );
-            let _ = std::io::stdout().flush();
+        if index < spec.from {
             continue;
         }
         let cell_start = Instant::now();
@@ -841,39 +860,45 @@ fn parse_result(fields: &[&str]) -> Result<(usize, ChildResult), String> {
 /// the child when the running variant's deadline passes. A killed child is `timeout`, `CELL done
 /// ... cut=timeout` closes it, and the next variant starts a new deadline. Cooperative polls stay
 /// in the child as an early-exit optimisation; the guarantee is here.
-#[allow(clippy::too_many_arguments)]
-fn run_build_in_child(
-    args: &Args,
-    csv: &mut Csv,
-    threads: usize,
-    row: &str,
-    dtype: &Dtype,
-    family: &str,
-    case: Case,
-    order: Order,
-    run: bool,
-    limit: Option<Duration>,
-    all_ok: &mut bool,
-) -> Result<(), String> {
-    use std::sync::mpsc;
-    use std::sync::atomic::{AtomicU64, Ordering};
+/// How many rows one `ops_for` build produces, known without building. The parent needs it before
+/// construction: a build cut during construction must still leave one terminal row per variant.
+fn variant_count(row: &str, family: &str) -> usize {
+    // The fake child used by the transition tests cannot build an `Op`; the parent's variant count
+    // is overridden for it. Production never sets either variable.
+    if std::env::var_os("FBENCH_CELL_CHILD").is_some() {
+        if let Some(n) = std::env::var("FBENCH_TEST_VARIANTS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+        {
+            return n;
+        }
+    }
+    if !row.starts_with("faer-") {
+        return 1;
+    }
+    match family {
+        "lu" | "full_piv_lu" | "cholesky" | "solve" | "svd_values" | "svd_thin" | "eigh"
+        | "householder_apply" => 2,
+        _ => 1,
+    }
+}
 
-    static NEXT_CELL: AtomicU64 = AtomicU64::new(0);
-    let id = NEXT_CELL.fetch_add(1, Ordering::Relaxed) + 1;
-    let spec = CellSpec {
-        id,
-        run,
-        row: row.to_owned(),
-        family: family.to_owned(),
-        dtype: *dtype,
-        order,
-        case,
-        threads,
-        prime_ms: args.prime_ms,
-        reps: args.reps,
-        limit_s: args.cell_timeout,
-    };
-    let exe = std::env::current_exe().map_err(|e| format!("cannot find this binary: {e}"))?;
+fn unix_millis() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0)
+}
+
+struct CellChild {
+    child: std::process::Child,
+    pid: u32,
+    rx: std::sync::mpsc::Receiver<String>,
+    reader: std::thread::JoinHandle<()>,
+}
+
+fn spawn_cell(exe: &std::path::Path, spec: &CellSpec) -> Result<CellChild, String> {
+    use std::sync::mpsc;
     let mut child = Command::new(exe)
         .arg("--cell-spec")
         .arg(spec.encode())
@@ -893,32 +918,94 @@ fn run_build_in_child(
             }
         }
     });
+    Ok(CellChild {
+        child,
+        pid,
+        rx,
+        reader,
+    })
+}
 
-    let label = |tail: String| {
-        heartbeat("build", row, family, dtype, order, case, tail);
-    };
-    label(format!(" id={id} pid={pid}"));
+enum Wake {
+    Line(String),
+    Timeout,
+    Closed,
+}
 
-    let mut count: Option<usize> = None;
-    let mut construction = Duration::ZERO;
-    let mut index = 0usize;
-    let mut variant_start = Instant::now();
-    let mut deadline = variant_deadline(variant_start, limit, construction);
-    let mut emitted = 0usize;
-    let mut skipped: Option<String> = None;
-    let mut killed = false;
+fn wait_line(rx: &std::sync::mpsc::Receiver<String>, deadline: Option<Instant>) -> Wake {
+    use std::sync::mpsc::RecvTimeoutError;
+    match deadline {
+        Some(deadline) => {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            match rx.recv_timeout(remaining) {
+                Ok(line) => Wake::Line(line),
+                Err(RecvTimeoutError::Timeout) => Wake::Timeout,
+                Err(RecvTimeoutError::Disconnected) => Wake::Closed,
+            }
+        }
+        None => match rx.recv() {
+            Ok(line) => Wake::Line(line),
+            Err(_) => Wake::Closed,
+        },
+    }
+}
 
-    heartbeat(
-        "start",
-        row,
-        family,
-        dtype,
+/// Run one build in a child process, one terminal row per variant.
+///
+/// Invariant: each variant gets exactly one `CELL start`, exactly one terminal row (`ok`,
+/// `timeout`/`cut=timeout`, or `failed`) and one `CELL done`. A killed variant is the only one cut:
+/// the parent respawns a child for the remaining variants (`from=`), so they actually run. The
+/// variant count is fixed before construction (`variant_count`), so a construction kill still
+/// leaves a row for every variant it did not reach.
+#[allow(clippy::too_many_arguments)]
+fn run_build_in_child(
+    args: &Args,
+    csv: &mut Csv,
+    threads: usize,
+    row: &str,
+    dtype: &Dtype,
+    family: &str,
+    case: Case,
+    order: Order,
+    run: bool,
+    limit: Option<Duration>,
+    all_ok: &mut bool,
+) -> Result<(), String> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_CELL: AtomicU64 = AtomicU64::new(0);
+    let id = NEXT_CELL.fetch_add(1, Ordering::Relaxed) + 1;
+    let n = variant_count(row, family);
+    let parent_pid = std::process::id();
+    let exe = std::env::var_os("FBENCH_CELL_CHILD")
+        .map(std::path::PathBuf::from)
+        .map(Ok)
+        .unwrap_or_else(std::env::current_exe)
+        .map_err(|e| format!("cannot find this binary: {e}"))?;
+    let spec_at = |from: usize| CellSpec {
+        id,
+        from,
+        n,
+        parent_pid,
+        run,
+        row: row.to_owned(),
+        family: family.to_owned(),
+        dtype: *dtype,
         order,
         case,
-        format!(" id={id} variant=1"),
-    );
+        threads,
+        prime_ms: args.prime_ms,
+        reps: args.reps,
+        limit_s: args.cell_timeout,
+    };
 
-    let mut finish = |csv: &mut Csv, cell: Cell, index: usize, n: usize| {
+    let mut next = 0usize;
+    let mut current: Option<CellChild> = None;
+    let mut spawn_time = Instant::now();
+    let mut construction = Duration::ZERO;
+    let mut deadline = variant_deadline(spawn_time, limit, construction);
+
+    let mut finish = |csv: &mut Csv, cell: Cell, index: usize| {
         heartbeat(
             "done",
             row,
@@ -955,30 +1042,99 @@ fn run_build_in_child(
             *all_ok = false;
         }
         emit(csv, args, threads, dtype, family, case, order, row, cell);
-        let _ = n;
-        let _ = index;
+    };
+    let start = |index: usize| {
+        heartbeat(
+            "start",
+            row,
+            family,
+            dtype,
+            order,
+            case,
+            format!(" id={id} variant={}/{n}", index + 1),
+        );
     };
 
-    loop {
-        let received = match deadline {
-            Some(deadline) => {
-                let remaining = deadline.saturating_duration_since(Instant::now());
-                match rx.recv_timeout(remaining) {
-                    Ok(line) => Ok(line),
-                    Err(mpsc::RecvTimeoutError::Timeout) => Err(true),
-                    Err(mpsc::RecvTimeoutError::Disconnected) => Err(false),
-                }
+    if n == 0 {
+        return Ok(());
+    }
+    start(0);
+
+    while next < n {
+        let mut handle = match current.take() {
+            Some(handle) => handle,
+            None => {
+                spawn_time = Instant::now();
+                construction = Duration::ZERO;
+                let spec = spec_at(next);
+                let handle = spawn_cell(&exe, &spec)?;
+                heartbeat(
+                    "build",
+                    row,
+                    family,
+                    dtype,
+                    order,
+                    case,
+                    format!(" id={id} pid={} from={}", handle.pid, next + 1),
+                );
+                deadline = variant_deadline(spawn_time, limit, construction);
+                handle
             }
-            None => rx.recv().map_err(|_| false),
         };
-        let line = match received {
-            Ok(line) => line,
-            Err(true) => {
-                // The variant's deadline passed: kill the child, close its row as a cut, and give
-                // every variant it would have run a cut row of its own.
-                let _ = child.kill();
-                let _ = child.wait();
-                killed = true;
+
+        match wait_line(&handle.rx, deadline) {
+            Wake::Line(line) => {
+                let fields: Vec<&str> = line.split('\t').collect();
+                match fields.first().copied() {
+                    Some("COUNT") => {
+                        construction = spawn_time.elapsed();
+                    }
+                    Some("SKIP") => {
+                        let note = fields.get(1).unwrap_or(&"").to_string();
+                        finish(csv, Cell::skipped(note), 0);
+                        let _ = handle.child.wait();
+                        drop(handle.reader);
+                        return Ok(());
+                    }
+                    Some("RESULT") => {
+                        let (result_index, result) = parse_result(&fields)?;
+                        if result_index != next {
+                            return Err(format!(
+                                "the cell child reported variant {} while {next} was running",
+                                result_index + 1
+                            ));
+                        }
+                        let cell = Cell {
+                            status: result.status,
+                            note: result.note,
+                            samples: result.samples,
+                            timed_ms: result.timed_ms,
+                            check_ms: result.check_ms,
+                        };
+                        finish(csv, cell, next);
+                        next += 1;
+                        if next < n {
+                            start(next);
+                            deadline = variant_deadline(Instant::now(), limit, construction);
+                        } else {
+                            deadline = None;
+                        }
+                    }
+                    _ => {}
+                }
+                current = Some(handle);
+            }
+            Wake::Timeout => {
+                let killed_at = unix_millis();
+                let pid = handle.pid;
+                let _ = handle.child.kill();
+                let status = handle
+                    .child
+                    .wait()
+                    .map(|status| status.to_string())
+                    .unwrap_or_else(|e| format!("wait error: {e}"));
+                let reaped_at = unix_millis();
+                drop(handle.reader);
                 heartbeat(
                     "kill",
                     row,
@@ -986,119 +1142,53 @@ fn run_build_in_child(
                     dtype,
                     order,
                     case,
-                    format!(" id={id} pid={pid} variant={} signal=SIGKILL", index + 1),
+                    format!(
+                        " id={id} pid={pid} variant={variant}/{n} signal=SIGKILL at_ms={killed_at} reaped_at={reaped_at} status={status}",
+                        variant = next + 1
+                    ),
                 );
-                let n = count.unwrap_or(index + 1);
-                while index < n {
-                    // Variants the child never reached still get their own row and their own
-                    // `CELL start`, so the log has one start and one done per cell.
-                    if index > 0 {
-                        heartbeat(
-                            "start",
-                            row,
-                            family,
-                            dtype,
-                            order,
-                            case,
-                            format!(" id={id} variant={}/{n}", index + 1),
-                        );
-                    }
-                    let cell = Cell::cut(args.cell_timeout);
-                    finish(csv, cell, index, n);
-                    index += 1;
+                finish(csv, Cell::cut(args.cell_timeout), next);
+                next += 1;
+                current = None;
+                if next < n {
+                    start(next);
                 }
-                break;
             }
-            Err(false) => break,
-        };
-        let fields: Vec<&str> = line.split('\t').collect();
-        match fields.first().copied() {
-            Some("COUNT") => {
-                count = fields.get(1).and_then(|n| n.parse().ok());
-                construction = variant_start.elapsed();
-            }
-            Some("SKIP") => {
-                skipped = Some(fields.get(1).unwrap_or(&"").to_string());
-                break;
-            }
-            Some("RESULT") => {
-                let (result_index, result) = parse_result(&fields)?;
-                let n = count.unwrap_or(result_index + 1);
+            Wake::Closed => {
+                let status = handle
+                    .child
+                    .wait()
+                    .map_err(|e| format!("waiting for the cell child: {e}"))?;
+                drop(handle.reader);
+                heartbeat(
+                    "exit",
+                    row,
+                    family,
+                    dtype,
+                    order,
+                    case,
+                    format!(" id={id} pid={} status={status} at_ms={}", handle.pid, unix_millis()),
+                );
                 let cell = Cell {
-                    status: result.status,
-                    note: result.note,
-                    samples: result.samples,
-                    timed_ms: result.timed_ms,
-                    check_ms: result.check_ms,
+                    status: "failed",
+                    note: format!("the cell child exited with {status} before its result"),
+                    samples: Vec::new(),
+                    timed_ms: None,
+                    check_ms: None,
                 };
-                finish(csv, cell, result_index, n);
-                emitted += 1;
-                index = result_index + 1;
-                if index < n {
-                    variant_start = Instant::now();
-                    deadline = variant_deadline(variant_start, limit, construction);
-                    heartbeat(
-                        "start",
-                        row,
-                        family,
-                        dtype,
-                        order,
-                        case,
-                        format!(" id={id} variant={}/{n}", index + 1),
-                    );
-                } else {
-                    // Nothing left to run: stop enforcing a deadline so a slow child exit (flush,
-                    // destructors) is not recorded as a cut cell.
-                    deadline = None;
+                finish(csv, cell, next);
+                next += 1;
+                current = None;
+                if next < n {
+                    start(next);
                 }
             }
-            _ => {}
         }
     }
 
-    let status = child.wait().map_err(|e| format!("waiting for the cell child: {e}"))?;
-    let _ = reader.join();
-    if let Some(note) = skipped {
-        if !run {
-            println!(
-                "skip {row} {} {} {} {} {note}",
-                family,
-                dtype.label(),
-                order.label(),
-                case.shape()
-            );
-        }
-        emit(
-            csv,
-            args,
-            threads,
-            dtype,
-            family,
-            case,
-            order,
-            row,
-            Cell::skipped(note),
-        );
-        return Ok(());
-    }
-    if !killed && !status.success() && emitted == 0 {
-        return Err(format!(
-            "the cell child exited with {status} and reported no result"
-        ));
-    }
-    // A child that died without reporting its remaining variants (OOM, a signal) still has to
-    // leave rows: close them as failures, not as holes.
-    let n = count.unwrap_or(emitted.max(index));
-    while index < n {
-        let cell = Cell {
-            status: "failed",
-            note: format!("the cell child exited with {status} before its result"),
-            samples: Vec::new(),
-            timed_ms: None,
-            check_ms: None,
-        };
-        finish(csv, cell, index, n);
-        index += 1;
+    if let Some(mut handle) = current {
+        let _ = handle.child.wait();
+        drop(handle.reader);
     }
     Ok(())
 }

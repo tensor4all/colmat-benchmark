@@ -85,7 +85,10 @@ fn a_killed_cell_leaves_a_row_and_the_next_cell_runs() {
                 .find_map(|field| field.strip_prefix("pid="))
         })
         .collect();
-    assert_eq!(pids.len(), 2, "one kill per faer-fork order: {stderr}");
+    assert!(
+        pids.len() >= 2,
+        "each cut variant is killed and respawned, so at least one kill per order: {stderr}"
+    );
     for pid in pids {
         let alive = Command::new("ps")
             .args(["-p", pid, "-o", "pid="])
@@ -98,14 +101,14 @@ fn a_killed_cell_leaves_a_row_and_the_next_cell_runs() {
         );
     }
 
-    // The second build (the F-order cells) ran after the first was killed.
-    assert_eq!(count_lines(&stderr, "CELL build"), 2, "{stderr}");
+    // The second order ran after the first was killed. A cut variant is respawned (`from=`), so
+    // there can be more than one build line per order.
     assert!(
-        stderr
-            .lines()
-            .filter(|l| l.starts_with("CELL start"))
-            .count()
-            >= 4,
+        count_lines(&stderr, "CELL build") >= 2,
+        "the second order must run: {stderr}"
+    );
+    assert!(
+        stderr.lines().any(|l| l.starts_with("CELL start") && l.contains("id=2")),
         "the run continued past the kill: {stderr}"
     );
 }
@@ -133,5 +136,151 @@ fn a_finished_run_pairs_every_start_with_a_done() {
     assert!(
         starts.iter().all(|l| l.contains("variant=")),
         "each start is identifiable: {stderr}"
+    );
+}
+
+/// The terminal-row table: one `CELL start`, one terminal row and one `CELL done` per variant, for
+/// every event and position. The table lives in `docs/reviews/20261110-cell-timeout-invariant.md`;
+/// the row-count assert makes a new event (or a removed one) fail until the table is updated.
+#[test]
+fn every_cell_event_leaves_exactly_one_terminal_row() {
+    use std::collections::BTreeMap;
+
+    let table = include_str!("../../docs/reviews/20261110-cell-timeout-invariant.md");
+    let mut cases: Vec<(String, usize, Vec<String>)> = Vec::new();
+    for line in table.lines() {
+        let cells: Vec<&str> = line.trim().trim_matches('|').split('|').map(str::trim).collect();
+        if cells.len() != 3 {
+            continue;
+        }
+        let event = cells[0];
+        let at = match cells[1] {
+            "first" => 0,
+            "middle" => 1,
+            "last" => 2,
+            "all" => 0,
+            _ => continue,
+        };
+        let statuses: Vec<String> = cells[2].split(',').map(|s| s.trim().to_owned()).collect();
+        if statuses.is_empty() {
+            continue;
+        }
+        cases.push((event.to_owned(), at, statuses));
+    }
+    assert_eq!(
+        cases.len(),
+        8,
+        "the event table changed: update docs/reviews/20261110-cell-timeout-invariant.md and this test"
+    );
+
+    let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_child.sh");
+    for (event, at, expected) in cases {
+        assert!(
+            matches!(event.as_str(), "fast" | "cut" | "error" | "skip"),
+            "the event table has an event this test does not implement: {event}"
+        );
+        let name = format!("table-{event}-{at}");
+        let csv = csv_path(&name);
+        let output = Command::new(env!("CARGO_BIN_EXE_fbench"))
+            .args([
+                "run", "--threads", "1", "--n", "8", "--family", "gemm", "--dtype", "f64",
+                "--rows", "faer-fork", "--reps", "1", "--prime-ms", "0", "--cell-timeout", "1",
+                "--csv",
+            ])
+            .arg(&csv)
+            .env("FBENCH_CELL_CHILD", script)
+            .env("FBENCH_TEST_VARIANTS", "3")
+            .env("FAKE_MODE", &event)
+            .env("FAKE_AT", at.to_string())
+            .env("FAKE_N", "3")
+            .output()
+            .expect("run fbench with the fake child");
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        let body = std::fs::read_to_string(&csv).unwrap_or_default();
+        std::fs::remove_file(&csv).ok();
+
+        let mut starts: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+        let mut dones: BTreeMap<String, Vec<(usize, String)>> = BTreeMap::new();
+        for line in stderr.lines() {
+            let id = line
+                .split_whitespace()
+                .find_map(|f| f.strip_prefix("id="))
+                .unwrap_or("?")
+                .to_owned();
+            if let Some(variant) = line.split_whitespace().find_map(|f| f.strip_prefix("variant=")) {
+                let k: usize = variant
+                    .split('/')
+                    .next()
+                    .unwrap()
+                    .parse()
+                    .unwrap_or(0);
+                if line.starts_with("CELL start") {
+                    starts.entry(id.clone()).or_default().push(k);
+                } else if line.starts_with("CELL done") {
+                    let status = line
+                        .split_whitespace()
+                        .find_map(|f| f.strip_prefix("status="))
+                        .unwrap_or("?")
+                        .to_owned();
+                    dones.entry(id.clone()).or_default().push((k, status));
+                }
+            }
+        }
+
+        // Two orders, one build each.
+        assert_eq!(starts.len(), 2, "{name}: {stderr}");
+        for (id, variants) in &starts {
+            let per_build = if event == "skip" { 1 } else { 3 };
+            assert_eq!(
+                variants.len(),
+                per_build,
+                "{name} id={id}: one start per variant: {stderr}"
+            );
+            let mut sorted = variants.clone();
+            sorted.sort_unstable();
+            let want: Vec<usize> = (1..=per_build).collect();
+            assert_eq!(sorted, want, "{name} id={id}: starts are {variants:?}");
+        }
+        for (id, variants) in &dones {
+            let per_build = if event == "skip" { 1 } else { 3 };
+            assert_eq!(
+                variants.len(),
+                per_build,
+                "{name} id={id}: one done per variant: {stderr}"
+            );
+            let mut sorted: Vec<usize> = variants.iter().map(|(k, _)| *k).collect();
+            sorted.sort_unstable();
+            let want: Vec<usize> = (1..=per_build).collect();
+            assert_eq!(sorted, want, "{name} id={id}: dones are {variants:?}");
+        }
+
+        let rows: Vec<&str> = body.lines().skip(1).collect();
+        let per_build = if event == "skip" { 1 } else { expected.len() };
+        assert_eq!(rows.len(), per_build * 2, "{name}: {body}");
+        for (build, chunk) in rows.chunks(per_build).enumerate() {
+            let got: Vec<String> = chunk
+                .iter()
+                .map(|row| row.split(',').nth(12).unwrap_or("?").to_owned())
+                .collect();
+            assert_eq!(got, expected, "{name}: build {build} statuses: {body}");
+        }
+    }
+}
+
+/// The child trusts the parent pid it was given, not a `getppid()` taken after it started: if the
+/// parent died in between, `getppid()` returns 1 and the child would treat the orphan state as
+/// normal. A spec naming a pid that is not the parent must exit before doing any work.
+#[test]
+fn the_child_exits_when_the_given_parent_is_not_its_parent() {
+    let spec = "id=1;from=0;variants=1;parent_pid=1;run=1;row=faer-fork;family=gemm;dtype=f64;order=c;m=8;column=8;k=8;batch=1;threads=1;prime_ms=0;reps=1;limit_s=0";
+    let output = Command::new(env!("CARGO_BIN_EXE_fbench"))
+        .args(["--cell-spec", spec])
+        .output()
+        .expect("run the child");
+    assert_eq!(
+        output.status.code(),
+        Some(137),
+        "the child must exit when its given parent is not its parent: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
 }

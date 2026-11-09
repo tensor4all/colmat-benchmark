@@ -14,10 +14,18 @@ This note covers the PR that follows #60 (`3b58258`). Evidence logs are in
   `DEFAULT_CELL_TIMEOUT_S = 3600`, `0` disables. A cell is one `Op`, one CSV row.
 * Each build runs in a **child process** (`--cell-spec`, hidden): the parent spawns the child,
   reads one `RESULT` per variant, and **kills the child (`SIGKILL`) when that variant's deadline
-  passes**. A killed variant is a `timeout` row; the following variant gets its own deadline, and
-  the next build starts normally. This is the guarantee: it does not depend on the harness finding
-  every library call. The child also watches its parent (500 ms `getppid` check) and exits if the
-  parent itself dies, so an external `SIGKILL` of the parent does not leave an orphan.
+  passes**. The killed variant is the **only** one cut: the parent respawns a child with `from=`
+  for the remaining variants, which then run normally. This is the guarantee: it does not depend on
+  the harness finding every library call.
+* The variant count is fixed by the parent **before construction** (`variant_count`), so a build
+  killed while it is still building leaves a terminal row for every variant: the building one is
+  cut, the rest are respawned and run.
+* The child is given the parent's pid (`parent_pid=`), checks `getppid()` against it **at startup**
+  and on a 500 ms watchdog, and exits immediately if it is not that parent. An external `SIGKILL`
+  of the parent therefore leaves no orphan; a `getppid()` read after the parent already died (which
+  returns 1) is never mistaken for a live parent.
+* One `CELL start` and one terminal row per variant; the kill path never re-emits a start. The
+  invariant and its transition table are in `docs/reviews/20261110-cell-timeout-invariant.md`.
 * The recorder's interface does not change: `--locked`/`--no-verify`/`--publish` and the `--csv`
   path stay where they were. The CSV is still written by the parent, at the same path, and only
   the hidden `--cell-spec` argument exists between parent and child.
@@ -80,17 +88,22 @@ Red, per item, with the fix removed (`docs/reviews/20261109-cell-timeout-logs/`)
 | `red-1c-per-cell-deadline.log` | the construction time is no longer charged per variant | `two_variants_do_not_share_one_deadline` FAILED |
 | `red-2c-compound-entry.log` | the high-level `qr` / `householder_apply` check polls deleted | both tests FAILED |
 | `red-3d-overflow.log` | an unrepresentable limit returns `None` again | `an_unrepresentable_limit_cuts_the_cell` FAILED |
-| `red-2d-child-kill.log` | the parent waits for the child without a deadline (no kill) | `a_killed_cell_leaves_a_row_and_the_next_cell_runs` never returns / the cell is not cut |
+| `red-2d-child-kill.log` | the parent waits for the child without a deadline (no kill) | `a_killed_cell_leaves_a_row_and_the_next_cell_runs` FAILED |
+| `red-1d-kill-remaining.log` | a kill cuts every remaining variant (old) | the transition table FAILED (a cut variant is followed by `ok`, not by cut rows) |
+| `red-2e-construction-count.log` | the variant count wrongly fixed at 1 | the transition table FAILED (variants 2/3 lose their rows) |
+| `red-3e-double-start.log` | the spawn path emits a second start | the transition table FAILED (one start per variant) |
+| `red-4e-parent-pid.log` | the child records `getppid()` after it starts instead of the passed pid | `the_child_exits_when_the_given_parent_is_not_its_parent` FAILED |
 
 Green: `cargo test --locked` → `test result: ok. 37 passed; 0 failed; 1 ignored` (unit) and
-`test result: ok. 2 passed` (`fbench/tests/child_cells.rs`: kill/pairing, plus a finished run).
+`test result: ok. 4 passed` (`fbench/tests/child_cells.rs`: kill/pairing, finished run, the 8-row
+transition table, and the wrong-parent pid check).
 
 End to end, with the parent enforcing the limit:
 * `long-cell` (`--n 4096 --batch 2`, limit 3600 s): four cells, each 33.8-34.2 s timed plus
   153-155 s check, all `ok`; total 12m31s; both child pids are gone from `ps` afterwards.
-* `long-cut` (`--n 4096 --batch 6`, limit 300 s): the first cell was killed at 300 s
-  (`CELL kill ... pid=21023`, `CELL done ... cut=timeout`, two `timeout 300` rows); the next build
-  started; pid 21023 and the next child were gone from `ps`.
+* `cut-run` (`--n 512,1024 --cell-timeout 1`): 512 runs `ok`, 1024 is cut; 8 starts / 8 dones.
+  The kill line records `pid`, `variant`, `at_ms` and `reaped_at`, so the `ps` check has its time
+  and pid in the log (the integration test also runs `ps -p` and asserts it is gone).
 (`cargo-test.log`). The ignored one is the timing probe below.
 
 The clock is cooperative: a library call already in progress cannot be interrupted. What the
@@ -187,7 +200,7 @@ at all, so the run directory could not distinguish "not measured" from "hung".
   parent with `CELL done ... status=timeout cut=timeout`, so every start has a done; `cut-run.log`
   has 8 starts and 8 dones. If the *parent* is killed externally there is no done for the variant
   that was running -- the parent is the writer -- and `kill-after.log` shows that shape (5 starts,
-  4 dones); its child exits via the watchdog.
+  4 dones); its child exits via the parent-pid watchdog.
 * A cut cell is a row with the existing `status = timeout` value; no column was added for the cut.
   This PR *did* append `timed_ms` and `check_ms`, so rows are 20 fields instead of 18: readers that
   require exactly 18 fields reject them. The repository's readers (`scripts/report_run.py`,
