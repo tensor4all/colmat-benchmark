@@ -112,8 +112,9 @@ child, finished run, the 9-row transition table, the wrong-parent pid check, and
 hang-after-last-result reap).
 
 End to end, with the parent enforcing the limit:
-* `long-cell` (`--n 4096 --batch 2`, limit 3600 s): four cells, each 33.8-34.2 s timed plus
-  153-155 s check, all `ok`; total 12m31s; both child pids are gone from `ps` afterwards.
+* `long-cell` (`--n 4096 --batch 2`, limit 3600 s), regenerated at head `35bfe87`: four cells,
+  each 33.8-35.5 s timed plus 151.3-155.3 s check, all `ok`; total 12m28.7s; child pids 13226 and
+  8092 are gone from `ps` afterwards (rc=1).
 * `cut-run` (`--n 512,1024 --cell-timeout 1`): 512 runs `ok`, 1024 is cut; 8 starts / 8 dones.
 * The first-variant hard kill is deterministic: the fake child sleeps before reporting anything, so
   the parent's `SIGKILL` (not a slow real cell) is what the test requires. `hang first` is a table
@@ -232,8 +233,8 @@ Evidence (`docs/reviews/20261109-cell-timeout-logs/`):
 * `kill-before.log` (empty, no CSV at all) against `kill-after.log`: the same invocation
   (`--n 512,4096`, no limit) killed with `SIGKILL` 15 s in. Before this change the killed process
   left **no CSV and no log line**; now it leaves **4 finished rows on disk** (one per `n = 512`
-  variant) and 7 heartbeat lines (3 starts / 4 dones; the last line is `CELL start … 4096`, the cell
-  that was still running when the process died).
+  variant) and 5 starts / 4 dones (3 builds); the last line is `CELL start … 4096`, the cell that
+  was still running when the parent died. Its child pid 7770 was gone from `ps` 2 s later (rc=1).
 
 ## What this does not change
 
