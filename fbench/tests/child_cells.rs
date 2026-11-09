@@ -408,3 +408,43 @@ fn verify_reports_an_unsupported_family_as_skip_not_mismatch() {
     );
     assert_eq!(output.status.code(), Some(0), "a skip is not a failure");
 }
+
+/// A child that cannot be started closes the already-started variant with a `failed` row and a
+/// matching done, instead of exiting with a header-only CSV.
+#[test]
+fn a_child_that_cannot_start_closes_the_variant_with_a_failed_row() {
+    let csv = csv_path("spawn-failure");
+    let output = Command::new(env!("CARGO_BIN_EXE_fbench"))
+        .args([
+            "run", "--threads", "1", "--n", "8", "--family", "gemm", "--dtype", "f64",
+            "--rows", "faer-fork", "--reps", "1", "--prime-ms", "0", "--cell-timeout", "1",
+            "--csv",
+        ])
+        .arg(&csv)
+        .env("FBENCH_CELL_CHILD", "/nonexistent/fbench-child")
+        .output()
+        .expect("run fbench");
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    let body = std::fs::read_to_string(&csv).unwrap_or_default();
+    std::fs::remove_file(&csv).ok();
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a failed cell is a non-zero run, not a crash: {stderr}"
+    );
+    let rows: Vec<&str> = body.lines().skip(1).collect();
+    assert_eq!(rows.len(), 2, "one row per order: {body}");
+    for row in &rows {
+        let status = row.split(',').nth(12).unwrap_or("?");
+        assert_eq!(status, "failed", "{row}");
+    }
+    let starts = count_lines(&stderr, "CELL start");
+    let dones = count_lines(&stderr, "CELL done");
+    assert_eq!(starts, 2, "one start per order: {stderr}");
+    assert_eq!(dones, 2, "one done per order: {stderr}");
+    assert!(
+        stderr.contains("spawn-failed"),
+        "the spawn failure is logged: {stderr}"
+    );
+}

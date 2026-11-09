@@ -365,8 +365,14 @@ mod tests {
             |_| Ok(()),
             |_, _tk| Ok(()),
             |_| {
-                while !expired() {
+                // Bounded: if the clock stops expiring, the test fails within this bound instead of
+                // hanging the harness CI job. The elapsed assert below then sees `cut() == false`.
+                let started = Instant::now();
+                while !expired() && started.elapsed() < Duration::from_secs(5) {
                     std::thread::sleep(Duration::from_millis(5));
+                }
+                if !expired() {
+                    return Err("the clock never expired inside the test's 5 s bound".to_owned());
                 }
                 Err("residual infinite".to_owned())
             },

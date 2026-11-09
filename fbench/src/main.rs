@@ -1089,7 +1089,39 @@ fn run_build_in_child(
                 construction = Duration::ZERO;
                 completed_in_child = false;
                 let spec = spec_at(next);
-                let handle = spawn_cell(&exe, &spec)?;
+                let handle = match spawn_cell(&exe, &spec) {
+                    Ok(handle) => handle,
+                    Err(e) => {
+                        // A missing binary or process-resource exhaustion is a failure of this
+                        // cell, not a reason to leave the started variant without a terminal row.
+                        // Close it as `failed` and try the next variant (which may fail too).
+                        heartbeat(
+                            "spawn-failed",
+                            row,
+                            family,
+                            dtype,
+                            order,
+                            case,
+                            format!(" id={id} variant={}/{n} error={e}", next + 1),
+                        );
+                        finish(
+                            csv,
+                            Cell {
+                                status: "failed",
+                                note: format!("could not start the cell child: {e}"),
+                                samples: Vec::new(),
+                                timed_ms: None,
+                                check_ms: None,
+                            },
+                            next,
+                        );
+                        next += 1;
+                        if next < n {
+                            start(next);
+                        }
+                        continue;
+                    }
+                };
                 heartbeat(
                     "build",
                     row,

@@ -109,7 +109,7 @@ Red, per item, with the fix removed (`docs/reviews/20261109-cell-timeout-logs/`)
 | `red-2i-no-parent-deadline.log` | the parent does not arm a deadline (the test's 10 s bound fires) | the hard-kill test FAILED instead of hanging |
 
 Green: `cargo test --locked` → `test result: ok. 37 passed; 0 failed; 1 ignored` (unit) and
-`test result: ok. 5 passed` (`fbench/tests/child_cells.rs`: first-variant hard kill with the fake
+`test result: ok. 7 passed` (`fbench/tests/child_cells.rs`: first-variant hard kill with the fake
 child, finished run, the 9-row transition table, the wrong-parent pid check, and the
 hang-after-last-result reap).
 
@@ -258,7 +258,7 @@ Evidence (`docs/reviews/20261109-cell-timeout-logs/`):
 
 ```
 cargo build --locked          # Finished, 0 errors
-cargo test --locked           # 37 unit passed (1 ignored) + 6 child-process tests passed
+cargo test --locked           # 37 unit passed (1 ignored) + 7 child-process tests passed
 ```
 
 `cargo-test.log` holds the second. CI's `harness` job (#60) runs `cargo check -p fbench --locked`
