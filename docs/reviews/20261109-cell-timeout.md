@@ -24,11 +24,16 @@ This note covers the PR that follows #60 (`3b58258`). Evidence logs are in
   and on a 500 ms watchdog, and exits immediately if it is not that parent. An external `SIGKILL`
   of the parent therefore leaves no orphan; a `getppid()` read after the parent already died (which
   returns 1) is never mistaken for a live parent.
-* One `CELL start` and one terminal row per variant; the kill path never re-emits a start. A child
-  that reports a cooperative `timeout` and then exits (the construction-cut case) is **respawned**
-  for the next variant, not recorded as a failure of it. Every wait on a child is bounded:
-  `try_wait`, then `SIGKILL` and `wait`, including the child that has reported its last result, so a
-  hang after the last result cannot stall the run. The invariant and its transition table are in
+* One `CELL start` and one terminal row per variant; the kill path never re-emits a start. The only
+  exception to "a child exit is a failure" is the **cooperative construction cut**: a `timeout`
+  result followed by a **successful** exit. A crash after an `ok` result, or any exit with no
+  result, closes the pending variant as `failed`. A malformed `RESULT` or an unexpected variant
+  index takes the same failed-cell path and also reaps the child.
+* Every wait on a child is bounded: one `try_wait`, then `SIGKILL`, then a 5 s `try_wait` loop;
+  there is no blocking `wait()`. A child that cannot be killed inside the bound is **abandoned and
+  logged** (`reap timed out`), and its cell is recorded as failed/cut -- so the run does not stall,
+  but such a child can outlive the run when SIGKILL itself cannot stop it (uninterruptible I/O).
+  The invariant and its transition table are in
   `docs/reviews/20261110-cell-timeout-invariant.md`.
 * The recorder's interface does not change: `--locked`/`--no-verify`/`--publish` and the `--csv`
   path stay where they were. The CSV is still written by the parent, at the same path, and only
@@ -110,11 +115,14 @@ Red, per item, with the fix removed (`docs/reviews/20261109-cell-timeout-logs/`)
 | `red-1j-spawn-failure.log` | a spawn failure propagates with `?` | the spawn-failure test FAILED: exit 2, no row/done |
 | `red-2k-clock-bound.log` | `expired()` always false, with the test's 5 s bound | the clock test FAILED in 5.01 s (`cut` false) |
 | `red-2l-clock-unbounded.log` | the same with the bound removed | `timeout 12` exits 124: the test hangs |
+| `red-1k-crash-after-result.log` | the cooperative exception accepts any exit after a result | the crash-after-result test FAILED (variant 2 became `ok`) |
+| `red-2m-protocol-error.log` | a malformed result returns early instead of closing the cell | the malformed-result test FAILED (exit 2, no row) |
 
 Green: `cargo test --locked` → `test result: ok. 37 passed; 0 failed; 1 ignored` (unit) and
-`test result: ok. 7 passed` (`fbench/tests/child_cells.rs`: first-variant hard kill with the fake
-child, finished run, the 9-row transition table, the wrong-parent pid check, and the
-hang-after-last-result reap).
+`test result: ok. 9 passed` (`fbench/tests/child_cells.rs`: first-variant hard kill with the fake
+child, finished run, the 9-row transition table, the wrong-parent pid check, the
+hang-after-last-result reap, the spawn-failure row, a crash after a result, and a malformed child
+result).
 
 End to end, with the parent enforcing the limit:
 * `long-cell` (`--n 4096 --batch 2`, limit 3600 s), regenerated at head `34ff512`: four cells,
@@ -264,7 +272,7 @@ Evidence (`docs/reviews/20261109-cell-timeout-logs/`):
 
 ```
 cargo build --locked          # Finished, 0 errors
-cargo test --locked           # 37 unit passed (1 ignored) + 7 child-process tests passed
+cargo test --locked           # 39 unit passed (1 ignored) + 9 child-process tests passed
 ```
 
 `cargo-test.log` holds the second. CI's `harness` job (#60) runs `cargo check -p fbench --locked`
