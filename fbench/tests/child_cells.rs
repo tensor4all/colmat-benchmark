@@ -641,6 +641,49 @@ fn invalid_utf8_after_the_last_result_is_a_failed_row() {
     assert!(stderr.contains("extra-output"), "{stderr}");
 }
 
+/// A line the protocol does not define is broken output wherever it appears. It used to be dropped
+/// while a result was still pending, so whether the same line was accepted depended on its position:
+/// `garbage` before a valid `RESULT` was ignored, the same line after the last result was not.
+#[test]
+fn an_unknown_line_before_a_result_is_a_failed_row() {
+    let (stderr, csv, code) = run_fake("garbage-before", "garbage_before_result", 0, 3);
+    assert_eq!(code, 1, "an unknown line is a failed run: {stderr}");
+    let rows: Vec<&str> = csv.lines().skip(1).collect();
+    assert_eq!(rows.len(), 6, "two orders x three variants: {csv}");
+    for (build, chunk) in rows.chunks(3).enumerate() {
+        let statuses: Vec<&str> = chunk
+            .iter()
+            .map(|row| row.split(',').nth(12).unwrap_or("?"))
+            .collect();
+        assert_eq!(
+            statuses,
+            ["failed", "ok", "ok"],
+            "build {build}: the unknown line fails variant 1, the rest are respawned: {csv}"
+        );
+    }
+    // The failed variant is closed once, and the respawned child still covers variants 2 and 3.
+    assert_eq!(count_lines(&stderr, "CELL start"), 6, "{stderr}");
+    assert_eq!(count_lines(&stderr, "CELL done"), 6, "{stderr}");
+    assert!(stderr.contains("protocol-error"), "{stderr}");
+}
+
+/// A `SKIP` is not a licence to say anything else: output after it is broken output, so the row is
+/// `failed`, not `skipped`.
+#[test]
+fn output_after_a_skip_is_a_failed_row() {
+    let (stderr, csv, code) = run_fake("garbage-after-skip", "garbage_after_skip", 0, 1);
+    assert_eq!(code, 1, "output after a skip is a failed run: {stderr}");
+    let rows: Vec<&str> = csv.lines().skip(1).collect();
+    assert_eq!(rows.len(), 2, "one row per order: {csv}");
+    for row in &rows {
+        let status = row.split(',').nth(12).unwrap_or("?");
+        assert_eq!(status, "failed", "{row}");
+    }
+    assert_eq!(count_lines(&stderr, "CELL start"), 2, "{stderr}");
+    assert_eq!(count_lines(&stderr, "CELL done"), 2, "{stderr}");
+    assert!(stderr.contains("protocol-error"), "{stderr}");
+}
+
 /// Undecodable bytes before the last result are broken output too, not a line to skip: decoding
 /// them leniently would let a child that printed garbage then a valid `RESULT` pass.
 #[test]

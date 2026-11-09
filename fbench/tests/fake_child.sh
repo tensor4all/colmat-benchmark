@@ -56,6 +56,18 @@ if [ "$mode" = "bad_utf8_before_result" ] && [ "$from" -eq 0 ]; then
     printf 'RESULT\t0\tok\t\t1.0\t2.0\t1.0\n'
     exit 0
 fi
+if [ "$mode" = "garbage_after_skip" ] && [ "$from" -eq 0 ]; then
+    # A skip, then a line the protocol does not define, then a clean exit.
+    printf 'SKIP\tfake skip\n'
+    printf 'garbage\n'
+    exit 0
+fi
+if [ "$mode" = "garbage_before_result" ] && [ "$from" -eq 0 ]; then
+    # A line the protocol does not define, followed by a perfectly good result.
+    printf 'garbage\n'
+    printf 'RESULT\t0\tok\t\t1.0\t2.0\t1.0\n'
+    exit 0
+fi
 if [ "$mode" = "bare_cr_at_eof" ] && [ "$from" -eq 0 ]; then
     # A last line with no newline: its carriage return is part of the line.
     printf 'RESULT\t0\tok\t\t1.0\t2.0\t1.0\r'

@@ -1240,6 +1240,30 @@ fn run_build_in_child(
             format!(" id={id} variant={}/{n}", index + 1),
         );
     };
+    // Anything the child says that the protocol does not allow closes the variant that was running:
+    // the caller writes this failed row and respawns the next variant. `pid` and `status` name the
+    // child that said it and how it ended.
+    let protocol_error = |index: usize, error: String, pid: u32, status: String| -> Cell {
+        heartbeat(
+            "protocol-error",
+            row,
+            family,
+            dtype,
+            order,
+            case,
+            format!(
+                " id={id} pid={pid} variant={}/{n} error={error} status={status}",
+                index + 1
+            ),
+        );
+        Cell {
+            status: "failed",
+            note: error,
+            samples: Vec::new(),
+            timed_ms: None,
+            check_ms: None,
+        }
+    };
 
     if n == 0 {
         return Ok(());
@@ -1311,12 +1335,29 @@ fn run_build_in_child(
                     }
                     Some("SKIP") => {
                         let note = fields.get(1).unwrap_or(&"").to_string();
+                        let pid = handle.pid;
+                        // Output after a SKIP is broken output too: the row is only `skipped` if
+                        // the child said nothing more, before or during its exit.
+                        let mut extra: Option<(usize, String)> = None;
+                        drain_extra(&handle.rx, Instant::now() + REAP_GRACE, &mut extra);
                         let reaped = reap_child(handle.child);
+                        drain_extra(&handle.rx, Instant::now() + REAP_GRACE, &mut extra);
                         drop(handle.reader);
                         current = None;
                         if !completed_in_child {
-                            // A genuine build-level skip: settle it only after the reap.
-                            if reaped.success() {
+                            // A genuine build-level skip: settle it only after the reap, and only if
+                            // nothing followed it.
+                            if let Some((count, first)) = &extra {
+                                let cell = protocol_error(
+                                    0,
+                                    format!(
+                                        "the cell child reported a skip and then {count} extra line(s), starting with {first:?}"
+                                    ),
+                                    pid,
+                                    reaped.text(),
+                                );
+                                finish(csv, cell, 0);
+                            } else if reaped.success() {
                                 finish(csv, Cell::skipped(note), 0);
                             } else {
                                 let status = reaped.text();
@@ -1415,30 +1456,8 @@ fn run_build_in_child(
                                 let pid = handle.pid;
                                 let reaped = reap_child(handle.child);
                                 drop(handle.reader);
-                                heartbeat(
-                                    "protocol-error",
-                                    row,
-                                    family,
-                                    dtype,
-                                    order,
-                                    case,
-                                    format!(
-                                        " id={id} pid={pid} variant={}/{n} error={e} status={}",
-                                        next + 1,
-                                        reaped.text()
-                                    ),
-                                );
-                                finish(
-                                    csv,
-                                    Cell {
-                                        status: "failed",
-                                        note: e,
-                                        samples: Vec::new(),
-                                        timed_ms: None,
-                                        check_ms: None,
-                                    },
-                                    next,
-                                );
+                                let cell = protocol_error(next, e, pid, reaped.text());
+                                finish(csv, cell, next);
                                 next += 1;
                                 current = None;
                                 if next < n {
@@ -1467,7 +1486,26 @@ fn run_build_in_child(
                             deadline = variant_deadline(Instant::now(), limit, construction);
                         }
                     }
-                    _ => {}
+                    other => {
+                        // A line the protocol does not define is broken output wherever it appears.
+                        // Dropping it here made acceptance depend on position: the same line was
+                        // ignored before a result and rejected after the last one.
+                        let pid = handle.pid;
+                        let reaped = reap_child(handle.child);
+                        drop(handle.reader);
+                        let error = format!(
+                            "the cell child wrote a line that is not part of the protocol: {:?}",
+                            other.unwrap_or(&line)
+                        );
+                        let cell = protocol_error(next, error, pid, reaped.text());
+                        finish(csv, cell, next);
+                        next += 1;
+                        current = None;
+                        if next < n {
+                            start(next);
+                        }
+                        continue;
+                    }
                 }
                 current = Some(handle);
             }
@@ -1477,30 +1515,8 @@ fn run_build_in_child(
                 let pid = handle.pid;
                 let reaped = reap_child(handle.child);
                 drop(handle.reader);
-                heartbeat(
-                    "protocol-error",
-                    row,
-                    family,
-                    dtype,
-                    order,
-                    case,
-                    format!(
-                        " id={id} pid={pid} variant={}/{n} error={e} status={}",
-                        next + 1,
-                        reaped.text()
-                    ),
-                );
-                finish(
-                    csv,
-                    Cell {
-                        status: "failed",
-                        note: e,
-                        samples: Vec::new(),
-                        timed_ms: None,
-                        check_ms: None,
-                    },
-                    next,
-                );
+                let cell = protocol_error(next, e, pid, reaped.text());
+                finish(csv, cell, next);
                 next += 1;
                 current = None;
                 if next < n {

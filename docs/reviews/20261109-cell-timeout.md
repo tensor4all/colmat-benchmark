@@ -286,9 +286,10 @@ Acceptance measured for the ruling (`docs/reviews/20261109-cell-timeout-logs/`):
    **exactly one failed row** (the other order is `ok`).
 3. `acceptance-final-crash`: a fake child reports its last result and exits 3: run exit 1, rows
    failed (not exit 0).
-4. `cargo test --all --locked`: 39 unit passed (1 ignored) + 15 child-process tests passed.
+4. `cargo test --all --locked`: 39 unit passed (1 ignored) + 15 child-process tests passed (24 now;
+   the review fixes added 9).
 
-### 6巡目: the two review findings, fixed inside that scope
+### 6巡目: the review findings, fixed inside that scope
 
 1. **A broken `RESULT` index must not kill the parent.** `18446744073709551615` parses as a
    `usize`, so the "wrong variant" error message computed `index + 1` and aborted the parent in
@@ -307,19 +308,51 @@ Acceptance measured for the ruling (`docs/reviews/20261109-cell-timeout-logs/`):
    reports a line that is not text as broken output (a `failed` row for the running variant, an
    extra line after the last one), and strips exactly what `lines()` strips -- one `\n` and then
    one `\r`, so a final line with no newline keeps its carriage return.
+3. **A line the protocol does not define was dropped, so acceptance depended on its position.** The
+   receive loop's fall-through arm discarded anything that was not `COUNT`/`RESULT`/`SKIP`, while
+   the same line after the last result failed the row: a child printing `garbage` and then a
+   correct `RESULT` was recorded `ok`. An unknown line now goes down the same failed-cell path as
+   every other protocol violation (`protocol_error`, one helper the three violation sites share),
+   so a line is judged by what it is, not by when it arrived.
+4. **A `SKIP` was a licence to say anything else.** The skip branch settled its row as soon as it
+   saw the `SKIP`, so `SKIP` followed by `garbage` and a clean exit was recorded `skipped` -- the
+   same gap as item 2, on the other settlement path. The branch now drains the child around its
+   reap too and writes a `failed` row when anything followed the skip.
 
 Red → green, both against a fake child: `huge_index` (old: `panicked at main.rs:1352: attempt to
 add with overflow`, exit 101; new: exit 1, rows `failed,ok`) and `garbage_after_last` (old: exit 0
 with three `ok` rows; new: exit 1, rows `ok,ok,failed`), plus `late_garbage` and
 `bad_utf8_after_last` for the two gaps above (both were exit 0 with all-`ok` rows; now exit 1 with
 the last row `failed`), and `bad_utf8_before_result` / `extra_cr_sample` / `bare_cr_at_eof` for the
-reader regressions (all three were exit 0; now exit 1 with a `failed` row). `cargo test --locked`
-is now 39 unit passed (1 ignored) + 22 child-process tests. Neither fix extends what the PR closes:
-the three follow-up items above are unchanged.
+reader regressions (all three were exit 0; now exit 1 with a `failed` row), and
+`garbage_before_result` for item 3 (old: `garbage` then a valid `RESULT` -> exit 0 and two `ok`
+rows; new: exit 1 with `failed,ok,ok`), and `garbage_after_skip` for item 4 (old: exit 0 with a
+`skipped` row; new: exit 1 with a `failed` row). `cargo test --locked` is now 39 unit passed
+(1 ignored) + 24 child-process tests. None of these extends what the PR closes: the three follow-up
+items above are unchanged.
 
-`review: gpt-6.1-sol PASS` (independent review of this diff, four rounds; rounds 1-3 found two gaps
-in the trailing-output check and two regressions the first attempt introduced -- all fixed, each
-with the red run recorded above).
+Two further review notes were checked and left alone, with the reason recorded here:
+
+* **A `COUNT` line is still position-dependent** (accepted any number of times before a result,
+  rejected after the last one). It only records how long construction took, and the parent does not
+  read its payload; rejecting a repeated `COUNT` would change `count_flood`'s expected
+  `timeout`-by-kill rows, which is the queued-message-vs-deadline behaviour this PR keeps out (it is
+  in the "not closed" list above).
+* **A build-level `SKIP` from a replacement child still re-finishes variant 1 and drops the rest.**
+  That is **#62**, already listed above as not closed; the new arms respawn exactly the way the
+  pre-existing protocol-error and exit paths do, so they inherit it rather than create it.
+
+`review: gpt-6.1-sol PASS` (independent review of the fix for the two findings, four rounds; rounds
+1-3 found two gaps in the trailing-output check and two regressions the first attempt introduced --
+all fixed, each with the red run recorded above). The audit's round-2 review of that head returned
+one finding (item 3, the position-dependent acceptance of an unknown line), fixed above; the audit
+also asked that the long acceptance runs be tied to a head, which the evidence index now does.
+
+**Which head the long runs belong to.** The logs in `docs/reviews/20261109-cell-timeout-logs/` were
+recorded at `42a90be`, the code head at the time; the commits that added them (`e4ef8ef`,
+`c9b5a60`) are docs-only, and the later review fixes touch the parent's protocol handling and the
+reader, not the timed path, the reference math or the CSV columns. The logs themselves record no
+head, so the index says so per file rather than implying they measure the current head.
 
 ## What this does not change
 
@@ -342,10 +375,11 @@ with the red run recorded above).
 
 ```
 cargo build --locked          # Finished, 0 errors
-cargo test --locked           # 39 unit passed (1 ignored) + 22 child-process tests passed
+cargo test --locked           # 39 unit passed (1 ignored) + 24 child-process tests passed
 ```
 
-`cargo-test.log` holds the second. CI's `harness` job (#60) runs `cargo check -p fbench --locked`
+`cargo-test.log` holds the first command's run at `42a90be`, the historical 15-child-test version;
+the counts above are the current head's. CI's `harness` job (#60) runs `cargo check -p fbench --locked`
 and `cargo test -p fbench --locked` against the committed lock (no `--bins`, so
 `fbench/tests/child_cells.rs` runs too), so the test result is a local run; the merge gate is the
 `harness` job being green on this PR head.
