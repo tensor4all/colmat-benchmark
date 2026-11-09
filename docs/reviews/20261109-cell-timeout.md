@@ -29,10 +29,13 @@ This note covers the PR that follows #60 (`3b58258`). Evidence logs are in
   result followed by a **successful** exit. A crash after an `ok` result, or any exit with no
   result, closes the pending variant as `failed`. The **last** variant's row and a **SKIP** row are
   held until the child's exit is known, so a crash after the final result, or a SKIP followed by a
-  non-zero exit, is failed too. A malformed `RESULT`
+  non-zero exit, is failed too. A SKIP is only a build-level skip **before any result**; a late SKIP
+  is a protocol error for the pending variant and the remaining variants are respawned. A malformed `RESULT`
   (unknown status, unparseable/NaN/infinite/negative number, or an `ok` without finite
   timed/check times and exactly `--reps` samples) or an unexpected variant index takes the same
   failed-cell path and also reaps the child.
+* The deadline is checked **before** `recv_timeout`: a queued `COUNT` message would otherwise be
+  returned ahead of the timeout forever, so a child that floods `COUNT` would never be killed.
 * Every wait on a child is bounded: one `try_wait`, then `SIGKILL`, then a 5 s `try_wait` loop;
   there is no blocking `wait()`. A child that cannot be killed inside the bound is **abandoned and
   logged** (`reap timed out`), and its cell is recorded as failed/cut -- so the run does not stall,
@@ -127,18 +130,20 @@ Red, per item, with the fix removed (`docs/reviews/20261109-cell-timeout-logs/`)
 | `red-1m-skip-crash.log` | the SKIP row is written before the reap and its status ignored | the skip-then-crash test FAILED (skipped rows, exit 0) |
 | `red-2p-header-only.log` | protocol errors write no row, with the new row-count assert | the garbage/NaN and short-sample tests FAILED (header-only CSV) |
 | `red-2q-header-only-old-test.log` | the same header-only CSV with the old tests (no row-count assert) | they **passed**, which is the gap the assert closes |
+| `red-1n-count-flood.log` | no clock check before `recv_timeout`; a `COUNT` flood keeps the queue full | the count-flood test FAILED (the test's 10 s bound fires) |
+| `red-1o-late-skip.log` | a SKIP after a result finishes variant 1 again and returns | the late-SKIP test FAILED (no variant 3) |
 
 Green: `cargo test --locked` → `test result: ok. 37 passed; 0 failed; 1 ignored` (unit) and
-`test result: ok. 13 passed` (`fbench/tests/child_cells.rs`: first-variant hard kill with the fake
+`test result: ok. 15 passed` (`fbench/tests/child_cells.rs`: first-variant hard kill with the fake
 child, finished run, the 9-row transition table, the wrong-parent pid check, the
 hang-after-last-result reap, the spawn-failure row, a crash after a result, a malformed child
 result, a crash after the last result, garbage/NaN numbers, a short sample set, and a SKIP followed
-by a crash).
+by a crash, a COUNT flood, and a late SKIP).
 
 End to end, with the parent enforcing the limit:
-* `long-cell` (`--n 4096 --batch 2`, limit 3600 s), regenerated at head `ad8280d`: four cells,
-  each 33.4-34.0 s timed plus 150.6-155.8 s check, all `ok`; total 12m25.0s. The log itself records
-  the check (`ps -p 71561`, `ps -p 83635`, both rc=1, empty, at unix 1794251145).
+* `long-cell` (`--n 4096 --batch 2`, limit 3600 s), regenerated at head `42a90be`: four cells,
+  each 33.7-34.0 s timed plus 151.5-157.7 s check, all `ok`; total 12m33.0s. The log itself records
+  the check (`ps -p 41329`, `ps -p 44547`, both rc=1, empty, at unix 1794253506).
 * `cut-run` (`--n 512,1024 --cell-timeout 1`): 512 runs `ok`, 1024 is cut; 8 starts / 8 dones.
 * The first-variant hard kill is deterministic: the fake child sleeps before reporting anything, so
   the parent's `SIGKILL` (not a slow real cell) is what the test requires. `hang first` is a table
@@ -257,8 +262,8 @@ Evidence (`docs/reviews/20261109-cell-timeout-logs/`):
   (`--n 512,4096`, no limit) killed with `SIGKILL` 15 s in. Before this change the killed process
   left **no CSV and no log line**; now it leaves **4 finished rows on disk** (one per `n = 512`
   variant) and 5 starts / 4 dones (3 builds); the last line is `CELL start … 4096`, the cell that
-  was still running when the parent died. The log records the check itself: parent pid 71443
-  SIGKILLed at unix 1794250392, then `ps -p 71447 -o pid=,ppid=,stat=` returned rc=1 (empty output)
+  was still running when the parent died. The log records the check itself: parent pid 41149
+  SIGKILLed at unix 1794252745, then `ps -p 41153 -o pid=,ppid=,stat=` returned rc=1 (empty output)
   2 s later.
 
 ## What this does not change
@@ -282,7 +287,7 @@ Evidence (`docs/reviews/20261109-cell-timeout-logs/`):
 
 ```
 cargo build --locked          # Finished, 0 errors
-cargo test --locked           # 39 unit passed (1 ignored) + 13 child-process tests passed
+cargo test --locked           # 39 unit passed (1 ignored) + 15 child-process tests passed
 ```
 
 `cargo-test.log` holds the second. CI's `harness` job (#60) runs `cargo check -p fbench --locked`
