@@ -39,6 +39,43 @@ if [ "$mode" = "garbage_after_last" ] && [ "$from" -eq 0 ]; then
     printf 'garbage\n'
     exit 0
 fi
+if [ "$mode" = "late_garbage" ] && [ "$from" -eq 0 ]; then
+    # The same, but the extra line lands while the parent is waiting for the exit.
+    i=0
+    while [ "$i" -lt "$n" ]; do
+        printf 'RESULT\t%s\tok\t\t1.0\t2.0\t1.0\n' "$i"
+        i=$((i + 1))
+    done
+    sleep 0.3
+    printf 'garbage\n'
+    exit 0
+fi
+if [ "$mode" = "bad_utf8_before_result" ] && [ "$from" -eq 0 ]; then
+    # An unreadable byte where a line should be, before a perfectly good result.
+    printf '\377\n'
+    printf 'RESULT\t0\tok\t\t1.0\t2.0\t1.0\n'
+    exit 0
+fi
+if [ "$mode" = "bare_cr_at_eof" ] && [ "$from" -eq 0 ]; then
+    # A last line with no newline: its carriage return is part of the line.
+    printf 'RESULT\t0\tok\t\t1.0\t2.0\t1.0\r'
+    exit 0
+fi
+if [ "$mode" = "extra_cr_sample" ] && [ "$from" -eq 0 ]; then
+    # One line ending too many: the sample keeps a stray carriage return.
+    printf 'RESULT\t0\tok\t\t1.0\t2.0\t1.0\r\r\n'
+    exit 0
+fi
+if [ "$mode" = "bad_utf8_after_last" ] && [ "$from" -eq 0 ]; then
+    # An unreadable byte where a line should be, then a clean exit.
+    i=0
+    while [ "$i" -lt "$n" ]; do
+        printf 'RESULT\t%s\tok\t\t1.0\t2.0\t1.0\n' "$i"
+        i=$((i + 1))
+    done
+    printf '\377\n'
+    exit 0
+fi
 while [ "$i" -lt "$n" ]; do
     if [ "$i" -eq "$at" ]; then
         case "$mode" in

@@ -1014,7 +1014,7 @@ fn unix_millis() -> u128 {
 struct CellChild {
     child: std::process::Child,
     pid: u32,
-    rx: std::sync::mpsc::Receiver<String>,
+    rx: std::sync::mpsc::Receiver<Result<String, String>>,
     reader: std::thread::JoinHandle<()>,
 }
 
@@ -1030,10 +1030,28 @@ fn spawn_cell(exe: &std::path::Path, spec: &CellSpec) -> Result<CellChild, Strin
         .map_err(|e| format!("cannot start the cell child: {e}"))?;
     let pid = child.id();
     let stdout = child.stdout.take().expect("piped stdout");
-    let (tx, rx) = mpsc::channel::<String>();
+    let (tx, rx) = mpsc::channel::<Result<String, String>>();
     let reader = std::thread::spawn(move || {
-        for line in BufReader::new(stdout).lines() {
-            let Ok(line) = line else { break };
+        // `lines()` turns one unreadable byte into the end of the stream, and a parent cannot tell
+        // that from a child with nothing more to say. Read whole lines and report a line that is
+        // not text as broken output, so it fails the variant instead of ending or passing it.
+        // The line ending follows `lines()`: drop one `\n` and, only then, one `\r`. A last line
+        // with no newline keeps its carriage return.
+        let mut reader = BufReader::new(stdout);
+        loop {
+            let mut raw = Vec::new();
+            match reader.read_until(b'\n', &mut raw) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {}
+            }
+            if raw.last() == Some(&b'\n') {
+                raw.pop();
+                if raw.last() == Some(&b'\r') {
+                    raw.pop();
+                }
+            }
+            let line = String::from_utf8(raw)
+                .map_err(|e| format!("the cell child wrote a line that is not text: {e}"));
             if tx.send(line).is_err() {
                 break;
             }
@@ -1049,11 +1067,37 @@ fn spawn_cell(exe: &std::path::Path, spec: &CellSpec) -> Result<CellChild, Strin
 
 enum Wake {
     Line(String),
+    /// A line of the child's output that is not text: broken output, not an end of the stream.
+    Broken(String),
     Timeout,
     Closed,
 }
 
-fn wait_line(rx: &std::sync::mpsc::Receiver<String>, deadline: Option<Instant>) -> Wake {
+/// Read what a child still says into `extra` (line count, first line) until its stdout closes or
+/// `deadline` passes. Used after the last expected result: anything the child says there is output
+/// the protocol does not allow.
+fn drain_extra(
+    rx: &std::sync::mpsc::Receiver<Result<String, String>>,
+    deadline: Instant,
+    extra: &mut Option<(usize, String)>,
+) {
+    loop {
+        let line = match wait_line(rx, Some(deadline)) {
+            Wake::Line(line) => line,
+            Wake::Broken(e) => format!("<{e}>"),
+            Wake::Timeout | Wake::Closed => return,
+        };
+        match extra {
+            Some((count, _)) => *count += 1,
+            None => *extra = Some((1, line)),
+        }
+    }
+}
+
+fn wait_line(
+    rx: &std::sync::mpsc::Receiver<Result<String, String>>,
+    deadline: Option<Instant>,
+) -> Wake {
     use std::sync::mpsc::RecvTimeoutError;
     // `recv_timeout` returns an already-queued message before its deadline, so a child that floods
     // COUNT lines would never reach the timeout branch. Check the clock before receiving.
@@ -1066,13 +1110,15 @@ fn wait_line(rx: &std::sync::mpsc::Receiver<String>, deadline: Option<Instant>) 
         Some(deadline) => {
             let remaining = deadline.saturating_duration_since(Instant::now());
             match rx.recv_timeout(remaining) {
-                Ok(line) => Wake::Line(line),
+                Ok(Ok(line)) => Wake::Line(line),
+                Ok(Err(e)) => Wake::Broken(e),
                 Err(RecvTimeoutError::Timeout) => Wake::Timeout,
                 Err(RecvTimeoutError::Disconnected) => Wake::Closed,
             }
         }
         None => match rx.recv() {
-            Ok(line) => Wake::Line(line),
+            Ok(Ok(line)) => Wake::Line(line),
+            Ok(Err(e)) => Wake::Broken(e),
             Err(_) => Wake::Closed,
         },
     }
@@ -1425,6 +1471,42 @@ fn run_build_in_child(
                 }
                 current = Some(handle);
             }
+            Wake::Broken(e) => {
+                // Bytes the protocol cannot carry are broken output for the variant that is
+                // running: a failed row, not a silent end of the stream.
+                let pid = handle.pid;
+                let reaped = reap_child(handle.child);
+                drop(handle.reader);
+                heartbeat(
+                    "protocol-error",
+                    row,
+                    family,
+                    dtype,
+                    order,
+                    case,
+                    format!(
+                        " id={id} pid={pid} variant={}/{n} error={e} status={}",
+                        next + 1,
+                        reaped.text()
+                    ),
+                );
+                finish(
+                    csv,
+                    Cell {
+                        status: "failed",
+                        note: e,
+                        samples: Vec::new(),
+                        timed_ms: None,
+                        check_ms: None,
+                    },
+                    next,
+                );
+                next += 1;
+                current = None;
+                if next < n {
+                    start(next);
+                }
+            }
             Wake::Timeout => {
                 let killed_at = unix_millis();
                 let pid = handle.pid;
@@ -1495,17 +1577,14 @@ fn run_build_in_child(
         // Every variant has a result, but the child may still be talking: read it out to the end
         // (bounded) before reaping. Finishing with `next == n` used to end the loop here, so a
         // child that reported its last result and then printed anything else was accepted as `ok`.
-        let drain_deadline = Instant::now() + REAP_GRACE;
         let mut extra: Option<(usize, String)> = None;
-        while let Wake::Line(line) = wait_line(&handle.rx, Some(drain_deadline)) {
-            match &mut extra {
-                Some((count, _)) => *count += 1,
-                None => extra = Some((1, line)),
-            }
-        }
+        drain_extra(&handle.rx, Instant::now() + REAP_GRACE, &mut extra);
         // The child has nothing left to say (or the bound passed). Reap it (kill if it is still
         // running) and only then settle the held last row.
         let reaped = reap_child(handle.child);
+        // Output that landed while the child was exiting is queued behind the reap, and stdout can
+        // close after it: read it too, so "printed garbage, then exited 0" is not a clean row.
+        drain_extra(&handle.rx, Instant::now() + REAP_GRACE, &mut extra);
         drop(handle.reader);
         if let Some(cell) = pending_final.take() {
             let cell = match &extra {

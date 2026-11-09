@@ -296,14 +296,30 @@ Acceptance measured for the ruling (`docs/reviews/20261109-cell-timeout-logs/`):
    parsed, once, and an out-of-range index is a protocol error like any other.
 2. **Output after the last result was read and discarded.** The receive loop ended as soon as
    `next == n`, so a child that reported its last result and then printed anything else was
-   recorded `ok`. The parent now reads the child out (bounded by `REAP_GRACE`) before reaping, and
-   any extra line fails the held last row -- the same root as acceptance item 3.
+   recorded `ok`. The parent now reads the child out to the end (bounded by `REAP_GRACE`), reaps
+   it, and reads again what the child said while it was exiting; any extra line fails the held
+   last row -- the same root as acceptance item 3. Two gaps this opened in the first attempt were
+   found by the independent review and closed with their own red runs: a line that lands during
+   the reap, and an undecodable byte, which `BufReader::lines()` had turned into a clean end of
+   output. Decoding that byte leniently then opened two more, also fixed and red first: a broken
+   line *before* a good result was skipped as an unknown line, and the reader's own line-ending
+   trim repaired `1.0\r\r` into a valid sample. The reader now asks `wait_line` for whole lines,
+   reports a line that is not text as broken output (a `failed` row for the running variant, an
+   extra line after the last one), and strips exactly what `lines()` strips -- one `\n` and then
+   one `\r`, so a final line with no newline keeps its carriage return.
 
 Red → green, both against a fake child: `huge_index` (old: `panicked at main.rs:1352: attempt to
 add with overflow`, exit 101; new: exit 1, rows `failed,ok`) and `garbage_after_last` (old: exit 0
-with three `ok` rows; new: exit 1, rows `ok,ok,failed`). `cargo test --locked` is now
-39 unit passed (1 ignored) + 17 child-process tests. Neither fix extends what the PR closes: the
-three follow-up items above are unchanged.
+with three `ok` rows; new: exit 1, rows `ok,ok,failed`), plus `late_garbage` and
+`bad_utf8_after_last` for the two gaps above (both were exit 0 with all-`ok` rows; now exit 1 with
+the last row `failed`), and `bad_utf8_before_result` / `extra_cr_sample` / `bare_cr_at_eof` for the
+reader regressions (all three were exit 0; now exit 1 with a `failed` row). `cargo test --locked`
+is now 39 unit passed (1 ignored) + 22 child-process tests. Neither fix extends what the PR closes:
+the three follow-up items above are unchanged.
+
+`review: gpt-6.1-sol PASS` (independent review of this diff, four rounds; rounds 1-3 found two gaps
+in the trailing-output check and two regressions the first attempt introduced -- all fixed, each
+with the red run recorded above).
 
 ## What this does not change
 
@@ -326,7 +342,7 @@ three follow-up items above are unchanged.
 
 ```
 cargo build --locked          # Finished, 0 errors
-cargo test --locked           # 39 unit passed (1 ignored) + 17 child-process tests passed
+cargo test --locked           # 39 unit passed (1 ignored) + 22 child-process tests passed
 ```
 
 `cargo-test.log` holds the second. CI's `harness` job (#60) runs `cargo check -p fbench --locked`

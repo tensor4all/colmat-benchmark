@@ -594,6 +594,98 @@ fn output_after_the_last_result_is_a_failed_row() {
     assert!(stderr.contains("extra-output"), "{stderr}");
 }
 
+/// The parent also reads what the child says while the child is exiting: a line that lands after
+/// the drain bound but before the exit is still the child's output, not a clean row.
+#[test]
+fn late_output_during_the_reap_is_a_failed_row() {
+    let (stderr, csv, code) = run_fake("late-garbage", "late_garbage", 0, 2);
+    assert_eq!(
+        code, 1,
+        "extra output during the reap is a failed run: {stderr}"
+    );
+    let rows: Vec<&str> = csv.lines().skip(1).collect();
+    assert_eq!(rows.len(), 4, "two orders x two variants: {csv}");
+    for (build, chunk) in rows.chunks(2).enumerate() {
+        let statuses: Vec<&str> = chunk
+            .iter()
+            .map(|row| row.split(',').nth(12).unwrap_or("?"))
+            .collect();
+        assert_eq!(
+            statuses,
+            ["ok", "failed"],
+            "build {build}: the late line fails the last row: {csv}"
+        );
+    }
+    assert!(stderr.contains("extra-output"), "{stderr}");
+}
+
+/// An unreadable byte is a line the protocol rejects, not the end of the child's output: decoding
+/// the stream with `lines()` turned it into a clean EOF and the last row stayed `ok`.
+#[test]
+fn invalid_utf8_after_the_last_result_is_a_failed_row() {
+    let (stderr, csv, code) = run_fake("bad-utf8", "bad_utf8_after_last", 0, 2);
+    assert_eq!(code, 1, "an undecodable tail is a failed run: {stderr}");
+    let rows: Vec<&str> = csv.lines().skip(1).collect();
+    assert_eq!(rows.len(), 4, "two orders x two variants: {csv}");
+    for (build, chunk) in rows.chunks(2).enumerate() {
+        let statuses: Vec<&str> = chunk
+            .iter()
+            .map(|row| row.split(',').nth(12).unwrap_or("?"))
+            .collect();
+        assert_eq!(
+            statuses,
+            ["ok", "failed"],
+            "build {build}: the undecodable line fails the last row: {csv}"
+        );
+    }
+    assert!(stderr.contains("extra-output"), "{stderr}");
+}
+
+/// Undecodable bytes before the last result are broken output too, not a line to skip: decoding
+/// them leniently would let a child that printed garbage then a valid `RESULT` pass.
+#[test]
+fn invalid_utf8_before_a_result_is_a_failed_row() {
+    let (stderr, csv, code) = run_fake("bad-utf8-before", "bad_utf8_before_result", 0, 1);
+    assert_eq!(code, 1, "an undecodable line is a failed run: {stderr}");
+    let rows: Vec<&str> = csv.lines().skip(1).collect();
+    assert_eq!(rows.len(), 2, "one row per order: {csv}");
+    for row in &rows {
+        let status = row.split(',').nth(12).unwrap_or("?");
+        assert_eq!(status, "failed", "{row}");
+    }
+    assert!(stderr.contains("protocol-error"), "{stderr}");
+}
+
+/// The reader keeps `lines()`' own rule for a line ending -- one `\n`, then at most one `\r` -- so
+/// a malformed sample is not repaired into a number by trimming every trailing carriage return.
+#[test]
+fn an_extra_carriage_return_is_not_trimmed_into_a_valid_sample() {
+    let (stderr, csv, code) = run_fake("extra-cr", "extra_cr_sample", 0, 1);
+    assert_eq!(code, 1, "a stray carriage return is a failed run: {stderr}");
+    let rows: Vec<&str> = csv.lines().skip(1).collect();
+    assert_eq!(rows.len(), 2, "one row per order: {csv}");
+    for row in &rows {
+        let status = row.split(',').nth(12).unwrap_or("?");
+        assert_eq!(status, "failed", "{row}");
+    }
+    assert!(stderr.contains("protocol-error"), "{stderr}");
+}
+
+/// A last line without a newline keeps its carriage return, as `lines()` did: stripping it here
+/// repaired the sample into a number.
+#[test]
+fn a_bare_carriage_return_at_eof_is_not_trimmed_into_a_valid_sample() {
+    let (stderr, csv, code) = run_fake("bare-cr", "bare_cr_at_eof", 0, 1);
+    assert_eq!(code, 1, "a stray carriage return is a failed run: {stderr}");
+    let rows: Vec<&str> = csv.lines().skip(1).collect();
+    assert_eq!(rows.len(), 2, "one row per order: {csv}");
+    for row in &rows {
+        let status = row.split(',').nth(12).unwrap_or("?");
+        assert_eq!(status, "failed", "{row}");
+    }
+    assert!(stderr.contains("protocol-error"), "{stderr}");
+}
+
 /// Garbage/NaN timings and samples are not an accepted measurement.
 #[test]
 fn garbage_numbers_are_not_an_ok_row() {

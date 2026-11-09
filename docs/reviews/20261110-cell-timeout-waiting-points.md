@@ -19,12 +19,12 @@ this list has not discovered still stops. The cooperative polls are an early-exi
 
 | site | function | what it waits for / guards |
 |---|---|---|
-| `fbench/src/main.rs:2005` | `run_cell` | verification stage boundary or returned error |
-| `fbench/src/main.rs:2007` | `run_cell` | verification stage boundary or returned error |
-| `fbench/src/main.rs:2013` | `run_cell` | verification stage boundary or returned error |
-| `fbench/src/main.rs:2015` | `run_cell` | verification stage boundary or returned error |
-| `fbench/src/main.rs:2021` | `run_cell` | verification stage boundary or returned error |
-| `fbench/src/main.rs:2023` | `run_cell` | verification stage boundary or returned error |
+| `fbench/src/main.rs:2084` | `run_cell` | verification stage boundary or returned error |
+| `fbench/src/main.rs:2086` | `run_cell` | verification stage boundary or returned error |
+| `fbench/src/main.rs:2092` | `run_cell` | verification stage boundary or returned error |
+| `fbench/src/main.rs:2094` | `run_cell` | verification stage boundary or returned error |
+| `fbench/src/main.rs:2100` | `run_cell` | verification stage boundary or returned error |
+| `fbench/src/main.rs:2102` | `run_cell` | verification stage boundary or returned error |
 | `fbench/src/backend.rs:366` | `gemm_op` | library call before a batch member, or between a member's two calls / in its prepare or check |
 | `fbench/src/backend.rs:457` | `qr_factor_op` | library call before a batch member, or between a member's two calls / in its prepare or check |
 | `fbench/src/backend.rs:479` | `qr_factor_op` | library call before a batch member, or between a member's two calls / in its prepare or check |
@@ -91,7 +91,7 @@ this list has not discovered still stops. The cooperative polls are an early-exi
 | `fbench/src/main.rs` `run_build_in_child` (`Command::spawn`) | starting the cell child | the variant's deadline starts before the spawn |
 | `fbench/src/main.rs` `run_build_in_child` (`recv_timeout`) | the child's `COUNT`/`RESULT` lines | on timeout the parent sends `SIGKILL` |
 | `fbench/src/main.rs` `run_build_in_child` (`kill`, `wait`) | the child's exit / reap | this is the hard stop; `wait` reaps, so `ps` shows no child |
-| `fbench/src/main.rs` child reader thread (`BufReader::lines`) | the child's stdout | no deadline of its own: the pipe closes when the child is killed |
+| `fbench/src/main.rs` child reader thread (`read_until`, one line at a time) | the child's stdout | no deadline of its own: the pipe closes when the child is killed |
 | `fbench/src/main.rs` `Csv::push` | a row write + flush to the CSV | between cells; a failed write sets `failed` and the run exits 2 |
 | `fbench/src/main.rs` `heartbeat` | one `eprintln!` to stderr | between/around cells; the parent owns the start/done pair |
 | `fbench/src/vendor.rs` `identity` | reading the linked vendor's identity at startup | before any cell |
