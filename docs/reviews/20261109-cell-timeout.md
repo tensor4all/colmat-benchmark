@@ -27,8 +27,11 @@ This note covers the PR that follows #60 (`3b58258`). Evidence logs are in
 * One `CELL start` and one terminal row per variant; the kill path never re-emits a start. The only
   exception to "a child exit is a failure" is the **cooperative construction cut**: a `timeout`
   result followed by a **successful** exit. A crash after an `ok` result, or any exit with no
-  result, closes the pending variant as `failed`. A malformed `RESULT` or an unexpected variant
-  index takes the same failed-cell path and also reaps the child.
+  result, closes the pending variant as `failed`. The **last** variant's row is held until the
+  child's exit is known, so a crash after the final result is failed too. A malformed `RESULT`
+  (unknown status, unparseable/NaN/infinite/negative number, or an `ok` without finite
+  timed/check times and exactly `--reps` samples) or an unexpected variant index takes the same
+  failed-cell path and also reaps the child.
 * Every wait on a child is bounded: one `try_wait`, then `SIGKILL`, then a 5 s `try_wait` loop;
   there is no blocking `wait()`. A child that cannot be killed inside the bound is **abandoned and
   logged** (`reap timed out`), and its cell is recorded as failed/cut -- so the run does not stall,
@@ -117,17 +120,20 @@ Red, per item, with the fix removed (`docs/reviews/20261109-cell-timeout-logs/`)
 | `red-2l-clock-unbounded.log` | the same with the bound removed | `timeout 12` exits 124: the test hangs |
 | `red-1k-crash-after-result.log` | the cooperative exception accepts any exit after a result | the crash-after-result test FAILED (variant 2 became `ok`) |
 | `red-2m-protocol-error.log` | a malformed result returns early instead of closing the cell | the malformed-result test FAILED (exit 2, no row) |
+| `red-1l-final-crash.log` | the last row is settled without looking at the child's exit | the crash-after-last-result test FAILED (ok rows, exit 0) |
+| `red-2n-bad-numbers.log` | permissive numeric parsing and no result validation | the garbage/NaN test FAILED (ok row) |
+| `red-2o-short-samples.log` | no `--reps` sample-count check | the short-sample test FAILED (ok row) |
 
 Green: `cargo test --locked` → `test result: ok. 37 passed; 0 failed; 1 ignored` (unit) and
-`test result: ok. 9 passed` (`fbench/tests/child_cells.rs`: first-variant hard kill with the fake
+`test result: ok. 12 passed` (`fbench/tests/child_cells.rs`: first-variant hard kill with the fake
 child, finished run, the 9-row transition table, the wrong-parent pid check, the
-hang-after-last-result reap, the spawn-failure row, a crash after a result, and a malformed child
-result).
+hang-after-last-result reap, the spawn-failure row, a crash after a result, a malformed child
+result, a crash after the last result, garbage/NaN numbers, and a short sample set).
 
 End to end, with the parent enforcing the limit:
-* `long-cell` (`--n 4096 --batch 2`, limit 3600 s), regenerated at head `34ff512`: four cells,
-  each 34.3-34.8 s timed plus 157.0-158.9 s check, all `ok`; total 12m49.1s. The log itself records
-  the check (`ps -p 11838`, `ps -p 9184`, both rc=1, empty, at unix 1794246703).
+* `long-cell` (`--n 4096 --batch 2`, limit 3600 s), regenerated at head `ad8280d`: four cells,
+  each 33.4-34.0 s timed plus 150.6-155.8 s check, all `ok`; total 12m25.0s. The log itself records
+  the check (`ps -p 71561`, `ps -p 83635`, both rc=1, empty, at unix 1794251145).
 * `cut-run` (`--n 512,1024 --cell-timeout 1`): 512 runs `ok`, 1024 is cut; 8 starts / 8 dones.
 * The first-variant hard kill is deterministic: the fake child sleeps before reporting anything, so
   the parent's `SIGKILL` (not a slow real cell) is what the test requires. `hang first` is a table
@@ -233,10 +239,9 @@ at all, so the run directory could not distinguish "not measured" from "hung".
   4 dones); its child exits via the parent-pid watchdog.
 * A cut cell is a row with the existing `status = timeout` value; no column was added for the cut.
   This PR *did* append `timed_ms` and `check_ms`, so rows are 20 fields instead of 18: readers that
-  require exactly 18 fields reject them. The repository's readers (`scripts/report_run.py`,
-  `scripts/timing_evidence.py`, `summarize_samples`, `gen_comparison`) take columns by name or
-  ignore trailing ones. `scripts/validate_run.py` does not read the CSV; the recorder checks the
-  process exit and the `MISMATCH` word. I did not run those readers against both schemas here.
+  require exactly 18 fields reject them. I did not run the recorder or any CSV consumer against
+  18-field and 20-field fixtures, so **no compatibility with those readers is claimed here**; the
+  recorder's own check reads the process exit and the `MISMATCH` word, not the CSV width.
 
 Evidence (`docs/reviews/20261109-cell-timeout-logs/`):
 
@@ -247,8 +252,8 @@ Evidence (`docs/reviews/20261109-cell-timeout-logs/`):
   (`--n 512,4096`, no limit) killed with `SIGKILL` 15 s in. Before this change the killed process
   left **no CSV and no log line**; now it leaves **4 finished rows on disk** (one per `n = 512`
   variant) and 5 starts / 4 dones (3 builds); the last line is `CELL start … 4096`, the cell that
-  was still running when the parent died. The log records the check itself: parent pid 64915
-  SIGKILLed at unix 1794244038, then `ps -p 64944 -o pid=,ppid=,stat=` returned rc=1 (empty output)
+  was still running when the parent died. The log records the check itself: parent pid 71443
+  SIGKILLed at unix 1794250392, then `ps -p 71447 -o pid=,ppid=,stat=` returned rc=1 (empty output)
   2 s later.
 
 ## What this does not change
@@ -272,7 +277,7 @@ Evidence (`docs/reviews/20261109-cell-timeout-logs/`):
 
 ```
 cargo build --locked          # Finished, 0 errors
-cargo test --locked           # 39 unit passed (1 ignored) + 9 child-process tests passed
+cargo test --locked           # 39 unit passed (1 ignored) + 12 child-process tests passed
 ```
 
 `cargo-test.log` holds the second. CI's `harness` job (#60) runs `cargo check -p fbench --locked`
