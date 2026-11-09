@@ -224,6 +224,15 @@ if grep -q 'pub fn with_team' "$FORK_DIR/faer/src/utils/team.rs"; then
 else
     TEAM_API="rayon"
 fi
+# The harness default features describe the API of the committed lock (`Cargo.lock` ->
+# `t4a-faer` 0.33: `ParShape` for workspace queries, the threadteam team API). That keeps
+# `cargo check -p fbench` working from the registry arm, which is what faer-benchmark
+# #59 caught. A checkout at an older generation has neither spelling, so the campaign build
+# turns the defaults off and names only the features its own detection found.
+NO_DEFAULT=()
+if [[ "$FORK_API" != "parshape" || "$TEAM_API" != "threadteam" ]]; then
+    NO_DEFAULT=(--no-default-features)
+fi
 # ------------------------------------------------------------------------------
 
 # --------------------------------------------------------------- path injection
@@ -273,7 +282,7 @@ RUSTC_WRAPPER= CARGO_TARGET_DIR="$target" \
         -u MKL_DOMAIN_NUM_THREADS -u MKL_INTERFACE_LAYER -u MKL_THREADING_LAYER -u MKL_DYNAMIC \
         OPENBLAS_DYNAMIC_ARCH=1 \
     cargo build --manifest-path "$PROJECT_DIR/Cargo.toml" "${profile_flag[@]}" \
-    -p fbench --features "$FEATURES" "${PATCH_ARGS[@]}" "${bin_args[@]}" >&2
+    -p fbench ${NO_DEFAULT[@]+"${NO_DEFAULT[@]}"} --features "$FEATURES" "${PATCH_ARGS[@]}" "${bin_args[@]}" >&2
 
 bin_dir="$target/$subdir"
 cp "$PROJECT_DIR/Cargo.lock" "$target/Cargo.lock.resolved"

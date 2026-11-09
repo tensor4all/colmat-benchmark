@@ -48,3 +48,17 @@ jobs:
         run: campaign-check-generated --base origin/main --no-index
       - name: Pins are the stack's
         run: campaign-sync-pins --check --repo faer-benchmark
+
+  # A compile check of the harness against the *registry* arm (the committed `Cargo.lock`), not a
+  # smoke build of a measured revision. The comment above explains why the latter is not here: a
+  # recorded run has already built. This one is a manifest/lock consistency check -- `fbench` sat
+  # behind the `Par`/`ParShape` split for days because no lane read the lock (#59). It links no
+  # vendor and measures nothing, so it stays on the small runner.
+  harness:
+    runs-on: ubuntu-slim
+    steps:
+      - uses: actions/checkout@v4
+      - name: The harness compiles against the committed lock
+        run: cargo check -p fbench --locked
+      - name: The harness tests compile and pass (registry arm)
+        run: cargo test -p fbench --bins --locked
