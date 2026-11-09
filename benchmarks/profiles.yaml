@@ -13,7 +13,44 @@ profiles:
     cpu: AMD Ryzen AI 9 HX 470
     logical_cpus: 24
     l3: "0-3: 16 MiB shared; 4-11: 8 MiB shared"
+    # SMT siblings of CPU n are n+12 (`lscpu -e`); the same declaration the toolkit's shared
+    # `zen5-cpu.yaml` carries. Without it the recorder has no SMT claim to check this host
+    # against (`benchmarks/scripts/idle_cpus.py` records 16-23 as the siblings of 4-11).
+    smt: {threads_per_core: 2, sibling_offset: 12}
   # The measurement host (tensor4all-meta#76 D5), resolved against
   # `campaign_toolkit/profiles/zen2-cpu.yaml`. Every suite lists it as optional: it is
   # measured when the stack's versions move, not on the weekly schedule.
+  # That declaration is the machine with SMT on: 128 logical cores, sibling n+64. The
+  # host as it is measured today has SMT off, so it is a second profile, not a second
+  # reading of the first (faer-benchmark#55): one name must not point at two machines.
   - zen2-cpu
+  - name: zen2-64-smt-off
+    role: measurement
+    description: >-
+      The measurement host with SMT disabled in the BIOS: AMD EPYC 7702P (Zen 2),
+      1 socket, 8 CCDs of 2 CCXs of 4 cores, 64 physical / 64 logical cores, 16 L3
+      domains of 16 MiB, one per 4-core CCX. Measured on the host, not assumed:
+      `lscpu` reports 64 CPU(s), 1 thread per core, 1 socket, 256 MiB L3 and 1 NUMA
+      node, `online` is 0-63, `smt/active` is 0 with `smt/control` `notsupported`,
+      every CPU's `thread_siblings_list` is itself, and
+      `cache/index3/shared_cpu_list` is 4k-4k+3 for all 64 CPUs. `zen2-cpu` is the
+      same server with SMT on; `scripts/record_run.py` refuses a profile whose
+      declared logical count or SMT state disagrees with the host.
+    cpu: AMD EPYC 7702P
+    logical_cpus: 64
+    l3: "16 MiB shared per 4-core CCX, 16 CCXs (CPUs 4k-4k+3)"
+    # One hardware thread per core: CPU n's sibling is n itself.
+    smt: {threads_per_core: 1, sibling_offset: 64}
+    record_numa: true
+    power:
+      cpufreq_boost: "0"
+      governor: performance
+    # One logical CPU per physical core is measured, so a row is its CPU set. The 4T row is
+    # one CCX and its own L3 domain; the 8T row is one CCD, two CCXs, so it spans two domains
+    # (the recorder warns and the idle gate watches both). There is no 64T row: every core
+    # would be measured, no CPU would be left for the observing side, and the recorder's own
+    # affinity check refuses a run from a process that may sit inside a measured domain.
+    thread_rows:
+      - {threads: 1, measured: "0", observer: "4-63"}
+      - {threads: 4, measured: "0-3", observer: "4-63"}
+      - {threads: 8, measured: "0-7", observer: "8-63"}

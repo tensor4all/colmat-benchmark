@@ -208,6 +208,10 @@ struct Args {
     rows: Vec<String>,
     statistic: Statistic,
     csv: Option<String>,
+    /// The hardware profile the recorder declared (`FBENCH_PROFILE`), written into every
+    /// row: a CSV that has to be found in the campaign directory to learn which machine
+    /// produced it is a number without its machine. Empty when `fbench` is run by hand.
+    profile: String,
 }
 
 fn parse(args: &[String]) -> Result<Args, String> {
@@ -246,6 +250,7 @@ fn parse(args: &[String]) -> Result<Args, String> {
             rows: Vec::new(),
             statistic: Statistic::Best,
             csv: None,
+            profile: String::new(),
         });
     }
     if command != "run" && command != "verify" {
@@ -265,6 +270,7 @@ fn parse(args: &[String]) -> Result<Args, String> {
         rows: Vec::new(),
         statistic: Statistic::Best,
         csv: None,
+        profile: String::new(),
     };
     let mut i = 2;
     while i < args.len() {
@@ -456,6 +462,7 @@ struct Record {
     samples_ms: Vec<f64>,
     status: &'static str,
     note: String,
+    profile: String,
 }
 
 impl Record {
@@ -492,6 +499,7 @@ impl Record {
             self.vendor_threads
                 .map(|n| n.to_string())
                 .unwrap_or_default(),
+            self.profile.clone(),
         ];
         fields
             .iter()
@@ -501,9 +509,23 @@ impl Record {
     }
 }
 
+/// The hardware profile the recorder declared, or empty: a hand-run harness has none, and an
+/// empty column says so rather than naming a machine nothing declared.
+fn profile_from_env() -> String {
+    std::env::var("FBENCH_PROFILE").unwrap_or_default()
+}
+
+/// The parsed arguments with the recorder's profile attached. One function, so the wiring is
+/// what the unit test calls instead of rebuilding it.
+fn args_from_env(argv: &[String]) -> Result<Args, String> {
+    let mut args = parse(argv)?;
+    args.profile = profile_from_env();
+    Ok(args)
+}
+
 fn main() -> ExitCode {
     let argv: Vec<String> = std::env::args().collect();
-    let args = match parse(&argv) {
+    let args = match args_from_env(&argv) {
         Ok(a) => a,
         Err(e) => {
             eprintln!("{e}\n{USAGE}");
@@ -721,7 +743,7 @@ fn main() -> ExitCode {
         .as_ref()
         .expect("run or verification census needs --csv");
     let mut text = String::from(
-        "regime,family,dtype,order,m,n,k,batch,row,threads,total_ms,per_item_us,status,note,samples_ms,rayon_threads,vendor_threads\n",
+        "regime,family,dtype,order,m,n,k,batch,row,threads,total_ms,per_item_us,status,note,samples_ms,rayon_threads,vendor_threads,profile\n",
     );
     for record in &records {
         text.push_str(&record.line());
@@ -780,6 +802,7 @@ fn emit(
         samples_ms: samples.unwrap_or_default(),
         status,
         note,
+        profile: args.profile.clone(),
     });
 }
 
@@ -852,6 +875,40 @@ mod tests {
         assert_eq!(records[0].samples_ms, [3.0, 1.0, 2.0]);
         records[0].rayon_threads = 17;
         records[0].vendor_threads = Some(19);
-        assert!(records[0].line().ends_with(",17,19"));
+        assert!(records[0].line().ends_with(",17,19,"));
+        // The profile column is the recorder's declaration, passed down through the
+        // environment; without one the column is empty, never a guess.
+        records[0].profile = "zen2-64-smt-off".to_owned();
+        assert!(records[0].line().ends_with(",17,19,zen2-64-smt-off"));
+
+        // ... and `main`'s own wiring (argv -> Args -> Record) carries the profile from the
+        // environment, so neither an empty `emit` nor a dropped env read stays invisible here.
+        std::env::set_var("FBENCH_PROFILE", "zen2-64-smt-off");
+        let args = args_from_env(&["fbench".to_owned(), "run".to_owned(), "--threads".to_owned(),
+                                   "1".to_owned(), "--n".to_owned(), "2".to_owned(),
+                                   "--csv".to_owned(), "out.csv".to_owned()])
+            .unwrap();
+        let mut from_args = Vec::new();
+        emit(
+            &mut from_args,
+            &args,
+            1,
+            &Dtype::F64,
+            "gemm",
+            Case {
+                m: 2,
+                n: 2,
+                k: Some(2),
+                batch: 1,
+            },
+            Order::C,
+            "faer-fork",
+            None,
+            "skipped",
+            String::new(),
+        );
+        assert_eq!(from_args[0].profile, "zen2-64-smt-off");
+        assert!(from_args[0].line().ends_with(",zen2-64-smt-off"));
+        std::env::remove_var("FBENCH_PROFILE");
     }
 }

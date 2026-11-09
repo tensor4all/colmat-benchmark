@@ -55,7 +55,7 @@ hand, and the mapping is the same for every page.
 |---|---|---|
 | raw run | `data/results/<profile>/<suite>/<timestamp>-<label>/` | one recorded run |
 | `run.yaml` | in that directory | identities (library, upstream, harness, toolkit), host and `host.power`, CPU sets, timing policy, guard policy, and the exact result/verification file names |
-| `run<N>-<regime>-<T>t.csv` | in that directory | one CSV per complete process set: every row carries its chronological `samples_ms`, the observed thread budgets, status and note |
+| `run<N>-<regime>-<T>t.csv` | in that directory | one CSV per complete process set: every row of a run recorded with this harness revision or later carries its hardware profile, then its chronological `samples_ms`, the observed thread budgets, status and note |
 | `verify-<regime>-<T>t.csv` | in that directory | the verification census the timing was gated on, including declared skips |
 | `*.guard` | in that directory | that process's idle-guard log, including discarded attempts |
 | `build-info.json` / `binary-info.txt` | in that directory | build metadata (pins, rustc/cargo, features) and the vendor/thread identity the binary reported |

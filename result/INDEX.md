@@ -23,10 +23,14 @@ rather than being implied by the other arm's page.
 | `faer-kernels-large` | `zen5-cpu` (optional) | `mkl` | - | - | - | - | missing | - |
 | `faer-kernels-large` | `zen2-cpu` (optional) | `openblas` | - | - | - | - | missing | - |
 | `faer-kernels-large` | `zen2-cpu` (optional) | `mkl` | - | - | - | - | missing | - |
+| `faer-kernels-large` | `zen2-64-smt-off` (optional) | `openblas` | - | - | - | - | missing | - |
+| `faer-kernels-large` | `zen2-64-smt-off` (optional) | `mkl` | - | - | - | - | missing | - |
 | `faer-kernels` | `zen5-cpu` | `openblas` | - | - | - | - | missing | - |
 | `faer-kernels` | `zen5-cpu` | `mkl` | - | - | - | - | missing | - |
 | `faer-kernels` | `zen2-cpu` (optional) | `openblas` | - | - | - | - | missing | - |
 | `faer-kernels` | `zen2-cpu` (optional) | `mkl` | - | - | - | - | missing | - |
+| `faer-kernels` | `zen2-64-smt-off` (optional) | `openblas` | - | - | - | - | missing | - |
+| `faer-kernels` | `zen2-64-smt-off` (optional) | `mkl` | - | - | - | - | missing | - |
 
 `missing` is a normal cell, not an error: the campaign is not run on every
 profile for every commit. A cell is listed here only with a page measured at the

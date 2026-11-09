@@ -161,7 +161,10 @@ sample is refused by name,
 because pinning the recorder cannot move the agent that launched it - that is how two runs of this
 campaign were spoiled. The pin therefore fails the run
 instead of publishing a contaminated number, and no CPU list is hardcoded per machine - the profile
-for each host carries its own sets.
+for each host carries its own sets. Before any of that it refuses a host the named profile does not
+describe: the profile's declared logical CPU count and SMT state against the host's (`smt/active`,
+or the sibling map where the kernel exposes no switch), both sides printed, nothing written. One
+profile name describes one machine.
 
 The refusal leaves no trace once it passes, so an admitted run also *states* the pin: the manifest's
 `threads.observer` carries the recording process's own `sched_getaffinity` and the CPUs that were
