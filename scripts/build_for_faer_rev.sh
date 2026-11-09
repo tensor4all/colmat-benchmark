@@ -225,10 +225,12 @@ else
     TEAM_API="rayon"
 fi
 # The harness default features describe the API of the committed lock (`Cargo.lock` ->
-# `t4a-faer` 0.33: `ParShape` for workspace queries, the threadteam team API). That keeps
-# `cargo check -p fbench` working from the registry arm, which is what faer-benchmark
-# #59 caught. A checkout at an older generation has neither spelling, so the campaign build
-# turns the defaults off and names only the features its own detection found.
+# `t4a-faer` 0.28.0, registry): `ParShape` for workspace queries, the threadteam team API.
+# That keeps `cargo check -p fbench` working from the registry arm, which is what
+# faer-benchmark#59 caught. A checkout at an older generation has neither spelling, so the
+# build turns the defaults off and names only the features its detection found. That path is
+# untested end to end -- a 0.24-style checkout also lacks `faer_fork/threadteam`, which
+# `fork-team` names -- and is tracked in #61.
 NO_DEFAULT=()
 if [[ "$FORK_API" != "parshape" || "$TEAM_API" != "threadteam" ]]; then
     NO_DEFAULT=(--no-default-features)
