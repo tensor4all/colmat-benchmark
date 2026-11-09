@@ -62,4 +62,6 @@ jobs:
       - name: The harness compiles against the committed lock
         run: cargo check -p fbench --locked
       - name: The harness tests compile and pass (registry arm)
-        run: cargo test -p fbench --bins --locked
+        # `--bins` would skip `fbench/tests/`, which is where the parent/child kill contract is
+        # tested; the registry arm builds both the binary and its integration tests.
+        run: cargo test -p fbench --locked
