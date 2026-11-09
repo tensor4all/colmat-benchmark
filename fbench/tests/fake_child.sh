@@ -76,6 +76,16 @@ if [ "$mode" = "short_result" ] && [ "$from" -eq 0 ]; then
     printf 'RESULT\t0\tok\t\t1.0\t2.0\n'
     exit 0
 fi
+if [ "$mode" = "skip_extra_field" ] && [ "$from" -eq 0 ]; then
+    # A skip with a field more than the protocol allows, and a clean exit.
+    printf 'SKIP\tfake skip\tgarbage\n'
+    exit 0
+fi
+if [ "$mode" = "skip_short" ] && [ "$from" -eq 0 ]; then
+    # The same, one field short: no note at all.
+    printf 'SKIP\n'
+    exit 0
+fi
 if [ "$mode" = "garbage_after_skip" ] && [ "$from" -eq 0 ]; then
     # A skip, then a line the protocol does not define, then a clean exit.
     printf 'SKIP\tfake skip\n'

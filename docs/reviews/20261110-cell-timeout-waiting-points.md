@@ -19,12 +19,12 @@ this list has not discovered still stops. The cooperative polls are an early-exi
 
 | site | function | what it waits for / guards |
 |---|---|---|
-| `fbench/src/main.rs:2149` | `run_cell` | verification stage boundary or returned error |
-| `fbench/src/main.rs:2151` | `run_cell` | verification stage boundary or returned error |
-| `fbench/src/main.rs:2157` | `run_cell` | verification stage boundary or returned error |
-| `fbench/src/main.rs:2159` | `run_cell` | verification stage boundary or returned error |
-| `fbench/src/main.rs:2165` | `run_cell` | verification stage boundary or returned error |
-| `fbench/src/main.rs:2167` | `run_cell` | verification stage boundary or returned error |
+| `fbench/src/main.rs:2168` | `run_cell` | verification stage boundary or returned error |
+| `fbench/src/main.rs:2170` | `run_cell` | verification stage boundary or returned error |
+| `fbench/src/main.rs:2176` | `run_cell` | verification stage boundary or returned error |
+| `fbench/src/main.rs:2178` | `run_cell` | verification stage boundary or returned error |
+| `fbench/src/main.rs:2184` | `run_cell` | verification stage boundary or returned error |
+| `fbench/src/main.rs:2186` | `run_cell` | verification stage boundary or returned error |
 | `fbench/src/backend.rs:366` | `gemm_op` | library call before a batch member, or between a member's two calls / in its prepare or check |
 | `fbench/src/backend.rs:457` | `qr_factor_op` | library call before a batch member, or between a member's two calls / in its prepare or check |
 | `fbench/src/backend.rs:479` | `qr_factor_op` | library call before a batch member, or between a member's two calls / in its prepare or check |

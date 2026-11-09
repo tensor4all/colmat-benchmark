@@ -286,8 +286,8 @@ Acceptance measured for the ruling (`docs/reviews/20261109-cell-timeout-logs/`):
    **exactly one failed row** (the other order is `ok`).
 3. `acceptance-final-crash`: a fake child reports its last result and exits 3: run exit 1, rows
    failed (not exit 0).
-4. `cargo test --all --locked`: 39 unit passed (1 ignored) + 15 child-process tests passed (26 now;
-   the review fixes added 11).
+4. `cargo test --all --locked`: 39 unit passed (1 ignored) + 15 child-process tests passed (27 now;
+   the review fixes added 12).
 
 ### 6巡目: the review findings, fixed inside that scope
 
@@ -330,6 +330,11 @@ Acceptance measured for the ruling (`docs/reviews/20261109-cell-timeout-logs/`):
    two `1e308` samples did too). The CSV then held `inf` under `status = ok`. `finish` now runs one
    check on every row it is about to write -- `total_ms`, `per_item_us`, `timed_ms`, `check_ms` must
    be finite -- and an `ok` row that fails it becomes a `failed` row, which fails the run.
+7. **A `SKIP` line had the same hole the `RESULT` line had.** Only its second field was read and the
+   rest was dropped, so `SKIP fake skip garbage` (three fields, exit 0) became a `skipped` row: the
+   field-count rule was enforced on one line kind and not the other. `SKIP` is now checked for its
+   two fields before it is settled, in both directions, and a malformed one closes the running
+   variant as `failed` like any other broken output.
 
 Red → green, both against a fake child: `huge_index` (old: `panicked at main.rs:1352: attempt to
 add with overflow`, exit 101; new: exit 1, rows `failed,ok`) and `garbage_after_last` (old: exit 0
@@ -342,8 +347,9 @@ rows; new: exit 1 with `failed,ok,ok`), and `garbage_after_skip` for item 4 (old
 `skipped` row; new: exit 1 with a `failed` row), `extra_field` / `short_result` for item 5 (old:
 exit 0 with `ok` rows; new: exit 1 with `failed` rows), and `huge_sample` / `huge_sample_pair` for
 item 6 (old: exit 0 with `per_item_us=inf` on an `ok` row; new: exit 1, `failed` rows whose note names
-the number it refused). `cargo test --locked` is now 39 unit passed (1 ignored) + 26 child-process
-tests. None of these extends what the PR closes: the three follow-up
+the number it refused), and `skip_extra_field` / `skip_short` for item 7 (old: exit 0 with
+`skipped` rows; new: exit 1 with `failed` rows). `cargo test --locked` is now 39 unit passed
+(1 ignored) + 27 child-process tests. None of these extends what the PR closes: the three follow-up
 items above are unchanged.
 
 Two further review notes were checked and left alone, with the reason recorded here:
@@ -368,8 +374,8 @@ also asked that the long acceptance runs be tied to a head, which the evidence i
 the commits that added them (`e4ef8ef`, `c9b5a60`) are docs-only, and the later review fixes touch
 the parent's protocol handling and the child's stdout reader, not the timed path, the reference math
 or the CSV columns. Those runs have not been repeated at the review-fix head and nothing here claims
-they were; the index says which head each file belongs to. `cargo-test.log` is the exception: it was
-re-run at this head's code commit and names that head in its first line.
+they were; the index says which head each file belongs to. `cargo-test.log` is the exception: the
+head in its first line is the one it measured.
 
 ## What this does not change
 
@@ -392,11 +398,12 @@ re-run at this head's code commit and names that head in its first line.
 
 ```
 cargo build --locked          # Finished, 0 errors
-cargo test --locked           # 39 unit passed (1 ignored) + 26 child-process tests passed
+cargo test --locked           # 39 unit passed (1 ignored) + 27 child-process tests passed
 ```
 
-`cargo-test.log` holds the test run at `8f7dcc5` (the head is in the file's first line; the commit
-after it adds that log and nothing else) -- 39 unit passed, 1 ignored, 26 child-process tests. CI's `harness` job (#60) runs `cargo check -p fbench --locked`
+`cargo-test.log` holds the test run at `8f7dcc5` (the head is in the file's first line) -- 39 unit
+passed, 1 ignored, 26 child-process tests. It is a record of *that* head, not of this one, which has
+27 child-process tests; the log was left as it is when the `SKIP` fix landed. CI's `harness` job (#60) runs `cargo check -p fbench --locked`
 and `cargo test -p fbench --locked` against the committed lock (no `--bins`, so
 `fbench/tests/child_cells.rs` runs too), so the test result is a local run; the merge gate is the
 `harness` job being green on this PR head.

@@ -842,6 +842,8 @@ struct ChildResult {
 
 /// How many tab-separated fields a `RESULT` line has: see the child's single `println!` for it.
 const RESULT_FIELDS: usize = 7;
+/// `SKIP<TAB>note`, the only other line the child writes to stdout.
+const SKIP_FIELDS: usize = 2;
 
 fn parse_number(field: &str, name: &str) -> Result<Option<f64>, String> {
     if field.is_empty() {
@@ -1383,6 +1385,23 @@ fn run_build_in_child(
                         construction = spawn_time.elapsed();
                     }
                     Some("SKIP") => {
+                        if fields.len() != SKIP_FIELDS {
+                            // A line whose shape the protocol does not allow is broken output here
+                            // too: a `SKIP` with a stray field cannot become a `skipped` row.
+                            let pid = handle.pid;
+                            let reaped = reap_child(handle.child);
+                            drop(handle.reader);
+                            let error =
+                                format!("SKIP has {} field(s), expected {SKIP_FIELDS}", fields.len());
+                            let cell = protocol_error(next, error, pid, reaped.text());
+                            finish(csv, cell, next);
+                            next += 1;
+                            current = None;
+                            if next < n {
+                                start(next);
+                            }
+                            continue;
+                        }
                         let note = fields.get(1).unwrap_or(&"").to_string();
                         let pid = handle.pid;
                         // Output after a SKIP is broken output too: the row is only `skipped` if
