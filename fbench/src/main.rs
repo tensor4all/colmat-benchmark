@@ -541,7 +541,10 @@ fn require_threads(n: usize) -> Result<(), String> {
 }
 
 fn csv_field(value: &str) -> String {
-    if value.contains([',', '"', '\n']) {
+    // `,`, `"` and LF are what an RFC 4180 reader treats specially, and so is a bare CR: a note
+    // carrying one used to split its row into two records for Python's `csv` (and therefore for
+    // `scripts/summarize_samples.py`).
+    if value.contains([',', '"', '\n', '\r']) {
         format!("\"{}\"", value.replace('"', "\"\""))
     } else {
         value.to_owned()
@@ -1129,6 +1132,16 @@ enum Wake {
     Closed,
 }
 
+/// How a drain ended. The two are not the same answer: `Finished` means the child's stdout reached
+/// EOF, so nothing is left; `Open` means the bound passed with the stream still open, so output may
+/// still arrive. Merging them let a child exit cleanly while a forked grandchild kept stdout open,
+/// and the harness settled the row as if it had read everything.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Drained {
+    Finished,
+    Open,
+}
+
 /// Read what a child still says into `extra` (line count, first line) until its stdout closes or
 /// `deadline` passes. Used after the last expected result: anything the child says there is output
 /// the protocol does not allow.
@@ -1136,12 +1149,13 @@ fn drain_extra(
     rx: &std::sync::mpsc::Receiver<Result<String, String>>,
     deadline: Instant,
     extra: &mut Option<(usize, String)>,
-) {
+) -> Drained {
     loop {
         let line = match wait_line(rx, Some(deadline)) {
             Wake::Line(line) => line,
             Wake::Broken(e) => format!("<{e}>"),
-            Wake::Timeout | Wake::Closed => return,
+            Wake::Closed => return Drained::Finished,
+            Wake::Timeout => return Drained::Open,
         };
         match extra {
             Some((count, _)) => *count += 1,
@@ -1436,11 +1450,19 @@ fn run_build_in_child(
                         let note = fields.get(1).unwrap_or(&"").to_string();
                         let pid = handle.pid;
                         // Output after a SKIP is broken output too: the row is only `skipped` if
-                        // the child said nothing more, before or during its exit.
+                        // the child said nothing more, before or during its exit, and its stream
+                        // finished -- a `SKIP` is no more trustworthy than a result when the output
+                        // never closed.
                         let mut extra: Option<(usize, String)> = None;
-                        drain_extra(&handle.rx, Instant::now() + REAP_GRACE, &mut extra);
+                        let mut stream_open =
+                            drain_extra(&handle.rx, Instant::now() + REAP_GRACE, &mut extra)
+                                == Drained::Open;
                         let reaped = reap_child(handle.child);
-                        drain_extra(&handle.rx, Instant::now() + REAP_GRACE, &mut extra);
+                        stream_open &= drain_extra(
+                            &handle.rx,
+                            Instant::now() + REAP_GRACE,
+                            &mut extra,
+                        ) == Drained::Open;
                         drop(handle.reader);
                         current = None;
                         if !completed_in_child {
@@ -1451,6 +1473,17 @@ fn run_build_in_child(
                                     0,
                                     format!(
                                         "the cell child reported a skip and then {count} extra line(s), starting with {first:?}"
+                                    ),
+                                    pid,
+                                    reaped.text(),
+                                );
+                                finish(csv, cell, 0);
+                            } else if stream_open {
+                                let cell = protocol_error(
+                                    0,
+                                    format!(
+                                        "the cell child reported a skip and left its output open ({})",
+                                        reaped.text()
                                     ),
                                     pid,
                                     reaped.text(),
@@ -1693,13 +1726,16 @@ fn run_build_in_child(
         // (bounded) before reaping. Finishing with `next == n` used to end the loop here, so a
         // child that reported its last result and then printed anything else was accepted as `ok`.
         let mut extra: Option<(usize, String)> = None;
-        drain_extra(&handle.rx, Instant::now() + REAP_GRACE, &mut extra);
+        let mut stream_open = drain_extra(&handle.rx, Instant::now() + REAP_GRACE, &mut extra)
+            == Drained::Open;
         // The child has nothing left to say (or the bound passed). Reap it (kill if it is still
         // running) and only then settle the held last row.
         let reaped = reap_child(handle.child);
         // Output that landed while the child was exiting is queued behind the reap, and stdout can
-        // close after it: read it too, so "printed garbage, then exited 0" is not a clean row.
-        drain_extra(&handle.rx, Instant::now() + REAP_GRACE, &mut extra);
+        // close after it: read it too, so "printed garbage, then exited 0" is not a clean row. The
+        // stream counts as open only if it was still open after the reap as well.
+        stream_open &= drain_extra(&handle.rx, Instant::now() + REAP_GRACE, &mut extra)
+            == Drained::Open;
         drop(handle.reader);
         if let Some(cell) = pending_final.take() {
             let cell = match &extra {
@@ -1761,8 +1797,36 @@ fn run_build_in_child(
                             check_ms: None,
                         }
                     }
-                    // `Reaped::Exited` with a success status: the child reported its last result,
-                    // said nothing more, and exited cleanly.
+                    // A clean exit is not enough: if the stream never closed, output may still be
+                    // on its way (a forked grandchild holds the pipe open), and settling that as
+                    // `ok` accepts lines the harness never read.
+                    _ if stream_open => {
+                        heartbeat(
+                            "final-reap",
+                            row,
+                            family,
+                            dtype,
+                            order,
+                            case,
+                            format!(
+                                " id={id} variant={}/{n} status={} output=still-open",
+                                n,
+                                reaped.text()
+                            ),
+                        );
+                        Cell {
+                            status: "failed",
+                            note: format!(
+                                "the final cell did not complete: the child's output was still open after its last result (child {})",
+                                reaped.text()
+                            ),
+                            samples: Vec::new(),
+                            timed_ms: None,
+                            check_ms: None,
+                        }
+                    }
+                    // `Reaped::Exited` with a success status, and nothing left to read: the child
+                    // reported its last result, said nothing more, and exited cleanly.
                     _ => cell,
                 },
             };

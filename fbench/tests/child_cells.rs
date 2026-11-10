@@ -48,9 +48,74 @@ fn count_lines(text: &str, prefix: &str) -> usize {
     text.lines().filter(|line| line.starts_with(prefix)).count()
 }
 
+/// Parse CSV the way Python's `csv` module does by default: a bare CR or LF ends a record unless it
+/// is inside a quoted field. This is what a consumer of the harness's CSV sees, so a field the
+/// harness failed to quote shows up here as extra records -- not as a `lines()` count that still
+/// looks right.
+fn csv_records(text: &str) -> Vec<Vec<String>> {
+    let mut records = Vec::new();
+    let mut record: Vec<String> = Vec::new();
+    let mut field = String::new();
+    let mut quoted = false;
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if quoted {
+            if c == '"' {
+                if chars.peek() == Some(&'"') {
+                    chars.next();
+                    field.push('"');
+                } else {
+                    quoted = false;
+                }
+            } else {
+                field.push(c);
+            }
+            continue;
+        }
+        match c {
+            '"' => quoted = true,
+            ',' => record.push(std::mem::take(&mut field)),
+            '\r' | '\n' => {
+                if c == '\r' && chars.peek() == Some(&'\n') {
+                    chars.next();
+                }
+                record.push(std::mem::take(&mut field));
+                if !record.is_empty() {
+                    records.push(std::mem::take(&mut record));
+                }
+            }
+            other => field.push(other),
+        }
+    }
+    if !field.is_empty() || !record.is_empty() {
+        record.push(field);
+        records.push(record);
+    }
+    records
+}
+
 /// Run the parent with a fake child under a wall deadline. Every wait inside the parent is
 /// bounded; this is the outer bound for the test itself, so a regression that removes the parent's
 /// deadline fails instead of hanging in `sleep 300`.
+/// Pids still in `group` (a process group id) right now. The test's kill below is cleanup; a test
+/// that asserts "the harness killed and reaped its child" has to look *before* that cleanup, or it
+/// passes whether or not the harness did anything.
+fn group_survivors(group: u32) -> Vec<u32> {
+    let out = Command::new("ps")
+        .args(["-A", "-o", "pid=,pgid="])
+        .output()
+        .expect("ps -A -o pid=,pgid=");
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let pid: u32 = fields.next()?.parse().ok()?;
+            let pgid: u32 = fields.next()?.parse().ok()?;
+            (pgid == group && pid != group).then_some(pid)
+        })
+        .collect()
+}
+
 fn run_fake_with_options(
     name: &str,
     mode: &str,
@@ -59,7 +124,7 @@ fn run_fake_with_options(
     reps: usize,
     seconds: u64,
     extra: &[&str],
-) -> (Option<i32>, String, String) {
+) -> (Option<i32>, String, String, Vec<u32>) {
     use std::os::unix::process::CommandExt;
     use std::process::Stdio;
     let csv = csv_path(name);
@@ -88,8 +153,9 @@ fn run_fake_with_options(
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(seconds);
     loop {
         if let Some(status) = child.try_wait().expect("try_wait") {
-            // The parent is gone; any child it failed to reap (the regression this test is for) is
-            // in the parent's process group. Clean it so the test leaves no orphan.
+            // The parent is gone. Snapshot what is still in its process group *first*: anything the
+            // harness failed to kill or reap is visible only until the cleanup below.
+            let survivors = group_survivors(pid);
             let _ = Command::new("kill")
                 .args(["-KILL", &format!("-{pid}")])
                 .stdout(std::process::Stdio::null())
@@ -99,7 +165,7 @@ fn run_fake_with_options(
             let csv_text = std::fs::read_to_string(&csv).unwrap_or_default();
             std::fs::remove_file(&csv).ok();
             std::fs::remove_file(&err_path).ok();
-            return (status.code(), stderr, csv_text);
+            return (status.code(), stderr, csv_text, survivors);
         }
         if std::time::Instant::now() >= deadline {
             // The parent is in its own process group; kill the group so the fake child cannot
@@ -115,7 +181,7 @@ fn run_fake_with_options(
             let csv_text = std::fs::read_to_string(&csv).unwrap_or_default();
             std::fs::remove_file(&csv).ok();
             std::fs::remove_file(&err_path).ok();
-            return (None, stderr, csv_text);
+            return (None, stderr, csv_text, Vec::new());
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
@@ -128,6 +194,19 @@ fn run_fake_with_deadline(
     n: usize,
     seconds: u64,
 ) -> (Option<i32>, String, String) {
+    let (code, stderr, csv, _survivors) = run_fake_with_options(name, mode, at, n, 1, seconds, &[]);
+    (code, stderr, csv)
+}
+
+/// The same run, but also reporting which pids were still alive in the harness's process group the
+/// moment it exited -- the evidence a "the harness killed its child" assertion needs.
+fn run_fake_with_survivors(
+    name: &str,
+    mode: &str,
+    at: usize,
+    n: usize,
+    seconds: u64,
+) -> (Option<i32>, String, String, Vec<u32>) {
     run_fake_with_options(name, mode, at, n, 1, seconds, &[])
 }
 
@@ -145,7 +224,10 @@ fn run_fake(name: &str, mode: &str, at: usize, n: usize) -> (String, String, i32
 /// limit on a particular host. The remaining variants are respawned and run.
 #[test]
 fn a_first_variant_hard_kill_leaves_a_row_and_the_next_variant_runs() {
-    let (stderr, csv, code) = run_fake("hard-kill", "hang", 0, 3);
+    // The survivors are sampled the moment the harness exits, before this test's own cleanup: a
+    // post-hoc `ps -p` would pass even if the harness had killed and reaped nothing.
+    let (code, stderr, csv, survivors) = run_fake_with_survivors("hard-kill", "hang", 0, 3, 10);
+    let code = code.expect("the fake-child run must finish within the test's 10 s deadline");
     assert_eq!(code, 1, "a cut variant is a non-zero run: {stderr}");
 
     let rows: Vec<&str> = csv.lines().skip(1).collect();
@@ -182,17 +264,17 @@ fn a_first_variant_hard_kill_leaves_a_row_and_the_next_variant_runs() {
         })
         .collect();
     assert_eq!(pids.len(), 2, "one hard kill per order: {stderr}");
-    for pid in pids {
-        let alive = Command::new("ps")
-            .args(["-p", pid, "-o", "pid="])
-            .output()
-            .expect("ps");
+    for pid in &pids {
+        let pid: u32 = pid.parse().expect("a pid");
         assert!(
-            !alive.status.success(),
-            "killed child {pid} is still in ps:\n{}",
-            String::from_utf8_lossy(&alive.stdout)
+            !survivors.contains(&pid),
+            "the harness killed child {pid} but did not reap it: still alive {survivors:?}\n{stderr}"
         );
     }
+    assert!(
+        survivors.is_empty(),
+        "the harness must leave nothing running in its process group: {survivors:?}\n{stderr}"
+    );
 }
 
 /// A run that finishes under its limit pairs every start with a done and writes `ok` rows.
@@ -261,7 +343,7 @@ fn every_cell_event_leaves_exactly_one_terminal_row() {
             "the event table has an event this test does not implement: {event}"
         );
         let name = format!("table-{event}-{at}");
-        let (code, stderr, body) = run_fake_with_deadline(&name, &event, at, 3, 10);
+        let (code, stderr, body, survivors) = run_fake_with_survivors(&name, &event, at, 3, 10);
         assert!(
             code.is_some(),
             "{name}: the parent did not finish within the test's 10 s deadline: {stderr}"
@@ -352,14 +434,10 @@ fn every_cell_event_leaves_exactly_one_terminal_row() {
                     1,
                     "{name} id={id}: the first variant is cut by one SIGKILL: {stderr}"
                 );
-                let alive = Command::new("ps")
-                    .args(["-p", &pids[0], "-o", "pid="])
-                    .output()
-                    .expect("ps");
+                let pid: u32 = pids[0].parse().expect("a pid");
                 assert!(
-                    !alive.status.success(),
-                    "{name} id={id}: killed child {} is still in ps",
-                    pids[0]
+                    !survivors.contains(&pid),
+                    "{name} id={id}: the harness killed child {pid} but left it alive {survivors:?}"
                 );
             }
             assert_eq!(kills.len(), 2, "{name}: one hard kill per build: {stderr}");
@@ -444,6 +522,34 @@ fn verify_reports_an_unsupported_family_as_skip_not_mismatch() {
         "a skip must not print MISMATCH: {stdout}"
     );
     assert_eq!(output.status.code(), Some(0), "a skip is not a failure");
+}
+
+/// A clean exit says nothing about whether the child's output has finished: a child that reports its
+/// last result, forks a grandchild that keeps stdout open and exits 0 leaves the stream unfinished.
+/// Settling that as `ok` accepts output the harness never read.
+#[test]
+fn an_unfinished_output_stream_after_the_last_result_is_a_failed_row() {
+    let (code, stderr, csv, survivors) = run_fake_with_survivors("fork-after-last", "fork_after_last", 0, 1, 10);
+    assert_eq!(
+        code,
+        Some(1),
+        "an output stream still open after the last result is a failed run: {stderr}"
+    );
+    let rows: Vec<&str> = csv.lines().skip(1).collect();
+    assert_eq!(rows.len(), 2, "one row per order: {csv}");
+    for row in &rows {
+        let fields: Vec<&str> = row.split(',').collect();
+        assert_eq!(fields.get(12).copied(), Some("failed"), "{row}");
+        let note = fields.get(13).copied().unwrap_or("");
+        assert!(note.contains("output"), "the note says why: {row}");
+    }
+    // The harness leaves its own child reaped; the forked grandchild is the test's cleanup, which
+    // is exactly why the snapshot is taken first.
+    assert!(
+        !survivors.is_empty(),
+        "the forked grandchild is expected to still be running: {survivors:?}"
+    );
+    assert_eq!(count_lines(&stderr, "CELL done"), 2, "{stderr}");
 }
 
 /// The final variant's child reports its last result and then never exits. The parent kills it, and
@@ -723,7 +829,8 @@ fn a_sample_that_overflows_the_derived_measurement_is_a_failed_row() {
             "total_ms",
         ),
     ] {
-        let (code, stderr, csv) = run_fake_with_options(name, mode, 0, 1, reps, 10, extra);
+        let (code, stderr, csv, _survivors) =
+            run_fake_with_options(name, mode, 0, 1, reps, 10, extra);
         assert_eq!(code, Some(1), "{mode}: a non-finite measurement is a failed run: {stderr}");
         let rows: Vec<&str> = csv.lines().skip(1).collect();
         assert_eq!(rows.len(), 2, "{mode}: one row per order: {csv}");
@@ -755,6 +862,26 @@ fn a_sample_that_overflows_the_derived_measurement_is_a_failed_row() {
             assert!(note.contains(refused), "{mode}: the note should name {refused}: {row}");
         }
         assert_eq!(count_lines(&stderr, "CELL done"), 2, "{mode}: {stderr}");
+    }
+}
+
+/// A note is forwarded into the CSV. The writer quoted LF, `"` and `,` but not a bare CR, so a note
+/// containing one split the row into two records for any RFC 4180 reader (Python's `csv`, and the
+/// campaign's `summarize_samples.py`).
+#[test]
+fn a_note_with_a_carriage_return_does_not_break_the_csv() {
+    let (stderr, csv, code) = run_fake("cr-note", "cr_note", 0, 1);
+    assert_eq!(code, 0, "a well-formed line with a CR in its note is still a run: {stderr}");
+    let records = csv_records(&csv);
+    assert_eq!(
+        records.len(),
+        3,
+        "a header and one row per order, not four records from two rows: {records:?}"
+    );
+    for row in &records[1..] {
+        assert_eq!(row.len(), 20, "20 columns per row: {row:?}");
+        assert_eq!(row[12], "ok", "{row:?}");
+        assert_eq!(row[13], "foo\rbar", "the note survives verbatim: {row:?}");
     }
 }
 
@@ -892,7 +1019,7 @@ fn garbage_numbers_are_not_an_ok_row() {
 /// An `ok` result with fewer samples than repetitions is not accepted.
 #[test]
 fn a_short_sample_count_is_not_an_ok_row() {
-    let (code, stderr, csv) =
+    let (code, stderr, csv, _survivors) =
         run_fake_with_options("short-samples", "short_samples", 0, 1, 3, 10, &[]);
     assert_eq!(code, Some(1), "a short sample set is a failed run: {stderr}");
     let rows: Vec<&str> = csv.lines().skip(1).collect();

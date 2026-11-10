@@ -76,6 +76,22 @@ if [ "$mode" = "short_result" ] && [ "$from" -eq 0 ]; then
     printf 'RESULT\t0\tok\t\t1.0\t2.0\n'
     exit 0
 fi
+if [ "$mode" = "fork_after_last" ] && [ "$from" -eq 0 ]; then
+    # Every variant's result, a clean exit -- and a grandchild that holds stdout open and prints
+    # later. The parent's own exit says nothing about whether the stream finished.
+    i=0
+    while [ "$i" -lt "$n" ]; do
+        printf 'RESULT\t%s\tok\t\t1.0\t2.0\t1.0\n' "$i"
+        i=$((i + 1))
+    done
+    ( sleep 1.0; printf 'garbage\n' ) &
+    exit 0
+fi
+if [ "$mode" = "cr_note" ] && [ "$from" -eq 0 ]; then
+    # A note that carries a bare carriage return, in a line that is otherwise well formed.
+    printf 'RESULT\t0\tok\tfoo\rbar\t1.0\t2.0\t1.0\n'
+    exit 0
+fi
 if [ "$mode" = "bad_count" ] && [ "$from" -eq 0 ]; then
     # A COUNT line with a field more than the protocol allows, and a payload that is not a number.
     printf 'COUNT\tgarbage\textra\n'

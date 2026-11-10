@@ -286,8 +286,8 @@ Acceptance measured for the ruling (`docs/reviews/20261109-cell-timeout-logs/`):
    **exactly one failed row** (the other order is `ok`).
 3. `acceptance-final-crash`: a fake child reports its last result and exits 3: run exit 1, rows
    failed (not exit 0).
-4. `cargo test --all --locked`: 39 unit passed (1 ignored) + 15 child-process tests passed (29 now;
-   the review fixes added 14).
+4. `cargo test --all --locked`: 39 unit passed (1 ignored) + 15 child-process tests passed (31 now;
+   the review fixes added 15 and repaired one test helper).
 
 ### 6巡目: the review findings, fixed inside that scope
 
@@ -354,6 +354,26 @@ Acceptance measured for the ruling (`docs/reviews/20261109-cell-timeout-logs/`):
    else closes the running variant as `failed`. A repeated *well-formed* `COUNT` stays accepted: a
    flooding child must still be caught by the deadline (`count_flood`), not by the protocol, and that
    queued-vs-deadline question stays where the ruling put it.
+10. **The deadline-kill tests could not fail.** The integration helper killed the harness's whole
+    process group *before* the tests looked for survivors, so `ps -p <pid>` always said "gone": the
+    audit replaced the deadline path's `reap_now(handle.child)` with a fake `Exited(0)` and all 39
+    unit + 29 integration tests still passed. The helper now snapshots the pids still in that group
+    *the moment the harness exits* and only then cleans up, and the two tests that assert a kill
+    (`a_first_variant_hard_kill_...`, the transition table's `hang` row) assert against that
+    snapshot. Under the same mutation they now fail with the surviving pids named.
+11. **A child that exited cleanly with its output still open was a successful measurement.** The
+    final settlement drained twice and merged "the stream reached EOF" with "the bound passed", so a
+    child that printed its last `RESULT`, forked `(sleep 1; printf garbage) &` and exited 0 was
+    accepted: the grandchild held stdout open, the garbage arrived after the parent had stopped
+    reading, and the row was `ok`. `drain_extra` now returns `Drained::{Finished, Open}`, and the last
+    row is `failed` unless the stream actually finished -- the same rule on the `SKIP` path, whose row
+    is not a `skipped` row either when the stream never closed.
+12. **A bare CR in a note split the CSV row.** The note is forwarded verbatim, and `csv_field`
+    quoted `,`, `"` and LF but not CR, which an RFC 4180 reader (Python's `csv`, and therefore
+    `scripts/summarize_samples.py`) treats as a record separator: `RESULT 0 ok "foo\rbar" 1 2 1`
+    produced a file that `csv.reader` read as five records of 20/14/7/14/7 fields and
+    `summarize_samples.py` exited 2 on. CR is now quoted too, and the reader sees a header plus one
+    20-field row per order.
 
 Red → green, both against a fake child: `huge_index` (old: `panicked at main.rs:1352: attempt to
 add with overflow`, exit 101; new: exit 1, rows `failed,ok`) and `garbage_after_last` (old: exit 0
@@ -369,8 +389,11 @@ item 6 (old: exit 0 with `per_item_us=inf` on an `ok` row; new: exit 1, `failed`
 the number it refused), `skip_extra_field` / `skip_short` for item 7 (old: exit 0 with `skipped`
 rows; new: exit 1 with `failed` rows), and `final-hang` for item 8 (old: exit 0 with `ok` rows; new:
 exit 1 with `failed` rows), and `bad_count` / `bad_count_payload` for item 9 (old: exit 0 with
-`ok` rows; new: exit 1 with `failed` rows). `cargo test --locked` is now 39 unit passed (1 ignored)
-+ 29 child-process tests. None of these extends what the PR closes: the three follow-up
+`ok` rows; new: exit 1 with `failed` rows), `fork_after_last` for item 11 (old: exit 0 with `ok`
+rows; new: exit 1 with `failed` rows and `output=still-open`) and `cr_note` for item 12 (old: five
+records, `summarize_samples.py` exit 2; new: three records of 20 fields, exit 0). Item 10 is a test
+defect: its red is the audit's mutation on the deadline path, which the two kill tests now catch.
+`cargo test --locked` is now 39 unit passed (1 ignored) + 31 child-process tests. None of these extends what the PR closes: the three follow-up
 items above are unchanged.
 
 Two further review notes were checked and left alone, with the reason recorded here:
@@ -419,7 +442,7 @@ this head's run, and its first line says so.
 
 ```
 cargo build --locked          # Finished, 0 errors
-cargo test --all --locked     # 39 unit passed (1 ignored) + 29 child-process tests passed
+cargo test --all --locked     # 39 unit passed (1 ignored) + 31 child-process tests passed
 ```
 
 `cargo-test.log` holds the test run at `e1aa47d` (the head is in the file's first line, and its
