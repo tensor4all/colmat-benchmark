@@ -374,8 +374,8 @@ also asked that the long acceptance runs be tied to a head, which the evidence i
 the commits that added them (`e4ef8ef`, `c9b5a60`) are docs-only, and the later review fixes touch
 the parent's protocol handling and the child's stdout reader, not the timed path, the reference math
 or the CSV columns. Those runs have not been repeated at the review-fix head and nothing here claims
-they were; the index says which head each file belongs to. `cargo-test.log` is the exception: the
-head in its first line is the one it measured.
+they were; the index says which head each file belongs to. `cargo-test.log` is the exception: it is
+this head's run, and its first line says so.
 
 ## What this does not change
 
@@ -401,9 +401,8 @@ cargo build --locked          # Finished, 0 errors
 cargo test --locked           # 39 unit passed (1 ignored) + 27 child-process tests passed
 ```
 
-`cargo-test.log` holds the test run at `8f7dcc5` (the head is in the file's first line) -- 39 unit
-passed, 1 ignored, 26 child-process tests. It is a record of *that* head, not of this one, which has
-27 child-process tests; the log was left as it is when the `SKIP` fix landed. CI's `harness` job (#60) runs `cargo check -p fbench --locked`
+`cargo-test.log` holds the test run at `f410dc3` (the head is in the file's first line) -- 39 unit
+passed, 1 ignored, 27 child-process tests. CI's `harness` job (#60) runs `cargo check -p fbench --locked`
 and `cargo test -p fbench --locked` against the committed lock (no `--bins`, so
 `fbench/tests/child_cells.rs` runs too), so the test result is a local run; the merge gate is the
 `harness` job being green on this PR head.
