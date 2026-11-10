@@ -1,6 +1,5 @@
-# head: 5d548ec6ae68420c7a27327c1ec1c4485bdeef7a
+# head: 59e528bb620fc9461fdb5405d063426586071611
 # command: cargo test --all --locked
-   Compiling fbench v0.1.0 (/Users/hiroshi/projects/tensor4all/faer-benchmark-58/fbench)
 warning: type alias `Run` is never used
   --> fbench/src/backend.rs:43:14
    |
@@ -29,37 +28,37 @@ warning: function `nancheck` is never used
 
 warning: `fbench` (bin "fbench") generated 4 warnings
 warning: `fbench` (bin "fbench" test) generated 2 warnings (2 duplicates)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.80s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.04s
      Running unittests src/main.rs (/Users/hiroshi/projects/tensor4all/faer-benchmark-58/target/debug/deps/fbench-afcf7c3923d6491d)
 
 running 40 tests
 test shared::tests::reference_math_cost ... ignored
-test tests::an_unrepresentable_limit_cuts_the_cell ... ok
 test shared::tests::reference_matmul_is_layout_independent ... ok
 test shared::tests::residuals_reject_missing_and_nonfinite_values ... ok
+test tests::an_unrepresentable_limit_cuts_the_cell ... ok
 test shared::tests::the_fast_residuals_still_reject_nonfinite_input ... ok
 test tests::a_csv_that_lost_a_row_is_a_failed_run ... ok
 test shared::tests::the_fast_f32_residual_agrees_to_f32_precision ... ok
 test tests::probe_flags_and_ordered_csv_samples ... ok
-test tests::the_cell_clock_covers_the_reference_construction ... ok
 test tests::the_cell_limit_is_configured_with_a_default ... ok
+test tests::the_cell_clock_covers_the_reference_construction ... ok
+test tests::compound_library_calls_are_guarded ... ok
 test shared::tests::an_expired_limit_stops_the_reference_math_before_it_writes ... ok
 test tests::a_batch_op_does_not_start_a_call_after_the_limit ... ok
-test tests::compound_library_calls_are_guarded ... ok
 test tests::waiting_points_are_enumerated_and_polled ... ok
 test shared::tests::the_fast_reference_math_agrees_with_the_old_one ... ok
 test tests::a_prepare_that_factorizes_does_not_start_the_next_member_after_the_limit ... ok
-test tests::reap_child_reports_a_finished_child ... ok
-test timing::tests::retains_repetitions_and_checks_the_last_run ... ok
 test timing::tests::a_stage_error_after_the_limit_is_a_cut ... ok
+test timing::tests::retains_repetitions_and_checks_the_last_run ... ok
+test tests::reap_child_reports_a_finished_child ... ok
 test timing::tests::a_timed_prepare_past_the_limit_does_not_run ... ok
-test timing::tests::the_check_time_is_reported_apart_from_the_timed_calls ... ok
-test timing::tests::a_successful_stage_past_the_limit_is_not_a_measurement ... ok
+test op::tests::checks_reject_a_missing_execution ... ok
 test variant_budget_tests::an_unrepresentable_limit_is_still_a_limit ... ok
 test variant_budget_tests::two_variants_do_not_share_one_deadline ... ok
-test timing::tests::the_cell_clock_cuts_a_check_that_outruns_it ... ok
-test op::tests::checks_reject_a_missing_execution ... ok
+test timing::tests::the_check_time_is_reported_apart_from_the_timed_calls ... ok
+test timing::tests::a_successful_stage_past_the_limit_is_not_a_measurement ... ok
 test timing::tests::the_final_prepare_past_the_limit_cuts_the_cell ... ok
+test timing::tests::the_cell_clock_cuts_a_check_that_outruns_it ... ok
 test tests::reap_child_kills_a_running_child_within_the_bound ... ok
 test tests::the_high_level_solve_polls_between_factor_and_solve ... ok
 test tests::the_fork_owning_solve_polls_between_factor_and_solve ... ok
@@ -74,42 +73,42 @@ test tests::verification_does_not_run_after_a_prepare_past_the_limit ... ok
 test tests::householder_check_polls_before_applying_the_factor ... ok
 test op::tests::fork_calls_run_on_the_lent_team ... ok
 
-test result: ok. 39 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 22.73s
+test result: ok. 39 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 22.91s
 
      Running tests/child_cells.rs (/Users/hiroshi/projects/tensor4all/faer-benchmark-58/target/debug/deps/child_cells-d3186778d0198ca4)
 
 running 31 tests
 test a_child_that_cannot_start_closes_the_variant_with_a_failed_row ... ok
 test a_finished_run_pairs_every_start_with_a_done ... ok
+test a_note_with_a_carriage_return_does_not_break_the_csv ... ok
+test a_late_skip_is_a_failed_cell_and_the_rest_run ... ok
+test a_crash_after_a_result_is_not_a_cooperative_exit ... ok
+test an_extra_carriage_return_is_not_trimmed_into_a_valid_sample ... ok
+test a_skip_followed_by_a_crash_is_a_failed_row ... ok
+test a_crash_after_the_last_result_is_a_failed_row ... ok
 test a_bare_carriage_return_at_eof_is_not_trimmed_into_a_valid_sample ... ok
 test a_short_sample_count_is_not_an_ok_row ... ok
-test a_crash_after_a_result_is_not_a_cooperative_exit ... ok
-test a_skip_followed_by_a_crash_is_a_failed_row ... ok
-test a_late_skip_is_a_failed_cell_and_the_rest_run ... ok
-test a_note_with_a_carriage_return_does_not_break_the_csv ... ok
-test a_crash_after_the_last_result_is_a_failed_row ... ok
 test an_index_beyond_the_variants_is_a_failed_row_not_a_panic ... ok
-test an_extra_carriage_return_is_not_trimmed_into_a_valid_sample ... ok
 test a_sample_that_overflows_the_derived_measurement_is_a_failed_row ... ok
+test invalid_utf8_after_the_last_result_is_a_failed_row ... ok
 test a_count_with_the_wrong_shape_is_a_failed_row ... ok
 test the_child_exits_when_the_given_parent_is_not_its_parent ... ok
-test verify_reports_an_unsupported_family_as_skip_not_mismatch ... ok
 test garbage_numbers_are_not_an_ok_row ... ok
+test invalid_utf8_before_a_result_is_a_failed_row ... ok
+test verify_reports_an_unsupported_family_as_skip_not_mismatch ... ok
 test a_skip_with_the_wrong_field_count_is_a_failed_row ... ok
 test a_result_with_the_wrong_field_count_is_a_failed_row ... ok
-test invalid_utf8_before_a_result_is_a_failed_row ... ok
-test invalid_utf8_after_the_last_result_is_a_failed_row ... ok
 test output_after_a_skip_is_a_failed_row ... ok
 test output_after_the_last_result_is_a_failed_row ... ok
 test an_unknown_line_before_a_result_is_a_failed_row ... ok
 test a_malformed_result_closes_the_variant_and_reaps_the_child ... ok
 test late_output_during_the_reap_is_a_failed_row ... ok
 test a_final_child_that_had_to_be_killed_is_a_failed_row ... ok
-test an_unfinished_output_stream_after_the_last_result_is_a_failed_row ... ok
 test a_child_that_hangs_after_its_last_result_does_not_stall_the_run ... ok
+test an_unfinished_output_stream_after_the_last_result_is_a_failed_row ... ok
 test a_first_variant_hard_kill_leaves_a_row_and_the_next_variant_runs ... ok
 test a_count_flood_does_not_escape_the_deadline ... ok
 test every_cell_event_leaves_exactly_one_terminal_row ... ok
 
-test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.08s
+test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.25s
 
