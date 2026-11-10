@@ -20,7 +20,6 @@
 mod imp {
     use crate::op::{op_from, Op};
     use crate::shared::*;
-    use crate::timing::{cut_error, expired};
     use core::ffi::{c_char, c_void};
     use num_complex::Complex64;
 
@@ -938,9 +937,6 @@ mod imp {
             },
             |s, _tk| {
                 for bi in 0..s.batch {
-                    if expired() {
-                        return Err(cut_error());
-                    }
                     T::gemm(
                         layout(s.order),
                         s.m,
@@ -1006,9 +1002,6 @@ mod imp {
             },
             |s, _tk| {
                 for bi in 0..s.batch {
-                    if expired() {
-                        return Err(cut_error());
-                    }
                     let info = T::geqrf(
                         layout(s.order),
                         s.m,
@@ -1108,9 +1101,6 @@ mod imp {
             },
             |s, _tk| {
                 for bi in 0..s.batch {
-                    if expired() {
-                        return Err(cut_error());
-                    }
                     let (a, ipiv) = &mut s.outputs[bi];
                     let info = T::getrf(
                         layout(s.order),
@@ -1201,9 +1191,6 @@ mod imp {
             },
             |s, _tk| {
                 for bi in 0..s.batch {
-                    if expired() {
-                        return Err(cut_error());
-                    }
                     let a = &mut s.outputs[bi];
                     let info = T::potrf(layout(s.order), s.n, a, leading(s.n, s.n, s.order));
                     if info != 0 {
@@ -1268,9 +1255,6 @@ mod imp {
             },
             |s, _tk| {
                 for bi in 0..s.batch {
-                    if expired() {
-                        return Err(cut_error());
-                    }
                     let (a, ipiv) = &mut s.work[bi];
                     let info = T::gesv(
                         layout(s.order),
@@ -1359,9 +1343,6 @@ mod imp {
             |s, _tk| {
                 let r = s.m.min(s.n);
                 for bi in 0..s.batch {
-                    if expired() {
-                        return Err(cut_error());
-                    }
                     let a = &mut s.work[bi];
                     let (sigma, u, vt) = &mut s.outputs[bi];
                     let mut dummy_u = [T::zero()];
@@ -1488,9 +1469,6 @@ mod imp {
             },
             |s, _tk| {
                 for bi in 0..s.batch {
-                    if expired() {
-                        return Err(cut_error());
-                    }
                     let (a, w) = &mut s.outputs[bi];
                     let info = T::evd(
                         layout(s.order),

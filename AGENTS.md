@@ -99,9 +99,10 @@ run's own CSV and in `run_spec.populations[].skipped`, not silently dropped.
 
 ## The harness is a third identity
 
-`fbench` lives in this repository (`fbench/src/`) and is linked to the measured libraries by path.
-A change to it that can move a number invalidates the evidence exactly as a library change does —
-the harness commit is recorded per run and repeated in every page header. The currency computation in
+`fbench` lives in this repository and is linked to the measured libraries by path. It is not
+written yet (`fbench/Cargo.toml` is a placeholder with no `src/`). When it lands, a change to it
+that can move a number invalidates the evidence exactly as a library change does — the harness
+commit is recorded per run and repeated in every page header. The currency computation in
 `result/INDEX.md` covers the two pinned libraries; a harness change does not move a pin, so the
 manifest and the page header are where it is visible.
 
