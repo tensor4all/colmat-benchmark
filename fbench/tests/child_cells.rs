@@ -17,6 +17,8 @@ fn csv_path(name: &str) -> PathBuf {
 struct Run {
     code: Option<i32>,
     csv: Vec<Vec<String>>,
+    /// The harness's stderr; the child inherits it, so a diagnostic the child prints is here.
+    stderr: String,
     /// Pids still in the harness's process group the moment it exited, sampled before this test's
     /// own cleanup: a child the harness failed to kill is visible only until then.
     survivors: Vec<u32>,
@@ -68,11 +70,13 @@ fn run(name: &str, fake: Option<(&str, usize)>, extra: &[&str]) -> Run {
     };
     let code = child.wait().expect("wait fbench").code();
     let text = std::fs::read_to_string(&csv).unwrap_or_default();
+    let stderr = std::fs::read_to_string(&err).unwrap_or_default();
     std::fs::remove_file(&csv).ok();
     std::fs::remove_file(&err).ok();
     Run {
         code,
         csv: records(&text),
+        stderr,
         survivors,
     }
 }
@@ -158,6 +162,27 @@ fn a_finished_run_writes_one_ok_row_per_variant() {
         run.survivors.is_empty(),
         "the harness left processes behind: {:?}",
         run.survivors
+    );
+}
+
+/// The child measures the configuration the parent asked for. It used to run the build without ever
+/// calling `configure_threads`, so it built the pool it liked (every core) while the row said
+/// `threads=1`: the same cell, a different machine configuration. The child now configures itself --
+/// pool, vendor thread count, the faer rows' parallelism -- and re-checks the result before it
+/// builds anything, and it says what it ended up with.
+///
+/// The registry arm this repository builds in CI links no vendor library, so `--threads 2` is
+/// refused outright (by the parent too, before this change); a vendor arm would also assert
+/// `vendor=Some(2)` here.
+#[test]
+fn the_child_measures_with_the_threads_it_was_given() {
+    let run = run("threads", None, &["--cell-timeout", "60"]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert_eq!(statuses(&run), ["ok", "ok"], "{:?}", run.csv);
+    assert!(
+        run.stderr.contains("CELL child threads=1 rayon=1 vendor=None"),
+        "the child must configure --threads and check it before it builds: {}",
+        run.stderr
     );
 }
 

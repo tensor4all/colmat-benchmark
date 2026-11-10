@@ -635,6 +635,23 @@ fn child_main(spec_text: &str) -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    // The child does the measuring, so it has to be the configuration the parent asked for: the
+    // Rayon pool, the vendor's own thread count (which also turns off LAPACKE's NaN check) and the
+    // faer rows' global parallelism. Without this the build ran on this process's defaults and the
+    // row still said `threads=<n>`: the same cell measured on a different machine configuration.
+    // A child that cannot set it up must not measure at all -- a non-zero exit makes the parent
+    // write a failed row, not a `skipped` one.
+    if let Err(e) = configure_threads(spec.threads) {
+        eprintln!("{e}");
+        return ExitCode::from(2);
+    }
+    // Say what it actually built, so a log (and the thread test) can check it.
+    eprintln!(
+        "CELL child threads={} rayon={} vendor={:?}",
+        spec.threads,
+        rayon::current_num_threads(),
+        vendor::reported_threads()
+    );
     let ops = match ops_for(&spec.row, spec.dtype, &spec.family, spec.case, spec.order) {
         Ok(ops) => ops,
         Err(note) => {
