@@ -105,13 +105,47 @@ fn group_survivors(group: u32) -> Vec<u32> {
         .args(["-A", "-o", "pid=,pgid="])
         .output()
         .expect("ps -A -o pid=,pgid=");
-    String::from_utf8_lossy(&out.stdout)
+    // A `ps` that failed prints nothing, and reading that as "nothing is alive" would make every
+    // assertion below vacuous again.
+    assert!(
+        out.status.success(),
+        "ps -A -o pid=,pgid= failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let listing = String::from_utf8_lossy(&out.stdout);
+    assert!(!listing.trim().is_empty(), "ps listed no process at all");
+    listing
         .lines()
         .filter_map(|line| {
             let mut fields = line.split_whitespace();
             let pid: u32 = fields.next()?.parse().ok()?;
             let pgid: u32 = fields.next()?.parse().ok()?;
             (pgid == group && pid != group).then_some(pid)
+        })
+        .collect()
+}
+
+/// Whether `ps` still lists `pid`. A child that was killed but never waited for is a zombie and is
+/// still listed, so this distinguishes "killed and reaped" from "killed and left".
+fn listed(pid: u32) -> bool {
+    let out = Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "pid="])
+        .output()
+        .expect("ps -p <pid> -o pid=");
+    if !out.status.success() {
+        return false;
+    }
+    !String::from_utf8_lossy(&out.stdout).trim().is_empty()
+}
+
+/// The pids of the `CELL kill` lines in a harness log.
+fn killed_pids(log: &str) -> Vec<u32> {
+    log.lines()
+        .filter(|line| line.starts_with("CELL kill"))
+        .filter_map(|line| {
+            line.split_whitespace()
+                .find_map(|field| field.strip_prefix("pid="))
+                .and_then(|pid| pid.parse().ok())
         })
         .collect()
 }
@@ -151,11 +185,31 @@ fn run_fake_with_options(
     let mut child = command.spawn().expect("spawn fbench");
     let pid = child.id();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(seconds);
+    // Pids the harness left alive: a killed child that it never waited for is a zombie (still
+    // listed) until the harness itself exits, after which init may collect it before any `ps` here.
+    // So each `CELL kill` pid is checked as soon as the line appears, while the harness is running.
+    let mut left_alive: Vec<u32> = Vec::new();
+    let mut seen_kills: Vec<u32> = Vec::new();
     loop {
+        if let Ok(log) = std::fs::read_to_string(&err_path) {
+            for killed in killed_pids(&log) {
+                if seen_kills.contains(&killed) {
+                    continue;
+                }
+                seen_kills.push(killed);
+                if listed(killed) {
+                    left_alive.push(killed);
+                }
+            }
+        }
         if let Some(status) = child.try_wait().expect("try_wait") {
             // The parent is gone. Snapshot what is still in its process group *first*: anything the
-            // harness failed to kill or reap is visible only until the cleanup below.
-            let survivors = group_survivors(pid);
+            // harness never killed is visible only until the cleanup below.
+            for survivor in group_survivors(pid) {
+                if !left_alive.contains(&survivor) {
+                    left_alive.push(survivor);
+                }
+            }
             let _ = Command::new("kill")
                 .args(["-KILL", &format!("-{pid}")])
                 .stdout(std::process::Stdio::null())
@@ -165,7 +219,7 @@ fn run_fake_with_options(
             let csv_text = std::fs::read_to_string(&csv).unwrap_or_default();
             std::fs::remove_file(&csv).ok();
             std::fs::remove_file(&err_path).ok();
-            return (status.code(), stderr, csv_text, survivors);
+            return (status.code(), stderr, csv_text, left_alive);
         }
         if std::time::Instant::now() >= deadline {
             // The parent is in its own process group; kill the group so the fake child cannot
@@ -226,7 +280,7 @@ fn run_fake(name: &str, mode: &str, at: usize, n: usize) -> (String, String, i32
 fn a_first_variant_hard_kill_leaves_a_row_and_the_next_variant_runs() {
     // The survivors are sampled the moment the harness exits, before this test's own cleanup: a
     // post-hoc `ps -p` would pass even if the harness had killed and reaped nothing.
-    let (code, stderr, csv, survivors) = run_fake_with_survivors("hard-kill", "hang", 0, 3, 10);
+    let (code, stderr, csv, left_alive) = run_fake_with_survivors("hard-kill", "hang", 0, 3, 10);
     let code = code.expect("the fake-child run must finish within the test's 10 s deadline");
     assert_eq!(code, 1, "a cut variant is a non-zero run: {stderr}");
 
@@ -267,13 +321,13 @@ fn a_first_variant_hard_kill_leaves_a_row_and_the_next_variant_runs() {
     for pid in &pids {
         let pid: u32 = pid.parse().expect("a pid");
         assert!(
-            !survivors.contains(&pid),
-            "the harness killed child {pid} but did not reap it: still alive {survivors:?}\n{stderr}"
+            !left_alive.contains(&pid),
+            "the harness killed child {pid} but left it listed (reaped? killed at all?): {left_alive:?}\n{stderr}"
         );
     }
     assert!(
-        survivors.is_empty(),
-        "the harness must leave nothing running in its process group: {survivors:?}\n{stderr}"
+        left_alive.is_empty(),
+        "the harness must leave nothing running in its process group: {left_alive:?}\n{stderr}"
     );
 }
 
@@ -343,7 +397,7 @@ fn every_cell_event_leaves_exactly_one_terminal_row() {
             "the event table has an event this test does not implement: {event}"
         );
         let name = format!("table-{event}-{at}");
-        let (code, stderr, body, survivors) = run_fake_with_survivors(&name, &event, at, 3, 10);
+        let (code, stderr, body, left_alive) = run_fake_with_survivors(&name, &event, at, 3, 10);
         assert!(
             code.is_some(),
             "{name}: the parent did not finish within the test's 10 s deadline: {stderr}"
@@ -436,8 +490,8 @@ fn every_cell_event_leaves_exactly_one_terminal_row() {
                 );
                 let pid: u32 = pids[0].parse().expect("a pid");
                 assert!(
-                    !survivors.contains(&pid),
-                    "{name} id={id}: the harness killed child {pid} but left it alive {survivors:?}"
+                    !left_alive.contains(&pid),
+                    "{name} id={id}: the harness killed child {pid} but left it listed {left_alive:?}"
                 );
             }
             assert_eq!(kills.len(), 2, "{name}: one hard kill per build: {stderr}");
@@ -529,7 +583,8 @@ fn verify_reports_an_unsupported_family_as_skip_not_mismatch() {
 /// Settling that as `ok` accepts output the harness never read.
 #[test]
 fn an_unfinished_output_stream_after_the_last_result_is_a_failed_row() {
-    let (code, stderr, csv, survivors) = run_fake_with_survivors("fork-after-last", "fork_after_last", 0, 1, 10);
+    let (code, stderr, csv, left_alive) =
+        run_fake_with_survivors("fork-after-last", "fork_after_last", 0, 1, 10);
     assert_eq!(
         code,
         Some(1),
@@ -546,8 +601,8 @@ fn an_unfinished_output_stream_after_the_last_result_is_a_failed_row() {
     // The harness leaves its own child reaped; the forked grandchild is the test's cleanup, which
     // is exactly why the snapshot is taken first.
     assert!(
-        !survivors.is_empty(),
-        "the forked grandchild is expected to still be running: {survivors:?}"
+        !left_alive.is_empty(),
+        "the forked grandchild is expected to still be running: {left_alive:?}"
     );
     assert_eq!(count_lines(&stderr, "CELL done"), 2, "{stderr}");
 }

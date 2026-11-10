@@ -1100,8 +1100,14 @@ fn spawn_cell(exe: &std::path::Path, spec: &CellSpec) -> Result<CellChild, Strin
         loop {
             let mut raw = Vec::new();
             match reader.read_until(b'\n', &mut raw) {
-                Ok(0) | Err(_) => break,
+                Ok(0) => break,
                 Ok(_) => {}
+                Err(e) => {
+                    // A read error is not an end of the child's output: report it as broken output,
+                    // so the variant it belongs to fails rather than passing on a truncated stream.
+                    let _ = tx.send(Err(format!("reading the cell child's stdout failed: {e}")));
+                    break;
+                }
             }
             if raw.last() == Some(&b'\n') {
                 raw.pop();

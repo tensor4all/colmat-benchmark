@@ -367,7 +367,16 @@ Acceptance measured for the ruling (`docs/reviews/20261109-cell-timeout-logs/`):
     accepted: the grandchild held stdout open, the garbage arrived after the parent had stopped
     reading, and the row was `ok`. `drain_extra` now returns `Drained::{Finished, Open}`, and the last
     row is `failed` unless the stream actually finished -- the same rule on the `SKIP` path, whose row
-    is not a `skipped` row either when the stream never closed.
+    is not a `skipped` row either when the stream never closed. The reader had the same shape: a read
+    error ended it exactly like EOF, so a truncated stream could pass; it now goes down the
+    `Wake::Broken` path like any other broken output.
+
+    The kill assertions themselves were the other half of this: sampling survivors after the harness
+    exited is not enough, because a child that was killed but never waited for is a zombie that init
+    may collect in between. Each `CELL kill` pid is therefore checked as soon as that line appears,
+    while the harness is still running, and the group snapshot at exit only answers "was anything
+    ever left running". Both halves are exercised by mutation: killing nothing, and killing without
+    waiting, each fail these tests with the pid named.
 12. **A bare CR in a note split the CSV row.** The note is forwarded verbatim, and `csv_field`
     quoted `,`, `"` and LF but not CR, which an RFC 4180 reader (Python's `csv`, and therefore
     `scripts/summarize_samples.py`) treats as a record separator: `RESULT 0 ok "foo\rbar" 1 2 1`
