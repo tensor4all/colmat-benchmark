@@ -414,8 +414,8 @@ cargo build --locked          # Finished, 0 errors
 cargo test --locked           # 39 unit passed (1 ignored) + 28 child-process tests passed
 ```
 
-`cargo-test.log` holds the test run at `f410dc3` (the head is in the file's first line) -- 39 unit
-passed, 1 ignored, 27 child-process tests. CI's `harness` job (#60) runs `cargo check -p fbench --locked`
+`cargo-test.log` holds the test run at `ccb5eb5` (the head is in the file's first line) -- 39 unit
+passed, 1 ignored, 28 child-process tests. CI's `harness` job (#60) runs `cargo check -p fbench --locked`
 and `cargo test -p fbench --locked` against the committed lock (no `--bins`, so
 `fbench/tests/child_cells.rs` runs too), so the test result is a local run; the merge gate is the
 `harness` job being green on this PR head.

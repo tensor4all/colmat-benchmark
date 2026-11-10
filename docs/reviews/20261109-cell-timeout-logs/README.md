@@ -12,7 +12,7 @@ head. `cargo-test.log` is the exception -- it was re-run at the head in its own 
 
 | file | command |
 |---|---|
-| `cargo-test.log` | (head `f410dc3`, recorded in the file's first line) `cargo test --locked -- --test-threads=1`: 39 unit passed (1 ignored) + 27 child-process tests. Replaces the `42a90be` version of this file, which had 15 child-process tests |
+| `cargo-test.log` | (head `ccb5eb5`, recorded in the file's first line) `cargo test --locked -- --test-threads=1`: 39 unit passed (1 ignored) + 28 child-process tests. Replaces the `42a90be` version of this file, which had 15 child-process tests |
 | `reference-math-probe.txt` | (head `42a90be`) `cargo test --release --locked reference_math_cost -- --ignored --nocapture`, three rounds, then the medians |
 | `cut-run.log`, `cut-run.csv` | (head `42a90be`) `fbench run --threads 1 --family svd_thin --dtype f64 --rows faer-fork --n 512,1024 --reps 1 --prime-ms 0 --cell-timeout 1 --csv cut-run.csv` |
 | `kill-before.log` | the same run, `--n 512,4096 --cell-timeout 0`, built at `ef4bf4e`, `SIGKILL` after 15 s: no CSV was written at all, so there is none here |
