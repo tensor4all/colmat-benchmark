@@ -376,10 +376,10 @@ items above are unchanged.
 Two further review notes were checked and left alone, with the reason recorded here:
 
 * **A `COUNT` line is still position-dependent** (accepted any number of times before a result,
-  rejected after the last one). It only records how long construction took, and the parent does not
-  read its payload; rejecting a repeated `COUNT` would change `count_flood`'s expected
-  `timeout`-by-kill rows, which is the queued-message-vs-deadline behaviour this PR keeps out (it is
-  in the "not closed" list above).
+  rejected after the last one). Its shape and payload are checked now, but its value only records how
+  long construction took and goes no further; rejecting a repeated `COUNT` would change
+  `count_flood`'s expected `timeout`-by-kill rows, which is the queued-message-vs-deadline behaviour
+  this PR keeps out (it is in the "not closed" list above).
 * **A build-level `SKIP` from a replacement child still re-finishes variant 1 and drops the rest.**
   That is **#62**, already listed above as not closed; the new arms respawn exactly the way the
   pre-existing protocol-error and exit paths do, so they inherit it rather than create it.
@@ -422,8 +422,8 @@ cargo build --locked          # Finished, 0 errors
 cargo test --all --locked     # 39 unit passed (1 ignored) + 29 child-process tests passed
 ```
 
-`cargo-test.log` holds the test run at `ccb5eb5` (the head is in the file's first line) -- 39 unit
-passed, 1 ignored, 28 child-process tests. CI's `harness` job (#60) runs `cargo check -p fbench --locked`
+`cargo-test.log` holds the test run at `e1aa47d` (the head is in the file's first line, and its
+command is `cargo test --all --locked`) -- 39 unit passed, 1 ignored, 29 child-process tests. CI's `harness` job (#60) runs `cargo check -p fbench --locked`
 and `cargo test -p fbench --locked` against the committed lock (no `--bins`, so
 `fbench/tests/child_cells.rs` runs too), so the test result is a local run; the merge gate is the
 `harness` job being green on this PR head.
