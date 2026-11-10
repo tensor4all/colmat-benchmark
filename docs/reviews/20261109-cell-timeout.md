@@ -383,7 +383,9 @@ Acceptance measured for the ruling (`docs/reviews/20261109-cell-timeout-logs/`):
     failure, another exit code, or success with no output. The second used to be read as the first, so
     a `ps` wrapper on `PATH` that exits 2 made every kill assertion vacuous; it now fails the test with
     the reason (`the test cannot observe the harness: ps -p <pid> could not answer (exit status: 2)`),
-    and a regression test injects exactly that wrapper.
+    and a regression test injects exactly that wrapper. "Exit 1" alone is not the absent answer either:
+    both BSD and GNU `ps` report an absent pid as exit 1 with an *empty* stderr, so an exit 1 that
+    explains a problem on stderr is an observation error too, with its own injection in the same test.
 12. **A bare CR in a note split the CSV row.** The note is forwarded verbatim, and `csv_field`
     quoted `,`, `"` and LF but not CR, which an RFC 4180 reader (Python's `csv`, and therefore
     `scripts/summarize_samples.py`) treats as a record separator: `RESULT 0 ok "foo\rbar" 1 2 1`

@@ -134,24 +134,27 @@ fn listed(pid: u32) -> Result<bool, String> {
 /// The same, against a named `ps` program, so a test can hand it one that cannot answer.
 ///
 /// Only two answers count: the pid was printed (it exists), or `ps` exited 1 having printed nothing
-/// (both BSD and GNU `ps` say "no such process" that way). Anything else -- a spawn failure, another
-/// exit code, or success with no output -- means the test cannot see the process table, and it has
-/// to say so rather than report the child as gone.
+/// *and* said nothing -- both BSD and GNU `ps` report an absent pid that way, silently (measured on
+/// macOS: a reaped or unused in-range pid gives exit 1 with an empty stderr). Anything else -- a spawn
+/// failure, another exit code, success with no output, or an exit 1 that explains a problem on stderr
+/// -- means the test cannot see the process table, and it has to say so rather than report the child
+/// as gone.
 fn listed_with(ps: &str, pid: u32) -> Result<bool, String> {
     let out = Command::new(ps)
         .args(["-p", &pid.to_string(), "-o", "pid="])
         .output()
         .map_err(|e| format!("cannot run {ps}: {e}"))?;
+    let stderr = String::from_utf8_lossy(&out.stderr);
     if !String::from_utf8_lossy(&out.stdout).trim().is_empty() {
         return Ok(true);
     }
-    if out.status.code() == Some(1) {
+    if out.status.code() == Some(1) && stderr.trim().is_empty() {
         return Ok(false);
     }
     Err(format!(
         "{ps} -p {pid} could not answer ({}): {}",
         out.status,
-        String::from_utf8_lossy(&out.stderr).trim()
+        stderr.trim()
     ))
 }
 
@@ -179,13 +182,22 @@ fn a_ps_that_cannot_answer_is_an_error_not_a_missing_pid() {
     );
 
     use std::os::unix::fs::PermissionsExt;
-    let script = std::env::temp_dir().join(format!("fbench-ps-broken-{}", std::process::id()));
-    std::fs::write(&script, "#!/bin/sh\necho 'ps: injected failure' >&2\nexit 2\n").expect("write");
-    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("chmod");
-    let err = listed_with(&script.to_string_lossy(), me)
-        .expect_err("a ps that exits 2 has not said the pid is gone");
-    assert!(err.contains("could not answer"), "{err}");
-    std::fs::remove_file(&script).ok();
+    // A `ps` that fails to run at all (exit 2), and one that explains a problem on stderr but exits 1
+    // -- the code an absent pid uses. "Exit 1" alone is not enough: a `ps` that complains and then
+    // exits 1 has not said the pid is gone, and reading it that way would prove the kill.
+    for (tag, body) in [
+        ("exit2", "#!/bin/sh\necho 'ps: injected failure' >&2\nexit 2\n"),
+        ("exit1-stderr", "#!/bin/sh\necho 'ps: injected failure' >&2\nexit 1\n"),
+    ] {
+        let script = std::env::temp_dir()
+            .join(format!("fbench-ps-{tag}-{}", std::process::id()));
+        std::fs::write(&script, body).expect("write");
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        let err = listed_with(&script.to_string_lossy(), me)
+            .expect_err("a ps that explains a failure has not said the pid is gone");
+        assert!(err.contains("could not answer"), "{tag}: {err}");
+        std::fs::remove_file(&script).ok();
+    }
 }
 
 /// The pids of the `CELL kill` lines in a harness log.
