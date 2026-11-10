@@ -844,6 +844,24 @@ struct ChildResult {
 const RESULT_FIELDS: usize = 7;
 /// `SKIP<TAB>note`, the only other line the child writes to stdout.
 const SKIP_FIELDS: usize = 2;
+/// `COUNT<TAB>n`, the first line of a spawn: how many variants the build produced.
+const COUNT_FIELDS: usize = 2;
+
+/// `COUNT<TAB>n`. The parent does not need the number (it reads one `RESULT` per variant), but a line
+/// that carries something else is broken output, and the harness does not record broken output as
+/// success. A repeated, well-formed `COUNT` stays accepted: a flooding child must still be caught by
+/// the deadline, not by the protocol.
+fn parse_count(fields: &[&str]) -> Result<usize, String> {
+    if fields.len() != COUNT_FIELDS {
+        return Err(format!(
+            "COUNT has {} field(s), expected {COUNT_FIELDS}",
+            fields.len()
+        ));
+    }
+    fields[1]
+        .parse::<usize>()
+        .map_err(|e| format!("COUNT payload is not a count: {e}"))
+}
 
 fn parse_number(field: &str, name: &str) -> Result<Option<f64>, String> {
     if field.is_empty() {
@@ -1382,6 +1400,19 @@ fn run_build_in_child(
                 let fields: Vec<&str> = line.split('\t').collect();
                 match fields.first().copied() {
                     Some("COUNT") => {
+                        if let Err(e) = parse_count(&fields) {
+                            let pid = handle.pid;
+                            let reaped = reap_child(handle.child);
+                            drop(handle.reader);
+                            let cell = protocol_error(next, e, pid, reaped.text());
+                            finish(csv, cell, next);
+                            next += 1;
+                            current = None;
+                            if next < n {
+                                start(next);
+                            }
+                            continue;
+                        }
                         construction = spawn_time.elapsed();
                     }
                     Some("SKIP") => {

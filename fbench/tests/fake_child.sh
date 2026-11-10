@@ -76,6 +76,18 @@ if [ "$mode" = "short_result" ] && [ "$from" -eq 0 ]; then
     printf 'RESULT\t0\tok\t\t1.0\t2.0\n'
     exit 0
 fi
+if [ "$mode" = "bad_count" ] && [ "$from" -eq 0 ]; then
+    # A COUNT line with a field more than the protocol allows, and a payload that is not a number.
+    printf 'COUNT\tgarbage\textra\n'
+    printf 'RESULT\t0\tok\t\t1.0\t2.0\t1.0\n'
+    exit 0
+fi
+if [ "$mode" = "bad_count_payload" ] && [ "$from" -eq 0 ]; then
+    # The right number of fields, but the payload is not a count.
+    printf 'COUNT\tgarbage\n'
+    printf 'RESULT\t0\tok\t\t1.0\t2.0\t1.0\n'
+    exit 0
+fi
 if [ "$mode" = "skip_extra_field" ] && [ "$from" -eq 0 ]; then
     # A skip with a field more than the protocol allows, and a clean exit.
     printf 'SKIP\tfake skip\tgarbage\n'

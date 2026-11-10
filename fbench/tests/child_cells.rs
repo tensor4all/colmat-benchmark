@@ -758,6 +758,25 @@ fn a_sample_that_overflows_the_derived_measurement_is_a_failed_row() {
     }
 }
 
+/// `COUNT` is the first line the child writes, and it is a protocol line like the others: two fields,
+/// the second an integer. It used to be accepted whatever it said, so a broken `COUNT` was broken
+/// output recorded as success -- the same fail-open as the other line kinds had.
+#[test]
+fn a_count_with_the_wrong_shape_is_a_failed_row() {
+    for (name, mode) in [("bad-count", "bad_count"), ("bad-count-payload", "bad_count_payload")] {
+        let (stderr, csv, code) = run_fake(name, mode, 0, 1);
+        assert_eq!(code, 1, "{mode}: a malformed COUNT is a failed run: {stderr}");
+        let rows: Vec<&str> = csv.lines().skip(1).collect();
+        assert_eq!(rows.len(), 2, "{mode}: one row per order: {csv}");
+        for row in &rows {
+            let status = row.split(',').nth(12).unwrap_or("?");
+            assert_eq!(status, "failed", "{mode}: {row}");
+        }
+        assert!(stderr.contains("protocol-error"), "{mode}: {stderr}");
+        assert_eq!(count_lines(&stderr, "CELL done"), 2, "{mode}: {stderr}");
+    }
+}
+
 /// A `SKIP` has a fixed shape too: two fields. A stray field used to be dropped and the line became a
 /// `skipped` row, which is broken output recorded as success on the other settlement path.
 #[test]

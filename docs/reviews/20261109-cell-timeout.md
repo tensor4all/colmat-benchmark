@@ -286,8 +286,8 @@ Acceptance measured for the ruling (`docs/reviews/20261109-cell-timeout-logs/`):
    **exactly one failed row** (the other order is `ok`).
 3. `acceptance-final-crash`: a fake child reports its last result and exits 3: run exit 1, rows
    failed (not exit 0).
-4. `cargo test --all --locked`: 39 unit passed (1 ignored) + 15 child-process tests passed (28 now;
-   the review fixes added 13).
+4. `cargo test --all --locked`: 39 unit passed (1 ignored) + 15 child-process tests passed (29 now;
+   the review fixes added 14).
 
 ### 6巡目: the review findings, fixed inside that scope
 
@@ -347,6 +347,13 @@ Acceptance measured for the ruling (`docs/reviews/20261109-cell-timeout-logs/`):
    is gone. The existing test that asserted exit 0 for this
    (`a_child_that_hangs_after_its_last_result_does_not_stall_the_run`) now asserts exit 1 and the
    `ok, ok, failed` rows, keeping its point that the parent itself never stalls.
+9. **`COUNT` was the last unchecked line.** Its arm read nothing at all: the field count and the
+   payload were never looked at, so `COUNT garbage extra` followed by a good `RESULT` was a
+   successful run -- the same fail-open the `RESULT`, `SKIP` and unknown-line paths had. `COUNT` is
+   now two fields with an integer payload, checked before it is used, and a line that says anything
+   else closes the running variant as `failed`. A repeated *well-formed* `COUNT` stays accepted: a
+   flooding child must still be caught by the deadline (`count_flood`), not by the protocol, and that
+   queued-vs-deadline question stays where the ruling put it.
 
 Red → green, both against a fake child: `huge_index` (old: `panicked at main.rs:1352: attempt to
 add with overflow`, exit 101; new: exit 1, rows `failed,ok`) and `garbage_after_last` (old: exit 0
@@ -361,8 +368,9 @@ exit 0 with `ok` rows; new: exit 1 with `failed` rows), and `huge_sample` / `hug
 item 6 (old: exit 0 with `per_item_us=inf` on an `ok` row; new: exit 1, `failed` rows whose note names
 the number it refused), `skip_extra_field` / `skip_short` for item 7 (old: exit 0 with `skipped`
 rows; new: exit 1 with `failed` rows), and `final-hang` for item 8 (old: exit 0 with `ok` rows; new:
-exit 1 with `failed` rows). `cargo test --locked` is now 39 unit passed (1 ignored) + 28
-child-process tests. None of these extends what the PR closes: the three follow-up
+exit 1 with `failed` rows), and `bad_count` / `bad_count_payload` for item 9 (old: exit 0 with
+`ok` rows; new: exit 1 with `failed` rows). `cargo test --locked` is now 39 unit passed (1 ignored)
++ 29 child-process tests. None of these extends what the PR closes: the three follow-up
 items above are unchanged.
 
 Two further review notes were checked and left alone, with the reason recorded here:
@@ -411,7 +419,7 @@ this head's run, and its first line says so.
 
 ```
 cargo build --locked          # Finished, 0 errors
-cargo test --locked           # 39 unit passed (1 ignored) + 28 child-process tests passed
+cargo test --all --locked     # 39 unit passed (1 ignored) + 29 child-process tests passed
 ```
 
 `cargo-test.log` holds the test run at `ccb5eb5` (the head is in the file's first line) -- 39 unit
