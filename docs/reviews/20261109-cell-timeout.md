@@ -286,8 +286,8 @@ Acceptance measured for the ruling (`docs/reviews/20261109-cell-timeout-logs/`):
    **exactly one failed row** (the other order is `ok`).
 3. `acceptance-final-crash`: a fake child reports its last result and exits 3: run exit 1, rows
    failed (not exit 0).
-4. `cargo test --all --locked`: 39 unit passed (1 ignored) + 15 child-process tests passed (27 now;
-   the review fixes added 12).
+4. `cargo test --all --locked`: 39 unit passed (1 ignored) + 15 child-process tests passed (28 now;
+   the review fixes added 13).
 
 ### 6巡目: the review findings, fixed inside that scope
 
@@ -335,6 +335,18 @@ Acceptance measured for the ruling (`docs/reviews/20261109-cell-timeout-logs/`):
    field-count rule was enforced on one line kind and not the other. `SKIP` is now checked for its
    two fields before it is settled, in both directions, and a malformed one closes the running
    variant as `failed` like any other broken output.
+8. **A final child the parent had to kill was still a successful measurement.** The held last row was
+   settled `failed` only for a non-zero exit the parent did *not* cause; `Reaped::Killed` (the parent
+   SIGKILLed a child that reported its last result and then hung) and `Reaped::TimedOut` (the child
+   could not be reaped at all) both kept the row as reported, so such a run exited 0 with
+   `status=ok`. Acceptance item 3 is "the final cell died, so the run fails", and a cell the harness
+   had to cut is no more a completed measurement than one that crashed: both now write a `failed`
+   row with the reason (`the final cell did not complete: the child did not exit after reporting its
+   last result (signal: 9 (SIGKILL))`), log `CELL final-reap`, and fail the run. The note does not
+   claim the child died -- a `TimedOut` reap means the parent stopped waiting, not that the process
+   is gone. The existing test that asserted exit 0 for this
+   (`a_child_that_hangs_after_its_last_result_does_not_stall_the_run`) now asserts exit 1 and the
+   `ok, ok, failed` rows, keeping its point that the parent itself never stalls.
 
 Red → green, both against a fake child: `huge_index` (old: `panicked at main.rs:1352: attempt to
 add with overflow`, exit 101; new: exit 1, rows `failed,ok`) and `garbage_after_last` (old: exit 0
@@ -347,9 +359,10 @@ rows; new: exit 1 with `failed,ok,ok`), and `garbage_after_skip` for item 4 (old
 `skipped` row; new: exit 1 with a `failed` row), `extra_field` / `short_result` for item 5 (old:
 exit 0 with `ok` rows; new: exit 1 with `failed` rows), and `huge_sample` / `huge_sample_pair` for
 item 6 (old: exit 0 with `per_item_us=inf` on an `ok` row; new: exit 1, `failed` rows whose note names
-the number it refused), and `skip_extra_field` / `skip_short` for item 7 (old: exit 0 with
-`skipped` rows; new: exit 1 with `failed` rows). `cargo test --locked` is now 39 unit passed
-(1 ignored) + 27 child-process tests. None of these extends what the PR closes: the three follow-up
+the number it refused), `skip_extra_field` / `skip_short` for item 7 (old: exit 0 with `skipped`
+rows; new: exit 1 with `failed` rows), and `final-hang` for item 8 (old: exit 0 with `ok` rows; new:
+exit 1 with `failed` rows). `cargo test --locked` is now 39 unit passed (1 ignored) + 28
+child-process tests. None of these extends what the PR closes: the three follow-up
 items above are unchanged.
 
 Two further review notes were checked and left alone, with the reason recorded here:
@@ -398,7 +411,7 @@ this head's run, and its first line says so.
 
 ```
 cargo build --locked          # Finished, 0 errors
-cargo test --locked           # 39 unit passed (1 ignored) + 27 child-process tests passed
+cargo test --locked           # 39 unit passed (1 ignored) + 28 child-process tests passed
 ```
 
 `cargo-test.log` holds the test run at `f410dc3` (the head is in the file's first line) -- 39 unit

@@ -396,16 +396,31 @@ fn the_child_exits_when_the_given_parent_is_not_its_parent() {
     );
 }
 
+/// A child that hangs after its last result still lets the parent finish (bounded reap), and the
+/// kill it takes then fails the run: a final cell the parent had to kill is not a measurement.
 #[test]
 fn a_child_that_hangs_after_its_last_result_does_not_stall_the_run() {
-    let (code, stderr, _csv) = run_fake_with_deadline("hang-after", "hang_after", 0, 3, 10);
+    let (code, stderr, csv) = run_fake_with_deadline("hang-after", "hang_after", 0, 3, 10);
     assert_eq!(
         code,
-        Some(0),
-        "the parent must finish after the last result: {stderr}"
+        Some(1),
+        "the parent must finish after the last result, and the kill must fail the run: {stderr}"
     );
     assert_eq!(count_lines(&stderr, "CELL start"), 6, "{stderr}");
     assert_eq!(count_lines(&stderr, "CELL done"), 6, "{stderr}");
+    let rows: Vec<&str> = csv.lines().skip(1).collect();
+    assert_eq!(rows.len(), 6, "two orders x three variants: {csv}");
+    for (build, chunk) in rows.chunks(3).enumerate() {
+        let statuses: Vec<&str> = chunk
+            .iter()
+            .map(|row| row.split(',').nth(12).unwrap_or("?"))
+            .collect();
+        assert_eq!(
+            statuses,
+            ["ok", "ok", "failed"],
+            "build {build}: only the child the parent had to kill is failed: {csv}"
+        );
+    }
 }
 
 /// An unsupported family is a `skip` in `verify`, not a wrong answer: the reporter reads
@@ -429,6 +444,29 @@ fn verify_reports_an_unsupported_family_as_skip_not_mismatch() {
         "a skip must not print MISMATCH: {stdout}"
     );
     assert_eq!(output.status.code(), Some(0), "a skip is not a failure");
+}
+
+/// The final variant's child reports its last result and then never exits. The parent kills it, and
+/// that kill has to reach the row and the run: acceptance ③ (a final cell that dies must fail the
+/// run), which `Reaped::Killed` used to keep as a successful measurement.
+#[test]
+fn a_final_child_that_had_to_be_killed_is_a_failed_row() {
+    let (stderr, csv, code) = run_fake("final-hang", "hang_after", 0, 1);
+    assert_eq!(code, 1, "the final kill is a failed run: {stderr}");
+    let rows: Vec<&str> = csv.lines().skip(1).collect();
+    assert_eq!(rows.len(), 2, "one row per order: {csv}");
+    for row in &rows {
+        let status = row.split(',').nth(12).unwrap_or("?");
+        assert_eq!(status, "failed", "{row}");
+        let note = row.split(',').nth(13).unwrap_or("");
+        assert!(
+            note.contains("did not exit") || note.contains("did not complete"),
+            "the note says why: {row}"
+        );
+    }
+    assert_eq!(count_lines(&stderr, "CELL start"), 2, "{stderr}");
+    assert_eq!(count_lines(&stderr, "CELL done"), 2, "{stderr}");
+    assert!(stderr.contains("final-reap"), "{stderr}");
 }
 
 /// A child that cannot be started closes the already-started variant with a `failed` row and a

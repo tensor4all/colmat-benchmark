@@ -1705,7 +1705,11 @@ fn run_build_in_child(
                         timed_ms: None,
                         check_ms: None,
                     },
-                    Reaped::TimedOut { .. } => {
+                    // The parent had to kill the child, or could not reap it at all. Either way the
+                    // last cell never finished, so its reported row is not a measurement: acceptance
+                    // ③ (a final cell that dies must fail the run) covers this, not only a non-zero
+                    // exit the parent did not cause.
+                    Reaped::Killed(_) | Reaped::TimedOut { .. } => {
                         heartbeat(
                             "final-reap",
                             row,
@@ -1715,8 +1719,19 @@ fn run_build_in_child(
                             case,
                             format!(" id={id} variant={}/{n} status={}", n, reaped.text()),
                         );
-                        cell
+                        Cell {
+                            status: "failed",
+                            note: format!(
+                                "the final cell did not complete: the child did not exit after reporting its last result ({})",
+                                reaped.text()
+                            ),
+                            samples: Vec::new(),
+                            timed_ms: None,
+                            check_ms: None,
+                        }
                     }
+                    // `Reaped::Exited` with a success status: the child reported its last result,
+                    // said nothing more, and exited cleanly.
                     _ => cell,
                 },
             };
