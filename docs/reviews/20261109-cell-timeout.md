@@ -286,8 +286,8 @@ Acceptance measured for the ruling (`docs/reviews/20261109-cell-timeout-logs/`):
    **exactly one failed row** (the other order is `ok`).
 3. `acceptance-final-crash`: a fake child reports its last result and exits 3: run exit 1, rows
    failed (not exit 0).
-4. `cargo test --all --locked`: 39 unit passed (1 ignored) + 15 child-process tests passed (31 now;
-   the review fixes added 15 and repaired one test helper).
+4. `cargo test --all --locked`: 39 unit passed (1 ignored) + 15 child-process tests passed (32 now;
+   the review fixes added 16 and repaired one test helper).
 
 ### 6巡目: the review findings, fixed inside that scope
 
@@ -377,6 +377,13 @@ Acceptance measured for the ruling (`docs/reviews/20261109-cell-timeout-logs/`):
     while the harness is still running, and the group snapshot at exit only answers "was anything
     ever left running". Both halves are exercised by mutation: killing nothing, and killing without
     waiting, each fail these tests with the pid named.
+
+    Two answers have to stay distinct for that to mean anything: "`ps` printed no pid" (both BSD and
+    GNU `ps` exit 1 with no output when the process is gone) and "`ps` could not answer" -- a spawn
+    failure, another exit code, or success with no output. The second used to be read as the first, so
+    a `ps` wrapper on `PATH` that exits 2 made every kill assertion vacuous; it now fails the test with
+    the reason (`the test cannot observe the harness: ps -p <pid> could not answer (exit status: 2)`),
+    and a regression test injects exactly that wrapper.
 12. **A bare CR in a note split the CSV row.** The note is forwarded verbatim, and `csv_field`
     quoted `,`, `"` and LF but not CR, which an RFC 4180 reader (Python's `csv`, and therefore
     `scripts/summarize_samples.py`) treats as a record separator: `RESULT 0 ok "foo\rbar" 1 2 1`
@@ -451,7 +458,7 @@ this head's run, and its first line says so.
 
 ```
 cargo build --locked          # Finished, 0 errors
-cargo test --all --locked     # 39 unit passed (1 ignored) + 31 child-process tests passed
+cargo test --all --locked     # 39 unit passed (1 ignored) + 32 child-process tests passed
 ```
 
 `cargo-test.log` holds the test run at `59e528b` (the head is in the file's first line, and its

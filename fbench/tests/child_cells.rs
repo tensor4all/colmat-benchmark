@@ -127,15 +127,65 @@ fn group_survivors(group: u32) -> Vec<u32> {
 
 /// Whether `ps` still lists `pid`. A child that was killed but never waited for is a zombie and is
 /// still listed, so this distinguishes "killed and reaped" from "killed and left".
-fn listed(pid: u32) -> bool {
-    let out = Command::new("ps")
+fn listed(pid: u32) -> Result<bool, String> {
+    listed_with("ps", pid)
+}
+
+/// The same, against a named `ps` program, so a test can hand it one that cannot answer.
+///
+/// Only two answers count: the pid was printed (it exists), or `ps` exited 1 having printed nothing
+/// (both BSD and GNU `ps` say "no such process" that way). Anything else -- a spawn failure, another
+/// exit code, or success with no output -- means the test cannot see the process table, and it has
+/// to say so rather than report the child as gone.
+fn listed_with(ps: &str, pid: u32) -> Result<bool, String> {
+    let out = Command::new(ps)
         .args(["-p", &pid.to_string(), "-o", "pid="])
         .output()
-        .expect("ps -p <pid> -o pid=");
-    if !out.status.success() {
-        return false;
+        .map_err(|e| format!("cannot run {ps}: {e}"))?;
+    if !String::from_utf8_lossy(&out.stdout).trim().is_empty() {
+        return Ok(true);
     }
-    !String::from_utf8_lossy(&out.stdout).trim().is_empty()
+    if out.status.code() == Some(1) {
+        return Ok(false);
+    }
+    Err(format!(
+        "{ps} -p {pid} could not answer ({}): {}",
+        out.status,
+        String::from_utf8_lossy(&out.stderr).trim()
+    ))
+}
+
+/// `ps` answering "no such process" and `ps` failing to answer are different facts, and reading the
+/// second as the first is what made the kill assertions vacuous: a `ps` that cannot run (missing,
+/// broken, or a wrapper exiting non-zero) must fail the test, not report the child as gone.
+#[test]
+fn a_ps_that_cannot_answer_is_an_error_not_a_missing_pid() {
+    let me = std::process::id();
+    assert_eq!(
+        listed_with("ps", me),
+        Ok(true),
+        "the test's own pid is listed, and that is not an observation error"
+    );
+    let reaped = {
+        let mut child = Command::new("true").spawn().expect("spawn true");
+        let pid = child.id();
+        child.wait().expect("wait true");
+        pid
+    };
+    assert_eq!(
+        listed_with("ps", reaped),
+        Ok(false),
+        "a reaped pid is genuinely absent, and that is not an observation error either"
+    );
+
+    use std::os::unix::fs::PermissionsExt;
+    let script = std::env::temp_dir().join(format!("fbench-ps-broken-{}", std::process::id()));
+    std::fs::write(&script, "#!/bin/sh\necho 'ps: injected failure' >&2\nexit 2\n").expect("write");
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    let err = listed_with(&script.to_string_lossy(), me)
+        .expect_err("a ps that exits 2 has not said the pid is gone");
+    assert!(err.contains("could not answer"), "{err}");
+    std::fs::remove_file(&script).ok();
 }
 
 /// The pids of the `CELL kill` lines in a harness log.
@@ -197,8 +247,10 @@ fn run_fake_with_options(
                     continue;
                 }
                 seen_kills.push(killed);
-                if listed(killed) {
-                    left_alive.push(killed);
+                match listed(killed) {
+                    Ok(true) => left_alive.push(killed),
+                    Ok(false) => {}
+                    Err(e) => panic!("the test cannot observe the harness: {e}"),
                 }
             }
         }
