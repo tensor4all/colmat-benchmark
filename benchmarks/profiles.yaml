@@ -17,3 +17,63 @@ profiles:
   # `campaign_toolkit/profiles/zen2-cpu.yaml`. Every suite lists it as optional: it is
   # measured when the stack's versions move, not on the weekly schedule.
   - zen2-cpu
+  # ---------------------------------------------------------------------------------------
+  # ohtaka: the host the high-parallel set (`faer-kernels-hpc`) is declared for.
+  #
+  # Both entries carry an ASSUMED one-logical-CPU-per-core layout, because neither node can
+  # be inspected from the host these declarations were written on. The assumption is not
+  # taken on trust: `python3 -m campaign_toolkit.hostinfo --json` on the compute node reports
+  # the real sibling map, L3 domains and NUMA layout, and its answer is what the thread rows
+  # and the suite's `cpu_sets` must agree with before the first recorded cell. A row that
+  # names 112 or 128 "cores" is the machine's own published count; whether that count is
+  # cores or hardware threads is exactly the question that command settles (28C/56T per
+  # Xeon 8280 means 112 threads is two sockets with SMT on, 112 HPC-"cores" is four sockets
+  # with it off).
+  #
+  # `shortcut: the profile's thread_rows and the suite's cpu_sets are the same CPU lists
+  # written twice (the recorder reads the suite's copy, `pinned.sh --profile` the profile's);
+  # edit both together when the sibling map says otherwise.`
+  #
+  # Power: frequency is part of the measurement, so the run wants boost off and the
+  # performance governor (`hostinfo.power_state()` reads the host, and
+  # `require_boost_disabled()` refuses a boost-on host unless FBENCH_ALLOW_BOOST=1 records
+  # the deviation). The field is not repeated here because nothing in the toolkit reads a
+  # profile's power block.
+  - name: ohtaka-amd-cpu
+    description: >-
+      ohtaka CPU node: AMD EPYC Rome (Zen 2), 128 cores per node, AVX2 and no AVX-512.
+      ASSUMED LAYOUT: one logical CPU per physical core, CPUs 0-127 measured, so the
+      32T row is eight 4-core CCXs, the 64T row sixteen, and the 128T row the whole node
+      (which leaves no CPU outside the measured L3 domains for an observer -- see the
+      suite's note). NUMA is not known in advance: the NPS setting (1/2/4) changes the
+      numbers, so `record_numa` makes every run state it. CONFIRM with `hostinfo --json`
+      before the first recorded cell.
+    cpu: AMD EPYC Rome (Zen 2)
+    logical_cpus: 128
+    l3: "16 MiB shared per 4-core CCX (ASSUMED, as on EPYC Rome)"
+    role: measurement
+    smt: {threads_per_core: 1, sibling_offset: 128}
+    record_numa: true
+    thread_rows:
+      - {threads: 32, measured: "0-31", observer: "32-127"}
+      - {threads: 64, measured: "0-63", observer: "64-127"}
+      - {threads: 128, measured: "0-127", observer: ""}
+  - name: ohtaka-fat-cpu
+    description: >-
+      ohtaka FAT node: Intel Xeon Platinum 8280 (Cascade Lake), 112 cores, AVX-512, 3 TB.
+      ASSUMED LAYOUT: one logical CPU per physical core, CPUs 0-111 measured. 112 threads
+      cannot come from one socket (a 8280 is 28C/56T), so this node is multi-socket and its
+      NUMA layout moves the numbers for the same reason the EPYC's NPS setting does; every
+      run records it. CONFIRM with `hostinfo --json` before the first recorded cell: if the
+      node is two sockets with SMT on, only 56 physical cores exist and the 112T row is
+      two hardware threads per core, which is not a row this campaign measures.
+    cpu: Intel Xeon Platinum 8280
+    logical_cpus: 112
+    l3: "35.75 MiB shared per socket (ASSUMED, Cascade Lake)"
+    role: measurement
+    smt: {threads_per_core: 1, sibling_offset: 112}
+    record_numa: true
+    thread_rows:
+      - {threads: 32, measured: "0-31", observer: "32-111"}
+      - {threads: 64, measured: "0-63", observer: "64-111"}
+      - {threads: 112, measured: "0-111", observer: ""}

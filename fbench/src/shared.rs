@@ -7,6 +7,7 @@
 //! reference math, never a comparison between two providers.
 
 use num_complex::{Complex32, Complex64};
+use rayon::prelude::*;
 
 /// The scalar types the harness measures.
 ///
@@ -70,7 +71,7 @@ impl Case {
 }
 
 /// A scalar the reference math and both providers support.
-pub trait Scalar: Copy + Send + 'static {
+pub trait Scalar: Copy + Send + Sync + 'static {
     const IS_COMPLEX: bool;
     /// The residual floor of this dtype, relative to the case's scale.
     ///
@@ -296,14 +297,41 @@ pub fn fill_seeded<T: Scalar>(len: usize, seed: u64) -> Vec<T> {
         .collect()
 }
 
+/// The pool the untimed reference math runs on: its own, never the harness's.
+///
+/// A faer row holds the harness's worker group around its whole timed loop, `check`
+/// included (`measure_row`), so `par_iter` reached from inside that closure degrades to the
+/// calling thread: measured at `n = 8192`, one `gemm` check took 745 s on that path against
+/// 32 s on a free pool, which is the wall time of the whole set. The reference is outside
+/// every clocked region, so the pool it uses cannot move a number; it only decides whether a
+/// large-n case costs seconds or hours.
+fn reference_pool() -> &'static rayon::ThreadPool {
+    static POOL: std::sync::OnceLock<rayon::ThreadPool> = std::sync::OnceLock::new();
+    POOL.get_or_init(|| {
+        let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .expect("could not start the reference pool")
+    })
+}
+
 /// `c = a * b` with `a` `m x k` and `b` `k x n`, all in the same `order`.
+///
+/// Every `c[i, j]` is still the sum over `p` in ascending order starting from zero,
+/// so the result is bit-identical to the plain triple loop; what changes is that each
+/// output line is accumulated over its own contiguous run of `a` and `b`, and the
+/// lines are independent, so they may go to the pool. The reference math is untimed --
+/// it runs outside every clocked region -- so it may use the threads the measurement
+/// owns: at `n = 8192` the serial form cost more wall time than the run it checked.
+///
+/// The shapes are the measured cases': a zero or short dimension is not supported here
+/// (`par_chunks_mut` panics on a zero chunk), and `c` must be exactly `m * n` long, which
+/// is what every caller passes.
 pub fn mul<T: Scalar>(m: usize, k: usize, n: usize, order: Order, a: &[T], b: &[T], c: &mut [T]) {
-    if order == Order::F {
-        // Column-major: accumulate down contiguous columns. Each `c[i, j]` is still the sum over `p` in
-        // ascending order starting from zero, so the result is bit-identical to the loop below; only the
-        // memory access is cache friendly (the strided loop took minutes at n = 2048).
-        for j in 0..n {
-            let col = &mut c[j * m..(j + 1) * m];
+    reference_pool().install(|| match order {
+        // Column-major: a column of `c` is contiguous.
+        Order::F => c.par_chunks_mut(m).enumerate().for_each(|(j, col)| {
             col.fill(T::zero());
             for p in 0..k {
                 let bpj = b[p + j * k];
@@ -312,18 +340,20 @@ pub fn mul<T: Scalar>(m: usize, k: usize, n: usize, order: Order, a: &[T], b: &[
                     col[i].add_assign(acol[i].mul(bpj));
                 }
             }
-        }
-        return;
-    }
-    for j in 0..n {
-        for i in 0..m {
-            let mut acc = T::zero();
+        }),
+        // Row-major: the same sweep over the rows of `c`, and of `b`.
+        Order::C => c.par_chunks_mut(n).enumerate().for_each(|(i, row)| {
+            row.fill(T::zero());
+            let arow = &a[i * k..(i + 1) * k];
             for p in 0..k {
-                acc.add_assign(a[idx(i, p, m, k, order)].mul(b[idx(p, j, k, n, order)]));
+                let ap = arow[p];
+                let brow = &b[p * n..(p + 1) * n];
+                for j in 0..n {
+                    row[j].add_assign(ap.mul(brow[j]));
+                }
             }
-            c[idx(i, j, m, n, order)] = acc;
-        }
-    }
+        }),
+    })
 }
 
 /// `c = a * b^H` with `a` `m x k` and `b` `n x k`.
@@ -336,10 +366,9 @@ pub fn mul_adj_b<T: Scalar>(
     b: &[T],
     c: &mut [T],
 ) {
-    if order == Order::F {
+    reference_pool().install(|| match order {
         // as in `mul`: same per-element summation order, contiguous access
-        for j in 0..n {
-            let col = &mut c[j * m..(j + 1) * m];
+        Order::F => c.par_chunks_mut(m).enumerate().for_each(|(j, col)| {
             col.fill(T::zero());
             for p in 0..k {
                 let bjp = b[j + p * n].conj();
@@ -348,55 +377,99 @@ pub fn mul_adj_b<T: Scalar>(
                     col[i].add_assign(acol[i].mul(bjp));
                 }
             }
-        }
-        return;
-    }
-    for j in 0..n {
-        for i in 0..m {
-            let mut acc = T::zero();
-            for p in 0..k {
-                acc.add_assign(a[idx(i, p, m, k, order)].mul(b[idx(j, p, n, k, order)].conj()));
+        }),
+        // Row-major: both operands are read along their contiguous extent `p`.
+        Order::C => c.par_chunks_mut(n).enumerate().for_each(|(i, row)| {
+            let arow = &a[i * k..(i + 1) * k];
+            for j in 0..n {
+                let brow = &b[j * k..(j + 1) * k];
+                let mut acc = T::zero();
+                for p in 0..k {
+                    acc.add_assign(arow[p].mul(brow[p].conj()));
+                }
+                row[j] = acc;
             }
-            c[idx(i, j, m, n, order)] = acc;
-        }
-    }
+        }),
+    })
 }
 
 /// The largest modulus of `q^H q - I` for an `m x n` `q`, an orthonormality check.
 pub fn gram_residual<T: Scalar>(q: &[T], m: usize, n: usize, order: Order) -> f64 {
-    let mut worst = 0.0_f64;
-    for i in 0..n {
-        for j in 0..n {
-            let mut acc = T::zero();
-            for p in 0..m {
-                acc.add_assign(
-                    q[idx(p, i, m, n, order)]
-                        .conj()
-                        .mul(q[idx(p, j, m, n, order)]),
-                );
-            }
-            let target = if i == j { T::one() } else { T::zero() };
-            worst = residual_max(worst, acc.sub(target).abs());
-        }
-    }
-    worst
+    // One row of the `n x n` product per task, as in `mul`: same ascending-`p`
+    // accumulation from zero, run on the pool because none of it is timed.
+    reference_pool().install(|| {
+        (0..n)
+            .into_par_iter()
+            .map(|i| {
+                let mut worst = 0.0_f64;
+                let mut acc = vec![T::zero(); n];
+                if order == Order::F {
+                    for j in 0..n {
+                        for p in 0..m {
+                            acc[j].add_assign(
+                                q[idx(p, i, m, n, order)]
+                                    .conj()
+                                    .mul(q[idx(p, j, m, n, order)]),
+                            );
+                        }
+                    }
+                } else {
+                    // Row-major: the rows of `q` are contiguous, so accumulate all `j` at once.
+                    for p in 0..m {
+                        let qrow = &q[p * n..(p + 1) * n];
+                        let qpi = qrow[i].conj();
+                        for j in 0..n {
+                            acc[j].add_assign(qpi.mul(qrow[j]));
+                        }
+                    }
+                }
+                for j in 0..n {
+                    let target = if i == j { T::one() } else { T::zero() };
+                    worst = residual_max(worst, acc[j].sub(target).abs());
+                }
+                worst
+            })
+            .reduce(|| 0.0_f64, residual_max)
+    })
 }
 
 /// The largest modulus of `q q^H - I` for an `m x n` `q`, the row-side
 /// orthonormality check.
 pub fn gram_adj_residual<T: Scalar>(q: &[T], m: usize, n: usize, order: Order) -> f64 {
-    let mut worst = 0.0_f64;
-    for i in 0..m {
-        for j in 0..m {
-            let mut acc = T::zero();
-            for p in 0..n {
-                acc.add_assign(q[idx(i, p, m, n, order)].mul(q[idx(j, p, m, n, order)].conj()));
-            }
-            let target = if i == j { T::one() } else { T::zero() };
-            worst = residual_max(worst, acc.sub(target).abs());
-        }
-    }
-    worst
+    // As in `gram_residual`: one product row per task, same ascending-`p` sum from zero.
+    reference_pool().install(|| {
+        (0..m)
+            .into_par_iter()
+            .map(|i| {
+                let mut acc = vec![T::zero(); m];
+                if order == Order::F {
+                    // Column-major: `q[:, p]` is contiguous, so sweep `p` and accumulate every `j`.
+                    for p in 0..n {
+                        let qcol = &q[p * m..(p + 1) * m];
+                        let qip = qcol[i];
+                        for j in 0..m {
+                            acc[j].add_assign(qip.mul(qcol[j].conj()));
+                        }
+                    }
+                } else {
+                    // Row-major: both rows of `q` are contiguous along the contraction.
+                    let qi = &q[i * n..(i + 1) * n];
+                    for j in 0..m {
+                        let qj = &q[j * n..(j + 1) * n];
+                        for p in 0..n {
+                            acc[j].add_assign(qi[p].mul(qj[p].conj()));
+                        }
+                    }
+                }
+                let mut worst = 0.0_f64;
+                for j in 0..m {
+                    let target = if i == j { T::one() } else { T::zero() };
+                    worst = residual_max(worst, acc[j].sub(target).abs());
+                }
+                worst
+            })
+            .reduce(|| 0.0_f64, residual_max)
+    })
 }
 
 fn residual_max(a: f64, b: f64) -> f64 {
@@ -474,5 +547,128 @@ mod tests {
         let mut d = [0.0; 4];
         mul(2, 3, 2, Order::F, &a_f, &b_f, &mut d);
         assert_eq!(d, [58.0, 139.0, 64.0, 154.0]);
+    }
+
+    /// The blocked, pooled reference equals the plain triple loop element for element.
+    ///
+    /// The checks are the only thing standing between a provider's output and a
+    /// published number, so the reference that was rewritten for cache and thread
+    /// locality has to be the *same* reference: every `c[i, j]` is compared exactly
+    /// (`assert_eq` on `f64`, not a tolerance) on non-square shapes, which also puts
+    /// rows and columns of different lengths on different tasks.
+    #[test]
+    fn reference_math_matches_the_plain_triple_loop() {
+        fn naive_mul<T: Scalar>(
+            m: usize,
+            k: usize,
+            n: usize,
+            order: Order,
+            a: &[T],
+            b: &[T],
+        ) -> Vec<T> {
+            let mut c = vec![T::zero(); m * n];
+            for j in 0..n {
+                for i in 0..m {
+                    let mut acc = T::zero();
+                    for p in 0..k {
+                        acc.add_assign(a[idx(i, p, m, k, order)].mul(b[idx(p, j, k, n, order)]));
+                    }
+                    c[idx(i, j, m, n, order)] = acc;
+                }
+            }
+            c
+        }
+        fn naive_mul_adj_b<T: Scalar>(
+            m: usize,
+            k: usize,
+            n: usize,
+            order: Order,
+            a: &[T],
+            b: &[T],
+        ) -> Vec<T> {
+            let mut c = vec![T::zero(); m * n];
+            for j in 0..n {
+                for i in 0..m {
+                    let mut acc = T::zero();
+                    for p in 0..k {
+                        acc.add_assign(
+                            a[idx(i, p, m, k, order)].mul(b[idx(j, p, n, k, order)].conj()),
+                        );
+                    }
+                    c[idx(i, j, m, n, order)] = acc;
+                }
+            }
+            c
+        }
+        fn naive_gram<T: Scalar>(q: &[T], m: usize, n: usize, order: Order) -> f64 {
+            let mut worst = 0.0_f64;
+            for i in 0..n {
+                for j in 0..n {
+                    let mut acc = T::zero();
+                    for p in 0..m {
+                        acc.add_assign(
+                            q[idx(p, i, m, n, order)]
+                                .conj()
+                                .mul(q[idx(p, j, m, n, order)]),
+                        );
+                    }
+                    let target = if i == j { T::one() } else { T::zero() };
+                    worst = residual_max(worst, acc.sub(target).abs());
+                }
+            }
+            worst
+        }
+        fn naive_gram_adj<T: Scalar>(q: &[T], m: usize, n: usize, order: Order) -> f64 {
+            let mut worst = 0.0_f64;
+            for i in 0..m {
+                for j in 0..m {
+                    let mut acc = T::zero();
+                    for p in 0..n {
+                        acc.add_assign(
+                            q[idx(i, p, m, n, order)].mul(q[idx(j, p, m, n, order)].conj()),
+                        );
+                    }
+                    let target = if i == j { T::one() } else { T::zero() };
+                    worst = residual_max(worst, acc.sub(target).abs());
+                }
+            }
+            worst
+        }
+        fn check<T: Scalar + PartialEq>() {
+            // Non-square, and neither dimension a multiple of a typical thread count.
+            for (m, k, n) in [(3usize, 5usize, 4usize), (8, 8, 8), (5, 2, 7), (17, 9, 3)] {
+                let a = fill_seeded::<T>(m * k, 7 + m as u64);
+                let b = fill_seeded::<T>(k * n, 11 + n as u64);
+                let q = fill_seeded::<T>(m * n, 13 + m as u64 + n as u64);
+                for order in [Order::C, Order::F] {
+                    let mut c = vec![T::zero(); m * n];
+                    mul(m, k, n, order, &a, &b, &mut c);
+                    assert!(
+                        c == naive_mul(m, k, n, order, &a, &b),
+                        "mul {m}x{k}x{n} {order:?}"
+                    );
+                    let mut d = vec![T::zero(); m * n];
+                    mul_adj_b(m, k, n, order, &a, &b, &mut d);
+                    assert!(
+                        d == naive_mul_adj_b(m, k, n, order, &a, &b),
+                        "mul_adj_b {m}x{k}x{n} {order:?}"
+                    );
+                    assert_eq!(
+                        gram_residual(&q, m, n, order),
+                        naive_gram(&q, m, n, order),
+                        "gram_residual {m}x{n} {order:?}"
+                    );
+                    assert_eq!(
+                        gram_adj_residual(&q, m, n, order),
+                        naive_gram_adj(&q, m, n, order),
+                        "gram_adj_residual {m}x{n} {order:?}"
+                    );
+                }
+            }
+        }
+        check::<f64>();
+        check::<Complex64>();
+        check::<f32>();
+        check::<Complex32>();
     }
 }

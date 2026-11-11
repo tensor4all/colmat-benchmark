@@ -1,0 +1,116 @@
+schema_version: 1
+id: faer-kernels-hpc
+description: >-
+  The high-parallel, large-matrix set: `gemm`, `qr` (composite Q and R) and `svd_thin` at
+  n = 2048, 4096 and, for the two operations where it is affordable, 8192, measured at
+  32/64/112/128 threads on the two ohtaka node types. It exists to answer one question the
+  rest of this campaign cannot: does the fork's threading still hold when the shape is large
+  enough that the parallel region is the work, rather than the dispatch around it. Every
+  other *measured* grid in this repository stops at 8T and at n = 1536; the 2048-4096
+  shapes `faer-kernels-large` declares are declared and never measured.
+  One vendor arm is declared on purpose. MKL is the only external comparison this set
+  carries: the OpenBLAS arm's parallel performance is not worth a high-parallel row, so no
+  OpenBLAS cell is declared and no OpenBLAS number is quoted from these pages. That is a
+  deliberate exception to the campaign's usual both-arms rule, made by the campaign's owner,
+  and the run records the arm it linked so no page is ambiguous about which library it is.
+invalidated_by:
+  - faer/src/**
+  - faer-traits/src/**
+  - faer-macros/src/**
+  - Cargo.toml
+  - Cargo.lock
+stale_after: 20
+# No cell exists yet, so nothing is required; the two ohtaka profiles are listed so a run
+# recorded there is accepted by `validate_run` rather than refused as an undeclared profile.
+required_profiles: []
+optional_profiles:
+  - ohtaka-amd-cpu
+  - ohtaka-fat-cpu
+
+family_groups:
+  gemm:
+    - gemm
+  qr:
+    - qr
+  svd:
+    - svd_thin
+
+workloads:
+  name: faer gemm, QR and thin SVD at high thread counts on large matrices
+  description: >-
+    Direct calls into one faer revision at square shapes of order 2048, 4096 and 8192, in
+    C and F order, f64. `gemm` is `linalg::matmul::matmul` into a caller-prepared
+    destination with `Accum::Replace`; `qr` is the composite returning explicit compact Q
+    (`m x min(m, n)`) and R, which is the same work as the vendor route's `geqrf` +
+    `orgqr(min(m, n))`; `svd_thin` returns thin U, the singular values and VT. Each family
+    is its own population because a `gemm` shape is a triple and a factorisation shape is
+    not, and because `svd_thin` stops at 4096 while the other two reach 8192.
+  source: >-
+    The measured fork's own public API (`faer/src/linalg`), with the LAPACK equivalent in
+    the vendor arm. Inputs are seeded from the case, so `verify` and `run` measure the same
+    matrices. The reference the checks use is this harness's own provider-independent math,
+    which is untimed.
+  known_blind_spots:
+    - "Only three operations are measured. LU, Cholesky, the eigensolvers, the Householder rows and the rectangular shapes are other declarations, not machinery this one omits by accident."
+    - "`svd_thin` stops at 4096: at 8192 its reference check and its own call together cost about 13 minutes per cell, which is two to three times the whole rest of the set. The other two families carry 8192, where the same arithmetic is 1.3 s and 4.2 s per call."
+    - "One vendor arm (MKL). The OpenBLAS arm is not declared here, deliberately: no cell on these pages may be read as an OpenBLAS measurement."
+    - "The 32T row is a scaling anchor and the only budget a 64-core validation host can record with an observer outside the measured L3 domains; the requested high-parallel budgets are 64, 112 and 128."
+    - "A budget that fills the node (128T on the CPU node, 112T on the FAT node) leaves no CPU for the observing side, so it is measured under `benchmarks/scripts/pinned.sh` and not recorded by `scripts/record_run.py` until the recorder can admit an empty observer. Those cells carry no published page."
+    - "A budget is the measured CPU set, so a shape at n = 2048 on 64 CPUs is 32 panels per dimension: what scales here is the kernel, not a message-passing layer, and placement is only the claim `record_numa` records."
+    - "C and F order are separate cells and are never pooled; a vendor C-order cell uses the CBLAS/LAPACKE row-major entry point, and any layout conversion inside those APIs stays inside the clock."
+
+engines_doc:
+  faer-fork:
+    provider: faer-fork
+    summary: >-
+      The measured library: the tensor4all fork of faer at the revision this run's manifest
+      records, linked by path out of the checkout the harness was built against.
+    identity: the fork revision in `run.yaml` (`library.commit`), pinned by `pins/t4a-faer.rev`
+    caveat: >-
+      Its parallel route is the one the linked revision has: a `Par`/`ParShape` budget on
+      0.25-line checkouts, a caller-owned team where the checkout declares `with_team`. The
+      build records which, so a page is never read through the wrong API.
+  faer-upstream:
+    provider: faer-upstream
+    summary: >-
+      Upstream faer at the release the fork is based on, in the same binary and measured on
+      the same matrices: the baseline that says whether a fork change moved the number.
+    identity: the upstream revision in `run.yaml` (`upstream.commit`), pinned by `pins/upstream-faer.rev`
+    caveat: >-
+      Same crate-name and feature-unification caveat as the fork row: both declare `[lib] name
+      = "faer"` and are distinct dependency keys, so their types are not interchangeable and
+      both arms declare equivalent feature sets.
+  lapack-mkl:
+    provider: mkl
+    summary: >-
+      CBLAS `?gemm` plus the LAPACK drivers (`geqrf` + `orgqr`, `gesdd`) linked against the
+      oneAPI MKL installation `MKLROOT` names. Vendor calls and their marshalling, vendor-owned
+      threading: the budget is set by the harness and read back before the row.
+    identity: the MKL build in `run.yaml` (`providers[mkl]`), resolved to a versioned path at build time
+    caveat: >-
+      MKL reports no dispatched-kernel name and no processor count, so its manifest records
+      neither rather than inferring them. This is the only vendor arm this suite declares.
+
+# One run: the shape grids and the budgets, in one declaration because `record_run` reads
+# `runs[0]` only. `threads` and `cpu_sets` are paired by position, and a node type runs its
+# own subset with `--threads` (the run records the subset it covered). 112T belongs to the
+# FAT node and 128T to the CPU node: no 128T number is ever claimed on a 112-core node.
+runs:
+  - threads: [32, 64, 112, 128]
+    cpu_sets: ["0-31", "0-63", "0-111", "0-127"]
+    dtypes: [f64]
+    order: [c, f]
+    engines: [faer-fork, faer-upstream, lapack-mkl]
+    populations:
+      - regime: gemm-hpc
+        groups: [gemm]
+        n: ["2048x2048x2048", "4096x4096x4096", "8192x8192x8192"]
+        batch: [1]
+      - regime: qr-hpc
+        groups: [qr]
+        n: ["2048", "4096", "8192"]
+        batch: [1]
+      - regime: svd-hpc
+        groups: [svd]
+        n: ["2048", "4096"]
+        batch: [1]

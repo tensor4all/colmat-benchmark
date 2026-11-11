@@ -19,6 +19,8 @@ rather than being implied by the other arm's page.
 
 | suite | profile | vendor | fork/upstream | version | date | coverage | status | page |
 |---|---|---|---|---|---|---|---|---|
+| `faer-kernels-hpc` | `ohtaka-amd-cpu` (optional) | `mkl` | - | - | - | - | missing | - |
+| `faer-kernels-hpc` | `ohtaka-fat-cpu` (optional) | `mkl` | - | - | - | - | missing | - |
 | `faer-kernels-large` | `zen5-cpu` (optional) | `openblas` | - | - | - | - | missing | - |
 | `faer-kernels-large` | `zen5-cpu` (optional) | `mkl` | `0e15729ad011/0539947ffb75` | 0.25.0 | 2026-10-26 | partial | current | [result/zen5-cpu/faer-kernels-large/0e15729ad011-0539947ffb75-mkl-timing-v2.md](zen5-cpu/faer-kernels-large/0e15729ad011-0539947ffb75-mkl-timing-v2.md) |
 | `faer-kernels-large` | `zen2-cpu` (optional) | `openblas` | - | - | - | - | missing | - |
