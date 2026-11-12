@@ -6,22 +6,13 @@ this file is what the generator produces.
 Every page not selected for the index's Cells table, newest first and grouped by the
 revisions it measured. The current pages are in [INDEX.md](INDEX.md).
 
-- Reference fork revision (`pins/t4a-faer.rev`): `325e482b6532624d06236ad6991a41c57b0c23d1`
+- Reference fork revision (`pins/t4a-faer.rev`): `71b25ffb7ae3ce038ec25b35c91e526be41b9a63`
 - Reference upstream revision (`pins/upstream-faer.rev`): `faer-v0.24.4`
 - Newest recorded run: `2026-11-01T08:40:30.078104Z`
 - Every page below is one `(suite, hardware profile, fork revision, upstream revision,
   vendor arm)` and carries its commits, its hardware and the vendor library it linked.
 
 ## Older pages
-
-### `71b25ffb7ae3/0539947ffb75`: version 0.27.1, upstream faer-v0.24.4
-
-| suite | profile | vendor | fork/upstream | version | date | coverage | status | page |
-|---|---|---|---|---|---|---|---|---|
-| `faer-kernels` | `zen5-cpu` | `mkl` | `71b25ffb7ae3/0539947ffb75` | 0.27.1 | 2026-11-01 | partial | 1 behind | [result/zen5-cpu/faer-kernels/71b25ffb7ae3-0539947ffb75-mkl-timing-v2.md](zen5-cpu/faer-kernels/71b25ffb7ae3-0539947ffb75-mkl-timing-v2.md) |
-| `faer-kernels` | `zen5-cpu` | `openblas` | `71b25ffb7ae3/0539947ffb75` | 0.27.1 | 2026-11-01 | partial | 1 behind | [result/zen5-cpu/faer-kernels/71b25ffb7ae3-0539947ffb75-openblas-timing-v2.md](zen5-cpu/faer-kernels/71b25ffb7ae3-0539947ffb75-openblas-timing-v2.md) |
-| `faer-kernels-large` | `zen5-cpu` | `mkl` | `71b25ffb7ae3/0539947ffb75` | 0.27.1 | 2026-11-01 | partial | 1 behind | [result/zen5-cpu/faer-kernels-large/71b25ffb7ae3-0539947ffb75-mkl-timing-v2.md](zen5-cpu/faer-kernels-large/71b25ffb7ae3-0539947ffb75-mkl-timing-v2.md) |
-| `faer-kernels-large` | `zen5-cpu` | `openblas` | `71b25ffb7ae3/0539947ffb75` | 0.27.1 | 2026-11-01 | partial | 1 behind | [result/zen5-cpu/faer-kernels-large/71b25ffb7ae3-0539947ffb75-openblas-timing-v2.md](zen5-cpu/faer-kernels-large/71b25ffb7ae3-0539947ffb75-openblas-timing-v2.md) |
 
 ### `0e15729ad011/0539947ffb75`: version 0.25.0, upstream faer-v0.24.4
 

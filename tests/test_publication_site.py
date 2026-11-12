@@ -1,4 +1,6 @@
 """Publication identity checks; no build or measurement is run."""
+import contextlib
+import io
 import pathlib
 import re
 import sys
@@ -10,24 +12,51 @@ import yaml
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 import gen_site  # noqa: E402
+from campaign_toolkit import pin_recorded  # noqa: E402
+from campaign_toolkit.stack import rev_file_value  # noqa: E402
+
+RECORDED = {(suite, vendor) for suite in ('faer-kernels', 'faer-kernels-large') for vendor in ('mkl', 'openblas')}
+
+
+def collect():
+    gen_site.descriptor.set_root(ROOT)
+    return gen_site.gen_index.collect()
 
 
 class PublicationSiteTest(unittest.TestCase):
-    def test_predecessor_is_selected_only_for_the_disclosed_release_pair(self):
-        page = dict(library_commit=gen_site.MEASURED, upstream_commit=gen_site.UPSTREAM,
-                    profile='zen5-cpu', suite='faer-kernels', vendor='mkl')
-        resolved = dict(library=gen_site.RELEASE, upstream=gen_site.UPSTREAM)
-        rejected = [dict(page, **change) for change in (
-            dict(library_commit='0' * 40), dict(upstream_commit='0' * 40),
-            dict(profile='zen2-cpu'), dict(suite='other'), dict(vendor='other'))]
-        found = dict(pages=[page, *rejected], resolved=resolved)
-        self.assertEqual(gen_site.release_recording_pages(found), [page])
-        for change in (dict(library='0' * 40), dict(upstream='0' * 40)):
-            with self.subTest(change=change):
-                self.assertEqual(gen_site.release_recording_pages(
-                    dict(found, resolved=dict(resolved, **change))), [])
+    def test_pin_is_the_measured_revision_not_the_release_source(self):
+        pin = rev_file_value((ROOT / gen_site.PIN).read_text())
+        self.assertEqual(pin, gen_site.MEASURED)
+        self.assertNotEqual(pin, gen_site.RELEASE)
 
-    def test_comparison_filename_is_the_measured_commit_not_the_release_pin(self):
+    def test_the_four_71b25ffb_recordings_are_the_current_cells(self):
+        found = collect()
+        current, _ = gen_site.gen_index.split_pages(found['pages'], found['declared'], found['resolved'])
+        pages = [c['page'] for c in current if c['page'] is not None]
+        self.assertEqual({(p['suite'], p['vendor']) for p in pages}, RECORDED)
+        for page in pages:
+            self.assertEqual(page['profile'], 'zen5-cpu')
+            self.assertEqual(page['library_commit'], gen_site.MEASURED)
+            self.assertEqual(page['upstream_commit'], gen_site.UPSTREAM)
+
+    def test_guard_passes_at_the_pin_and_fails_at_the_unrecorded_release(self):
+        found = collect()
+        self.assertEqual(pin_recorded.campaign_problems(found), [])
+        moved = dict(found, resolved=dict(found['resolved'], library=gen_site.RELEASE),
+                     references=dict(found['references'], library=gen_site.RELEASE))
+        problems = pin_recorded.campaign_problems(moved)
+        self.assertEqual(len(problems), 1)
+        self.assertIn(f'pins/t4a-faer.rev = {gen_site.RELEASE}', problems[0])
+        self.assertIn('no current recording', problems[0])
+        self.assertIn('either record a publication at the pin, or keep the pin at the last measured '
+                      'revision (71b25ffb7ae3/0539947ffb75)', problems[0])
+        # The site refuses to publish in that state rather than saying nothing was recorded.
+        with mock.patch.object(gen_site.gen_index, 'collect', return_value=moved), \
+             contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(gen_site.main([]), 1)
+        self.assertIn('the site is not written', err.getvalue())
+
+    def test_comparison_filename_is_the_measured_commit(self):
         arms = {v: pathlib.Path('/unused') / v for v in ('mkl', 'openblas')}
         with mock.patch.object(gen_site, 'current_arms', return_value=(arms, None)), \
              mock.patch.object(gen_site, 'load', return_value={'library': {'commit': gen_site.MEASURED}}), \
@@ -37,21 +66,24 @@ class PublicationSiteTest(unittest.TestCase):
         args = comparison.call_args.args[0]
         self.assertEqual(args[args.index('--out') + 1], str(out))
 
-    def test_rendered_predecessor_assets_survive_site_cleanup(self):
-        gen_site.descriptor.set_root(ROOT)
-        recorded = gen_site.release_recording_pages(gen_site.gen_index.collect())
-        if not recorded:
-            self.skipTest('the disclosed release pair is not the active pin')
-        self.assertEqual(gen_site.main([]), 0)
+    def test_site_shows_the_recordings_as_current_with_the_release_caveat(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(gen_site.main([]), 0)
         index = (ROOT / 'result/index.html').read_text()
+        # The measured profile lists its recordings; zen2 profiles were never recorded and say so.
+        zen5 = index.split('<h2 id="zen5-cpu">', 1)[1].split('<h2', 1)[0]
+        self.assertNotIn('Nothing recorded at the current pin', zen5)
+        self.assertIn('<code>71b25ffb7ae3</code>', zen5)
         self.assertIn(gen_site.CAVEAT, index)
         self.assertIn(gen_site.LIMITATION, index)
-        for page in recorded:
-            link = pathlib.PurePosixPath(page['page']).relative_to('result').with_suffix('.html')
+        self.assertIn('0.28.0 itself was not measured', index)
+        for suite, vendor in RECORDED:
+            link = f'zen5-cpu/{suite}/71b25ffb7ae3-0539947ffb75-{vendor}-timing-v2.html'
             self.assertIn(f'href="{link}"', index)
-            self.assertTrue((ROOT / 'result' / link).is_file())
+            self.assertTrue((ROOT / 'result' / link).is_file(), link)
+        self.assertIn(f'href="zen5-cpu/faer-kernels/{gen_site.MEASURED[:12]}-comparison.html"', index)
         images = re.findall(r'<img src="([^"]+)"', index)
-        self.assertTrue(any('recordings/71b25ffb/figures/' in image for image in images))
+        self.assertTrue(images)
         for image in images:
             self.assertTrue((ROOT / 'result' / image).is_file(), image)
 

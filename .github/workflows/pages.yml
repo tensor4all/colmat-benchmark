@@ -40,6 +40,10 @@ jobs:
         run: python -m pip install --quiet -r requirements.txt
       - name: Checkout the two reference revisions
         run: ./scripts/setup_extern_deps.sh
+      - name: The pin has a current recording
+        # A site whose pin has no recording says "nothing recorded" while the recordings sit in the
+        # history; refuse to deploy it (gen_site.py refuses too).
+        run: campaign-check-pin-recorded
       - name: Write the site
         # generated on every deploy from the committed data, result and pins; nothing is committed:
         # the landing page, the history, the HTML pages, the charts and the four-way view
