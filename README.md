@@ -1,6 +1,6 @@
-# `faer-benchmark`
+# `colmat-benchmark`
 
-> ## 📈 [Results, charts and trends](http://tensor4all.org/faer-benchmark/)
+> ## 📈 [Results, charts and trends](https://tensor4all.org/colmat-benchmark/)
 >
 > The site shows the pages at the pinned revisions, one section per hardware profile, with the
 > throughput charts (one per family, 1T / 4T / 8T panels, between-start error bars, the plotted

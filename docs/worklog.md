@@ -2,6 +2,16 @@
 
 Decisions, fixed failures and open items for this campaign. Newest first.
 
+## 2026-11-13 — the repository is renamed `faer-benchmark` -> `colmat-benchmark`
+
+A GitHub rename, not a recreation: issues, PRs and history are kept, and `github.com/tensor4all/faer-benchmark`
+(web and git) redirects. The site moved with it to `https://tensor4all.org/colmat-benchmark/`; GitHub Pages
+does not redirect the old `/faer-benchmark/` path, which now returns 404. The descriptor `id`, the
+`campaign-sync-pins --repo` name and the stack key in `campaign-toolkit` follow the rename. Nothing measured
+changes: no pin, no run, no page. The old name stays where it is evidence: the absolute local paths recorded in
+`data/` run directories, the dated reviews, handoffs and audits, the entries below, and short `faer-benchmark#N`
+issue references in comments (the numbers are unchanged). The `fbench` crate and the measured library keep their names.
+
 ## 2026-11-07 — the joined page joins one protocol, and prints what it divides by (#54 review)
 
 `gen_comparison.py` refused two arms from different hosts and nothing else, so two arms recorded
