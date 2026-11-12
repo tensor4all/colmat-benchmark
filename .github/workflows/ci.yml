@@ -20,16 +20,18 @@ on: [push, pull_request]
 # it can only do that against the pinned revisions. With nothing recorded there is no currency to
 # compute and the checkouts are not needed, but they are cheap and the step is unconditional.
 jobs:
-  index:
-    runs-on: ubuntu-slim
+  link-preflight:
+    # Its own job: the probe links with rustc and cc, which the ubuntu-slim index runner does not have.
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
-          fetch-depth: 0  # campaign-check-generated compares against origin/main
+          python-version: '3.12'
       - name: Python deps
         run: python3 -m pip install --quiet -r requirements.txt
       - name: Link preflight declaration, and a hidden library fails
-        # benchmarks/link-preflight.yaml is what record_run checks before every build. The runner has no
+        # benchmarks/link-preflight.yaml is what record_run checks before every build. This runner has no
         # vendor libraries, so the mkl arm, with its prefix pointed at an empty directory, must fail and
         # name the library (the real pass is checked on the measurement host, at campaign start).
         run: |
@@ -41,6 +43,15 @@ jobs:
           fi
           cat /tmp/link-preflight-negative.txt
           grep -q 'the linker cannot find libmkl_intel_lp64.so' /tmp/link-preflight-negative.txt
+
+  index:
+    runs-on: ubuntu-slim
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # campaign-check-generated compares against origin/main
+      - name: Python deps
+        run: python3 -m pip install --quiet -r requirements.txt
       - name: Checkout the two reference revisions
         run: ./scripts/setup_extern_deps.sh
       - name: Declarations are well formed
