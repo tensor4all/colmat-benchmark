@@ -8,3 +8,17 @@
 [workspace]
 members = ["fbench"]
 resolver = "2"
+
+# The two faer libraries are linked by path from their checkouts, so their crates are
+# members of *this* workspace for manifest-inheritance purposes. `t4a-faer` 0.28.0
+# inherits `description`, `documentation`, `keywords` and `categories` from its own
+# workspace root; as a path dependency here, "its own workspace root" is this file, and
+# without these keys `cargo metadata` fails with "`workspace.package.description` was
+# not defined" and the build preflight refuses the revision. The values are the fork's
+# own (`extern/t4a-faer/Cargo.toml` `[workspace.package]`), so the linked crate keeps the
+# metadata it declares; they describe the linked library, not this harness.
+[workspace.package]
+description = "Dense and sparse linear algebra for HPC applications with caller owned thread teams."
+keywords = ["linear-algebra", "matrix", "hpc", "multithreading", "tensor"]
+categories = ["mathematics", "science", "concurrency"]
+documentation = "https://docs.rs/t4a-faer"
