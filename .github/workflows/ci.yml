@@ -28,6 +28,19 @@ jobs:
           fetch-depth: 0  # campaign-check-generated compares against origin/main
       - name: Python deps
         run: python3 -m pip install --quiet -r requirements.txt
+      - name: Link preflight declaration, and a hidden library fails
+        # benchmarks/link-preflight.yaml is what record_run checks before every build. The runner has no
+        # vendor libraries, so the mkl arm, with its prefix pointed at an empty directory, must fail and
+        # name the library (the real pass is checked on the measurement host, at campaign start).
+        run: |
+          campaign-link-preflight --config benchmarks/link-preflight.yaml --validate
+          empty="$(mktemp -d)"; mkdir -p "$empty/lib"
+          if MKLROOT="$empty" MKL_THREADING_LIB="$empty/lib/libiomp5.so" campaign-link-preflight --config benchmarks/link-preflight.yaml \
+              --arm mkl > /tmp/link-preflight-negative.txt; then
+            echo "the link preflight passed with the mkl libraries hidden"; exit 1
+          fi
+          cat /tmp/link-preflight-negative.txt
+          grep -q 'the linker cannot find libmkl_intel_lp64.so' /tmp/link-preflight-negative.txt
       - name: Checkout the two reference revisions
         run: ./scripts/setup_extern_deps.sh
       - name: Declarations are well formed
