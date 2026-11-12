@@ -1,0 +1,26 @@
+# The shared libraries this campaign's harness links, checked by campaign-toolkit's link preflight
+# (campaign-toolkit README, "The link preflight") before any build or timing: `record_run` runs the
+# arm of the vendor it records, and a periodic refresh runs every arm once per host at its start.
+#
+# Each arm mirrors one link line. Keep it in step with the files named in `source`: a library added
+# there and not here is a library the preflight does not check.
+#
+# The OpenBLAS arm (`fbench/link-openblas`) builds OpenBLAS from source and links it statically, so
+# it loads no shared vendor library and has no arm here. Its build needs a Fortran compiler
+# (gfortran, or oneAPI ifx), which scripts/build_for_faer_rev.sh checks before it compiles anything.
+arms:
+  mkl:
+    source: fbench/build.rs (feature link-mkl); MKLROOT and MKL_THREADING_LIB as scripts/build_for_faer_rev.sh resolves them
+    when: {vendor: mkl}
+    env:
+      MKLROOT: {required: true, default_glob: "/opt/intel/oneapi/mkl/*"}
+      MKL_THREADING_LIB: {required: true, default_glob: "/opt/intel/oneapi/compiler/*/lib/libiomp5.so"}
+    search: ["$MKLROOT/lib", "dirname:$MKL_THREADING_LIB"]
+    libs: [mkl_intel_lp64, mkl_intel_thread, mkl_core, iomp5]
+    # fbench/build.rs records both directories as -rpath: the recorder runs the binary with no loader path.
+    rpath: true
+    fix:
+      mkl_intel_lp64: "export MKLROOT={prefix}"
+      mkl_intel_thread: "export MKLROOT={prefix}"
+      mkl_core: "export MKLROOT={prefix}"
+      iomp5: "export MKL_THREADING_LIB={path}"
