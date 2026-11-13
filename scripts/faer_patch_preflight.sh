@@ -75,8 +75,8 @@ python3 - "$patch_meta" "$fork_manifest" "$upstream_manifest" <<'PYEOF'
 import json, sys
 meta, expected_fork, expected_upstream = sys.argv[1], sys.argv[2], sys.argv[3]
 data = json.load(open(meta))
-found = {p['name']: p['manifest_path'] for p in data['packages'] if p['name'] in ('t4a-faer', 'faer')}
-for name, expected in (('t4a-faer', expected_fork), ('faer', expected_upstream)):
+found = {p['name']: p['manifest_path'] for p in data['packages'] if p['name'] in ('colmat', 'faer')}
+for name, expected in (('colmat', expected_fork), ('faer', expected_upstream)):
     actual = found.get(name)
     if actual != expected:
         print(f"ERROR: this build would link {name} from {actual!r}, not from {expected!r}: a `[patch]`"

@@ -243,11 +243,12 @@ fi
 # checkout paths here. `--config` keeps the tracked manifests untouched: a checkout path belongs to
 # the measuring host and must not be committed. The crate directory inside each checkout is `faer/`
 # -- the workspace member that carries the package whose lib is named `faer`, published by the fork
-# as `t4a-faer` and by upstream as `faer` -- so the two patches cannot collide. If the harness
+# as `colmat` (as `t4a-faer` before the fork renamed it at 0.33.0) and by upstream as `faer` -- so the
+# two patches cannot collide. If the harness
 # declares its dependencies another way (a `[patch]` section of its own, or a generated manifest),
 # this is the one place that has to change; the build below is the same either way.
 PATCH_ARGS=(
-    --config "patch.crates-io.t4a-faer.path=\"$FORK_DIR/faer\""
+    --config "patch.crates-io.colmat.path=\"$FORK_DIR/faer\""
     --config "patch.crates-io.faer.path=\"$UPSTREAM_DIR/faer\""
 )
 # ------------------------------------------------------------------------------

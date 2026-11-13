@@ -6,8 +6,9 @@
 #
 # The two faer libraries are linked *by path*: `scripts/build_for_faer_rev.sh`
 # patches the registry entries below to the checkouts it is given. They are
-# ordinary registry dependencies here, named `t4a-faer` (the fork, the measured
-# library) and `faer` (upstream, the baseline), so a `cargo build` resolves them
+# ordinary registry dependencies here, named `colmat` (the fork, the measured
+# library; `t4a-faer` before the fork renamed it at 0.33.0) and `faer` (upstream, the
+# baseline), so a `cargo build` resolves them
 # from crates.io unless the build script patches them. Both declare `[lib] name =
 # "faer"` but they are distinct dependency keys and therefore distinct Rust crate
 # identities; their `Mat`, `Par` and trait types are not interchangeable, so the
@@ -52,11 +53,11 @@ link-mkl = [
 
 [dependencies]
 # The pinned checkout is what is linked, and `scripts/build_for_faer_rev.sh` refuses the build
-# unless `cargo metadata` resolves `t4a-faer` from that checkout's manifest path -- so this range
+# unless `cargo metadata` resolves `colmat` from that checkout's manifest path -- so this range
 # is not a correctness control, it only has to admit the versions the fork can be at. A narrow
 # range turns into a hard blocker every generation: when the pinned checkout's manifest declares a
 # version outside it, cargo warns that the patch is unused and the preflight refuses. Keep it wide.
-faer_fork = { package = "t4a-faer", version = ">=0.24, <1.0", default-features = false, features = ["std", "rayon"] }
+faer_fork = { package = "colmat", version = ">=0.24, <1.0", default-features = false, features = ["std", "rayon"] }
 faer_upstream = { package = "faer", version = "0.24", default-features = false, features = ["std", "rayon"] }
 # The thread-pool helper upstream `faer` issues its parallel regions through, the same crate
 # instance as its own (one 0.2.x resolves for both): the harness holds the worker group around
