@@ -1,0 +1,2624 @@
+# `faer-kernels` on `zen5-cpu`
+
+- t4a-faer (fork, measured) commit: `325e482b6532624d06236ad6991a41c57b0c23d1`
+- t4a-faer version: `0.28.0`
+- upstream faer commit: `0539947ffb757a739d7e703a7d2fa0c792a909c1`
+- upstream faer ref/version: `faer-v0.24.4` / `0.24.4`
+- features: `std, rayon`
+- faer rows: `faer-fork` (the provider in the measured revision; see library and upstream above); `faer-upstream` (the provider in the measured revision; see library and upstream above)
+- harness commit: `40d4801d3eefd6ac5b1b5d124151a5990c61cac9`
+- toolkit commit: `d487991f2fa2e1a151f78389c5ef449a614e750c`
+- measured binary SHA-256: `27c07ca9fee3595513452bdbb1ad19e2b8ff08c27d26818fd56d6cf833189fde`
+- hardware profile: `zen5-cpu`
+- host role: `development` — **provisional**: recorded on a development host, superseded by the measurement host's dataset
+- timestamp: `2026-11-13T15:35:57.432258Z`
+- timing policy: v2, median of 5 reps, priming 250 ms (time-based, identical on every row)
+- guards: idle window 3 s, max busy 5.0% including SMT siblings, 8 attempts
+- command: `scripts/record_run.py zen5-cpu faer-kernels --checkout extern/t4a-faer --upstream ./extern/upstream-faer --vendor mkl --engines faer-fork,faer-upstream,lapack-mkl --dtypes f64,c64 --reps 5 --aa 3 --prime-ms 250 --label pub-325e482-20261113-mkl --no-publish --threads 1,4,8`
+- raw data: `data/results/zen5-cpu/faer-kernels/20261113T124322Z-pub-325e482-20261113-mkl/`
+
+## What was measured
+
+- **Workload** — Direct calls into one faer revision: square and rectangular dense matrices, C (row-major) and F (column-major) order, `f64` and `c64`. A shape is `N` for square, `MxN` for rectangular, or `MxKxN` for `gemm`, which is a three-index operation and cannot be written as two. Sizes are the matrix dimensions, not a memory budget, so a case name says exactly what was factored. `gemm` measures `linalg::matmul::matmul` into a caller-prepared destination with `Accum::Replace`; there is no operator path, so one shape is one work.
+  Source: The fork's own public API (`faer/src/linalg`): `matmul`, the QR factor and composite, `upgrade_householder_factor`, the block/sequence Householder apply, LU and full-pivot LU, Cholesky, triangular solve, solve, thin SVD, singular values and the symmetric/nonsymmetric eigensolvers. Inputs are seeded from the case, so `verify` and `run` measure the same matrices and a rerun is reproducible.
+  Known blind spot: Only the faer entry points are measured. tlinalg's packing, batch loop and lane policy, tenferro's tensor construction and dtype dispatch, and the small-`m` decode-projection shapes are other repositories' rows (tlinalg-benchmark, tenferro-benchmark).
+  Known blind spot: Vendor C-order cells use CBLAS/LAPACKE row-major entry points. Workspace allocation or layout conversion internal to those APIs remains timed; these are not prepared-column-major or transpose measurements. LAPACKE's row-major work copy and transposes are intrinsic to the C-order route and are absent for F order, so a C-order vendor ratio carries a cost the F-order one does not.
+  Known blind spot: `gemm` covers the tall class's two Householder legs (a 16-wide basis and a 240-column target over 4096 rows: the reduction and the write-back) beside a vendor `?gemm` on the same leg. A single leg beside a vendor gemm is a diagnostic reference, not the equivalent implementation of the whole update, and the row is labelled accordingly.
+  Known blind spot: `householder_apply` measures block apply and the one-block sequence form as two distinct rows, labelled with basis width min(m,n) and target width n. QR fixture preparation is outside timing. Independently varied basis/target widths and multi-panel sequences are not covered.
+  Known blind spot: Allocation performed inside the measured call stays inside the clock. The fork's two row splits allocate their partial buffers inside the public call, and the public scratch function does not expose them; the campaign reports that as it is instead of changing faer's API to make the boundary look cleaner.
+  Known blind spot: `cholesky`, `eigh`, `solve` and `triangular_solve` are measured on square shapes only: the matrix they factor or solve with is square by definition (self-adjoint for the first two, a triangular factor for the last). `lu` and `full_piv_lu` are not gated that way -- they take the declared rectangular shapes too, with `min(m, n)` pivots and a trapezoidal `L` or `U`, which is what `dgetrf` does as well -- so a rectangular LU cell is measured in both orders beside its square one.
+  Known blind spot: `f32`/`c32` are declared and measured as of `docs/harness-dtype-axis.md`; the vendor arm has a route for `gemm` in those two dtypes and reports the LAPACK families as skipped for them. The large regime's 1024 shapes, BLIS, sparse, iterative and GPU arms are later declarations, not machinery built now.
+  Known blind spot: A vendor arm records the library it linked. Only OpenBLAS reports the kernel its runtime dispatched to; MKL names no kernel and no processor count, so its manifest leaves both empty rather than inferring them.
+  Known blind spot: Known limitation (71b25ffb recording): multi-thread figures include threadteam 0.2.0 and are not final for the 0.3.0 runtime.
+- **Rows** — one row per engine in every table below:
+  - `faer-fork` — The measured library: the tensor4all fork (`t4a-faer`, `[lib] name = "faer"`) at the checkout the harness linked by path. This is the row the campaign exists for; the fork's three perf experiments and the two correctness changes land here.
+    Identity: the fork revision in this run's manifest (`library.commit`), pinned by `pins/t4a-faer.rev`
+    Caveat: Both faer crates declare `[lib] name = "faer"`. They are distinct dependency keys (`faer_fork = { package = "t4a-faer" }`, `faer_upstream = { package = "faer" }`) and therefore distinct Rust crate identities, but their `Mat`, `Par` and trait types are not interchangeable: every adapter is written per arm, and shared transitive dependencies can unify Cargo features, so both arms declare equivalent feature sets and the resolved lock is recorded. For the 71b25ffb recording: measured at 71b25ffb, the commit immediately before the 0.28.0 release commit 325e482; the only difference is Cargo.lock and faer/Cargo.toml (threadteam 0.2.0 in the measured build, 0.3.0 as shipped, plus the version string). Single-thread numbers apply to 0.28.0 as released; multi-thread numbers carry that threadteam difference and will be re-measured in the next campaign.
+    As measured: `faer-fork` (the provider in the measured revision; see library and upstream above)
+  - `faer-upstream` — Upstream `faer` at the tag the fork is based on, in the same binary as the fork row. The baseline that says whether a fork change moved the number.
+    Identity: the upstream revision in this run's manifest (`upstream.commit`), pinned by `pins/upstream-faer.rev`
+    Caveat: Same crate-name and feature-unification caveat as `faer-fork`. A change to upstream at a fixed fork revision produces a different page rather than overwriting one.
+    As measured: `faer-upstream` (the provider in the measured revision; see library and upstream above)
+  - `lapack-mkl` — The same calls against Intel oneAPI MKL, linked from the installation `MKLROOT` names. One binary links one vendor library, so this row is measured by its own build of the harness and recorded as its own run; no page carries two vendor arms. The LP64 interface layer and the threading layer are pinned by the harness before the first MKL call, because MKL otherwise lets the environment choose them and the interface layer is an ABI.
+    Identity: the MKL build recorded in this run's manifest (`providers[mkl]`)
+    Caveat: MKL reports no dispatched-kernel name and no processor count, so its manifest records neither rather than inferring them. Its threading is vendor-owned, as for OpenBLAS.
+    As measured: linked shared; mkl 2026.2; kernel not reported by the vendor
+
+## Hardware
+
+- CPU: `AMD Ryzen AI 9 HX 470`
+- logical CPUs: `24`
+- L3: `24 MiB (2 instances)`
+- L3 domains: `0-3: 16 MiB shared; 4-11: 8 MiB shared`
+- OS / arch: `Linux 7.0.0-38-generic` / `x86_64`
+- hostname: `shinaoka-EVO-X1Pro`
+- CPU sets: 1T -> `4`, 4T -> `4-7`, 8T -> `4-11`
+
+Every timed cell matches a successful verification census, including operation variants.
+Each cell is median of process medians ± sample SD of those medians; W is the median
+within-process sample SD. All values are milliseconds. These are descriptive spreads,
+not confidence intervals. The between-process spread includes the rotating-order schedule.
+Each process retains 5 chronological calls; 3 complete process sets are recorded.
+Spread guide (computed from this run's own rows): per-engine between-start range median 0.72%, worst 8686.29% among cells of 1 us or more (a sub-microsecond row is timer and scheduler jitter, not kernel time); 207 of 4956 engine cells exceed 5% and carry `!`; median within-process relative SD 0.43%. A cell whose `±`, `!` or `p` is as large as the difference you are reading is not evidence of a regression.
+The `vs faer-fork` column is the rotation-averaged ratio
+exp(mean over starts of log(engine median / faer-fork median)),
+with the per-start ratios beside it: `R > 1`
+means the engine was slower than that first-declared row in that start. It removes a
+row-position
+effect only under one position effect shared by the engines and stable across starts,
+and only where every declared engine has a measured row (`*` marks a cell where one has
+no row, so no ratio there is position-balanced). `!` marks a cell where some engine's own
+per-start median range exceeds 5% of its median, and `p` a balanced cell whose estimated
+position-effect ratio exceeds 1.05. Flagged cells are retained, not discarded; the
+between-start variation can exceed the difference being compared.
+The `vs` columns mark only differences larger than the spread this run recorded for those
+two rows (combined between-start SD, floored at 5%), always with the measured library as the subject:
+`🔵 <row> X faster than <row>` / `🔴 <row> X slower than <row>` (the subject is the first column of the table, the compared row is named in
+the cell, not only in the column header), `·` inside the band, `-` that row is not
+measured in this arm. `notes` carries the cell warnings (`*` a declared row has no measurement,
+`!` between-start range over 5%, `p` position effect over 5%, dispatch-dominated means the
+row is under 20 us so 4T/8T pay thread-region start-up). Per-start ratios and every
+chronological sample are in the run directory named at the top of this page (`run*.csv`).
+These describe the recorded revisions; they are not a regression claim.
+
+## gemm-small, f64, c order, 1T (CPU 4)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `gemm/32x32x32/b1` | 0.002394 ± 2.02567e-05 (W 2.14756e-05) | 0.002354 ± 1.67432e-05 (W 3.48884e-05) | 0.004468 ± 6.35085e-06 (W 6.14028e-05) | · | 🔵 faer-fork 1.87× faster than `lapack-mkl` | dispatch-dominated (row under 20 us) |
+| `gemm/64x64x64/b1` | 0.017112 ± 8.5049e-05 (W 4.44781e-05) | 0.017172 ± 4.55741e-05 (W 3.27109e-05) | 0.024276 ± 8.24035e-05 (W 7.91789e-05) | · | 🔵 faer-fork 1.42× faster than `lapack-mkl` | dispatch-dominated (row under 20 us) |
+| `gemm/96x96x96/b1` | 0.056936 ± 0.000135094 (W 5.98331e-05) | 0.056835 ± 2.8006e-05 (W 0.00128197) | 0.062898 ± 0.00030204 (W 0.000134113) | · | 🔵 faer-fork 1.10× faster than `lapack-mkl` |  |
+
+## gemm-small, f64, c order, 4T (CPU 4-7)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `gemm/32x32x32/b1` | 0.002395 ± 4.04145e-05 (W 1.36492e-05) | 0.004018 ± 0.000131341 (W 0.000160612) | 0.00508 ± 8.5967e-05 (W 0.000131523) | 🔵 faer-fork 1.68× faster than `faer-upstream` | 🔵 faer-fork 2.12× faster than `lapack-mkl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `gemm/64x64x64/b1` | 0.011452 ± 0.00011845 (W 0.000217538) | 0.019656 ± 0.000231742 (W 0.00130066) | 0.013645 ± 0.00012178 (W 0.000113645) | 🔵 faer-fork 1.72× faster than `faer-upstream` | 🔵 faer-fork 1.19× faster than `lapack-mkl` | dispatch-dominated (row under 20 us) |
+| `gemm/96x96x96/b1` | 0.023023 ± 0.000429637 (W 0.000361677) | 0.062787 ± 0.00102099 (W 0.0108546) | 0.022612 ± 0.00029896 (W 0.000125379) | 🔵 faer-fork 2.73× faster than `faer-upstream` | · |  |
+
+## gemm-small, f64, c order, 8T (CPU 4-11)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `gemm/32x32x32/b1` | 0.002415 ± 1.52753e-05 (W 2.20068e-05) | 0.004268 ± 0.000125831 (W 0.000206034) | 0.00501 ± 0.00016078 (W 0.000161781) | 🔵 faer-fork 1.77× faster than `faer-upstream` | 🔵 faer-fork 2.07× faster than `lapack-mkl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `gemm/64x64x64/b1` | 0.009739 ± 7.62693e-05 (W 7.46137e-05) | 0.01063 ± 0.000119304 (W 0.000149518) | 0.009929 ± 0.000110636 (W 0.000199227) | 🔵 faer-fork 1.09× faster than `faer-upstream` | · | dispatch-dominated (row under 20 us) |
+| `gemm/96x96x96/b1` | 0.020188 ± 6.69104e-05 (W 8.99517e-05) | 0.021249 ± 0.000313157 (W 0.000172494) | 0.014917 ± 0.000109986 (W 0.00012212) | 🔵 faer-fork 1.05× faster than `faer-upstream` | 🔴 faer-fork 1.35× slower than `lapack-mkl` |  |
+
+## gemm-small, f64, f order, 1T (CPU 4)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `gemm/32x32x32/b1` | 0.002355 ± 1e-05 (W 8.78635e-06) | 0.002335 ± 1.12694e-05 (W 1.65318e-05) | 0.004458 ± 2.13776e-05 (W 6.13865e-05) | · | 🔵 faer-fork 1.89× faster than `lapack-mkl` | dispatch-dominated (row under 20 us) |
+| `gemm/64x64x64/b1` | 0.017062 ± 7.55667e-05 (W 2.04939e-05) | 0.017252 ± 7.76745e-05 (W 4.42967e-05) | 0.024105 ± 8.07279e-05 (W 6.42051e-05) | · | 🔵 faer-fork 1.41× faster than `lapack-mkl` | dispatch-dominated (row under 20 us) |
+| `gemm/96x96x96/b1` | 0.056806 ± 0.000269341 (W 0.000180231) | 0.056876 ± 0.00021167 (W 0.00158587) | 0.062737 ± 0.000282544 (W 6.72473e-05) | · | 🔵 faer-fork 1.10× faster than `lapack-mkl` |  |
+
+## gemm-small, f64, f order, 4T (CPU 4-7)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `gemm/32x32x32/b1` | 0.002404 ± 1.58219e-05 (W 1.54693e-05) | 0.004008 ± 0.000155725 (W 0.000205514) | 0.00518 ± 0.000199124 (W 0.000190048) | 🔵 faer-fork 1.67× faster than `faer-upstream` | 🔵 faer-fork 2.15× faster than `lapack-mkl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `gemm/64x64x64/b1` | 0.011341 ± 6.16468e-05 (W 0.000164935) | 0.018575 ± 0.000981185 (W 0.000929834) | 0.013746 ± 0.000118462 (W 0.000185661) | 🔵 faer-fork 1.64× faster than `faer-upstream` | 🔵 faer-fork 1.21× faster than `lapack-mkl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `gemm/96x96x96/b1` | 0.023173 ± 0.000194054 (W 0.000315909) | 0.063929 ± 0.000806371 (W 0.00116348) | 0.022502 ± 0.000141539 (W 0.000169476) | 🔵 faer-fork 2.76× faster than `faer-upstream` | · |  |
+
+## gemm-small, f64, f order, 8T (CPU 4-11)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `gemm/32x32x32/b1` | 0.002444 ± 2.3388e-05 (W 1.91364e-05) | 0.004068 ± 0.000111805 (W 0.000224493) | 0.00499 ± 8.92767e-05 (W 0.000112117) | 🔵 faer-fork 1.66× faster than `faer-upstream` | 🔵 faer-fork 2.04× faster than `lapack-mkl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `gemm/64x64x64/b1` | 0.009728 ± 9.71253e-05 (W 0.000118682) | 0.01111 ± 0.000323605 (W 0.000194526) | 0.010029 ± 0.000173205 (W 0.000120009) | 🔵 faer-fork 1.14× faster than `faer-upstream` | · | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `gemm/96x96x96/b1` | 0.020167 ± 3.61985e-05 (W 0.000151606) | 0.02107 ± 0.000277705 (W 0.000243198) | 0.015008 ± 5.19615e-05 (W 0.000174763) | · | 🔴 faer-fork 1.34× slower than `lapack-mkl` |  |
+
+## gemm-small, c64, c order, 1T (CPU 4)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `gemm/32x32x32/b1` | 0.008857 ± 2.08167e-05 (W 3.20936e-05) | 0.008856 ± 2.3094e-05 (W 3.83575e-05) | 0.011241 ± 0.000122882 (W 0.000148358) | · | 🔵 faer-fork 1.27× faster than `lapack-mkl` | dispatch-dominated (row under 20 us) |
+| `gemm/64x64x64/b1` | 0.067837 ± 0.000323729 (W 0.00185452) | 0.067767 ± 0.000189869 (W 8.58487e-05) | 0.082895 ± 0.000862375 (W 0.000935449) | · | 🔵 faer-fork 1.22× faster than `lapack-mkl` |  |
+| `gemm/96x96x96/b1` | 0.226964 ± 0.00109916 (W 0.00158182) | 0.226884 ± 0.00113279 (W 0.00170472) | 0.271347 ± 0.00186395 (W 0.0041124) | · | 🔵 faer-fork 1.20× faster than `lapack-mkl` |  |
+
+## gemm-small, c64, c order, 4T (CPU 4-7)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `gemm/32x32x32/b1` | 0.009428 ± 0.000331512 (W 9.11987e-05) | 0.008866 ± 1.70392e-05 (W 2.40271e-05) | 0.013966 ± 6.50641e-05 (W 0.000183634) | 🔴 faer-fork 1.06× slower than `faer-upstream` | 🔵 faer-fork 1.48× faster than `lapack-mkl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `gemm/64x64x64/b1` | 0.029104 ± 0.000109697 (W 0.000239093) | 0.039313 ± 0.000136956 (W 0.0018145) | 0.035526 ± 0.000115846 (W 0.000410454) | 🔵 faer-fork 1.35× faster than `faer-upstream` | 🔵 faer-fork 1.22× faster than `lapack-mkl` |  |
+| `gemm/96x96x96/b1` | 0.078557 ± 0.00024216 (W 0.000447171) | 0.09603 ± 0.00092583 (W 0.00297052) | 0.098013 ± 0.000858385 (W 0.0012563) | 🔵 faer-fork 1.22× faster than `faer-upstream` | 🔵 faer-fork 1.25× faster than `lapack-mkl` |  |
+
+## gemm-small, c64, c order, 8T (CPU 4-11)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `gemm/32x32x32/b1` | 0.009708 ± 2.88675e-05 (W 4.97041e-05) | 0.008857 ± 4.67654e-05 (W 2.75173e-05) | 0.015318 ± 0.000836698 (W 0.0012184) | 🔴 faer-fork 1.10× slower than `faer-upstream` | 🔵 faer-fork 1.58× faster than `lapack-mkl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `gemm/64x64x64/b1` | 0.0266 ± 9.78621e-05 (W 8.42746e-05) | 0.027712 ± 3.51188e-05 (W 0.000352903) | 0.016481 ± 0.000329652 (W 0.00022962) | · | 🔴 faer-fork 1.61× slower than `lapack-mkl` |  |
+| `gemm/96x96x96/b1` | 0.039745 ± 0.000196826 (W 8.61974e-05) | 0.040726 ± 0.000256088 (W 0.000253036) | 0.04288 ± 0.000377783 (W 0.000474715) | · | 🔵 faer-fork 1.08× faster than `lapack-mkl` |  |
+
+## gemm-small, c64, f order, 1T (CPU 4)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `gemm/32x32x32/b1` | 0.008826 ± 1.47309e-05 (W 2.87263e-05) | 0.008876 ± 2.85832e-05 (W 3.7818e-05) | 0.011161 ± 1.73205e-05 (W 0.00013546) | · | 🔵 faer-fork 1.26× faster than `lapack-mkl` | dispatch-dominated (row under 20 us) |
+| `gemm/64x64x64/b1` | 0.067927 ± 0.000399764 (W 0.00175654) | 0.067686 ± 0.000328392 (W 6.92185e-05) | 0.081311 ± 0.00132079 (W 0.00142429) | · | 🔵 faer-fork 1.20× faster than `lapack-mkl` |  |
+| `gemm/96x96x96/b1` | 0.227252 ± 0.000272722 (W 0.00141843) | 0.227204 ± 0.00100325 (W 0.00148891) | 0.274019 ± 0.00498136 (W 0.0035729) | · | 🔵 faer-fork 1.21× faster than `lapack-mkl` |  |
+
+## gemm-small, c64, f order, 4T (CPU 4-7)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `gemm/32x32x32/b1` | 0.009708 ± 0.000231128 (W 7.67346e-05) | 0.008856 ± 4.96689e-05 (W 2.55969e-05) | 0.014106 ± 6.65833e-05 (W 0.000116319) | 🔴 faer-fork 1.10× slower than `faer-upstream` | 🔵 faer-fork 1.45× faster than `lapack-mkl` | dispatch-dominated (row under 20 us) |
+| `gemm/64x64x64/b1` | 0.029345 ± 7.60285e-05 (W 0.000205843) | 0.040145 ± 0.00111497 (W 0.00189259) | 0.035877 ± 0.000295195 (W 0.000388784) | 🔵 faer-fork 1.37× faster than `faer-upstream` | 🔵 faer-fork 1.22× faster than `lapack-mkl` | `!` between-start range over 5% |
+| `gemm/96x96x96/b1` | 0.078737 ± 0.000241332 (W 0.000459838) | 0.0967 ± 0.000558535 (W 0.00158222) | 0.097912 ± 0.00132194 (W 0.00137904) | 🔵 faer-fork 1.23× faster than `faer-upstream` | 🔵 faer-fork 1.24× faster than `lapack-mkl` |  |
+
+## gemm-small, c64, f order, 8T (CPU 4-11)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `gemm/32x32x32/b1` | 0.009748 ± 0.00016547 (W 5.55536e-05) | 0.008857 ± 5.34821e-05 (W 2.16795e-05) | 0.015239 ± 0.00018469 (W 0.000982835) | 🔴 faer-fork 1.10× slower than `faer-upstream` | 🔵 faer-fork 1.56× faster than `lapack-mkl` | dispatch-dominated (row under 20 us) |
+| `gemm/64x64x64/b1` | 0.02686 ± 0.000145029 (W 0.000129392) | 0.027843 ± 0.000122312 (W 0.000234756) | 0.016341 ± 6.18897e-05 (W 0.000207736) | · | 🔴 faer-fork 1.64× slower than `lapack-mkl` |  |
+| `gemm/96x96x96/b1` | 0.039774 ± 0.000177156 (W 9.73206e-05) | 0.040846 ± 0.000193443 (W 0.000277412) | 0.042579 ± 0.000186065 (W 0.000584595) | · | 🔵 faer-fork 1.07× faster than `lapack-mkl` |  |
+
+## gemm-mid, f64, c order, 1T (CPU 4)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `gemm/128x128x128/b1` | 0.134101 ± 0.000615468 (W 0.00120061) | 0.13375 ± 0.000607837 (W 0.002623) | 0.166461 ± 0.000813459 (W 0.00166023) | · | 🔵 faer-fork 1.24× faster than `lapack-mkl` |  |
+| `gemm/192x192x192/b1` | 0.452545 ± 0.000188004 (W 0.00241566) | 0.452116 ± 0.00222376 (W 0.00245867) | 0.483996 ± 6.47328e-05 (W 0.00244962) | · | 🔵 faer-fork 1.07× faster than `lapack-mkl` |  |
+| `gemm/256x256x256/b1` | 1.07109 ± 0.00290928 (W 0.00124684) | 1.07316 ± 0.00670182 (W 0.0017699) | 1.19658 ± 0.00582313 (W 0.00328309) | · | 🔵 faer-fork 1.12× faster than `lapack-mkl` |  |
+| `gemm/384x384x384/b1` | 3.60949 ± 0.0181484 (W 0.00457097) | 3.6088 ± 0.0142805 (W 0.00362993) | 3.74737 ± 0.0545814 (W 0.0055993) | · | · |  |
+| `gemm/512x512x512/b1` | 8.60898 ± 0.0425528 (W 0.0206615) | 8.60896 ± 0.0156757 (W 0.0162442) | 9.82165 ± 0.050428 (W 0.0132869) | · | 🔵 faer-fork 1.14× faster than `lapack-mkl` |  |
+| `gemm/768x768x768/b1` | 29.4444 ± 0.157053 (W 0.03042) | 29.3691 ± 0.107552 (W 0.0207655) | 30.6541 ± 0.0751911 (W 0.0305105) | · | · |  |
+
+## gemm-mid, f64, c order, 4T (CPU 4-7)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `gemm/128x128x128/b1` | 0.045716 ± 0.000385437 (W 0.000398015) | 0.076542 ± 0.00610185 (W 0.00949619) | 0.055785 ± 0.000259828 (W 0.00020716) | 🔵 faer-fork 1.67× faster than `faer-upstream` | 🔵 faer-fork 1.22× faster than `lapack-mkl` | `!` between-start range over 5%; `p` position effect over 5% |
+| `gemm/192x192x192/b1` | 0.119964 ± 0.000900984 (W 0.00143464) | 0.161953 ± 0.00297875 (W 0.00336899) | 0.136966 ± 0.000700161 (W 0.00162493) | 🔵 faer-fork 1.35× faster than `faer-upstream` | 🔵 faer-fork 1.14× faster than `lapack-mkl` |  |
+| `gemm/256x256x256/b1` | 0.290901 ± 0.000113852 (W 0.00154614) | 0.307304 ± 0.00123504 (W 0.0111614) | 0.34378 ± 0.000844467 (W 0.00227896) | 🔵 faer-fork 1.06× faster than `faer-upstream` | 🔵 faer-fork 1.18× faster than `lapack-mkl` |  |
+| `gemm/384x384x384/b1` | 0.920849 ± 0.00313002 (W 0.00150071) | 0.919226 ± 0.00479018 (W 0.00269211) | 1.00619 ± 0.00252677 (W 0.00194506) | · | 🔵 faer-fork 1.09× faster than `lapack-mkl` |  |
+| `gemm/512x512x512/b1` | 2.21745 ± 0.00181919 (W 0.00394088) | 2.21324 ± 0.00239348 (W 0.00417607) | 3.03646 ± 0.00719878 (W 0.00557319) | · | 🔵 faer-fork 1.37× faster than `lapack-mkl` |  |
+| `gemm/768x768x768/b1` | 7.52772 ± 0.0171992 (W 0.00925878) | 7.5091 ± 0.0186808 (W 0.00948146) | 8.50156 ± 0.0212294 (W 0.0157238) | · | 🔵 faer-fork 1.13× faster than `lapack-mkl` |  |
+
+## gemm-mid, f64, c order, 8T (CPU 4-11)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `gemm/128x128x128/b1` | 0.034113 ± 1.71027 (W 0.00109282) | 0.073447 ± 0.0232109 (W 0.0225196) | 0.031679 ± 0.000201321 (W 0.000166238) | · | · | `!` between-start range over 5%; `p` position effect over 5% |
+| `gemm/192x192x192/b1` | 0.087203 ± 0.00034144 (W 0.000907804) | 0.190326 ± 0.0134459 (W 0.0162437) | 0.074529 ± 0.000389123 (W 0.000163478) | 🔵 faer-fork 2.18× faster than `faer-upstream` | 🔴 faer-fork 1.17× slower than `lapack-mkl` | `!` between-start range over 5% |
+| `gemm/256x256x256/b1` | 0.165089 ± 0.000330574 (W 0.0016346) | 0.236903 ± 0.0243959 (W 0.0302477) | 0.178644 ± 0.000612311 (W 0.00180634) | 🔵 faer-fork 1.44× faster than `faer-upstream` | 🔵 faer-fork 1.08× faster than `lapack-mkl` | `!` between-start range over 5%; `p` position effect over 5% |
+| `gemm/384x384x384/b1` | 0.480567 ± 0.00366838 (W 0.00321527) | 0.566955 ± 0.00156301 (W 0.00444884) | 0.514207 ± 0.00197832 (W 0.00271557) | 🔵 faer-fork 1.18× faster than `faer-upstream` | 🔵 faer-fork 1.07× faster than `lapack-mkl` |  |
+| `gemm/512x512x512/b1` | 1.137 ± 0.00428332 (W 0.00456211) | 1.18473 ± 0.00333276 (W 0.00968766) | 1.52706 ± 0.00305524 (W 0.00370932) | · | 🔵 faer-fork 1.34× faster than `lapack-mkl` |  |
+| `gemm/768x768x768/b1` | 3.8901 ± 0.0163788 (W 0.0121099) | 3.89559 ± 0.00755127 (W 0.0115654) | 4.67791 ± 0.00369113 (W 0.0135382) | · | 🔵 faer-fork 1.20× faster than `lapack-mkl` |  |
+
+## gemm-mid, f64, f order, 1T (CPU 4)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `gemm/128x128x128/b1` | 0.13387 ± 0.000664082 (W 0.00159878) | 0.134391 ± 0.000446307 (W 0.000192303) | 0.166421 ± 0.000672595 (W 0.00173122) | · | 🔵 faer-fork 1.24× faster than `lapack-mkl` |  |
+| `gemm/192x192x192/b1` | 0.453112 ± 0.000440574 (W 0.00286079) | 0.451283 ± 0.00140452 (W 0.00286482) | 0.482501 ± 0.00238947 (W 0.00236215) | · | 🔵 faer-fork 1.06× faster than `lapack-mkl` |  |
+| `gemm/256x256x256/b1` | 1.07526 ± 0.00266756 (W 0.00344903) | 1.07093 ± 0.00627836 (W 0.00261847) | 1.2003 ± 0.003685 (W 0.00232283) | · | 🔵 faer-fork 1.12× faster than `lapack-mkl` |  |
+| `gemm/384x384x384/b1` | 3.61625 ± 0.0168202 (W 0.00875652) | 3.61441 ± 0.0191111 (W 0.00523773) | 3.73088 ± 0.054589 (W 0.00256641) | · | · |  |
+| `gemm/512x512x512/b1` | 8.59592 ± 0.018001 (W 0.0193071) | 8.6113 ± 0.0457181 (W 0.012334) | 9.8563 ± 0.0111298 (W 0.0213996) | · | 🔵 faer-fork 1.15× faster than `lapack-mkl` |  |
+| `gemm/768x768x768/b1` | 29.3388 ± 0.0713815 (W 0.0162095) | 29.312 ± 0.115193 (W 0.0213527) | 30.5755 ± 0.122655 (W 0.422051) | · | · |  |
+
+## gemm-mid, f64, f order, 4T (CPU 4-7)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `gemm/128x128x128/b1` | 0.045705 ± 1.70392 (W 0.000510663) | 0.070652 ± 0.00908938 (W 0.0104447) | 0.055354 ± 1.53948e-05 (W 0.000145014) | · | · | `!` between-start range over 5%; `p` position effect over 5% |
+| `gemm/192x192x192/b1` | 0.119314 ± 0.000577411 (W 0.00165751) | 0.161741 ± 0.00222976 (W 0.00346222) | 0.137086 ± 0.00084532 (W 0.000717943) | 🔵 faer-fork 1.36× faster than `faer-upstream` | 🔵 faer-fork 1.15× faster than `lapack-mkl` |  |
+| `gemm/256x256x256/b1` | 0.291795 ± 0.000303007 (W 0.00245356) | 0.307754 ± 0.0107683 (W 0.00913345) | 0.345505 ± 0.00140741 (W 0.00227081) | 🔵 faer-fork 1.05× faster than `faer-upstream` | 🔵 faer-fork 1.18× faster than `lapack-mkl` | `!` between-start range over 5% |
+| `gemm/384x384x384/b1` | 0.918745 ± 0.00262063 (W 0.00176505) | 0.918005 ± 0.00161947 (W 0.00410971) | 1.00787 ± 0.00252791 (W 0.0018639) | · | 🔵 faer-fork 1.10× faster than `lapack-mkl` |  |
+| `gemm/512x512x512/b1` | 2.21443 ± 0.00275287 (W 0.00328887) | 2.21305 ± 0.00402713 (W 0.0029039) | 2.99349 ± 0.0312596 (W 0.00655945) | · | 🔵 faer-fork 1.35× faster than `lapack-mkl` |  |
+| `gemm/768x768x768/b1` | 7.5276 ± 0.0147486 (W 0.0106014) | 7.5269 ± 0.013446 (W 0.00843837) | 8.49534 ± 0.00285433 (W 0.00966387) | · | 🔵 faer-fork 1.13× faster than `lapack-mkl` |  |
+
+## gemm-mid, f64, f order, 8T (CPU 4-11)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `gemm/128x128x128/b1` | 0.03235 ± 0.000567645 (W 0.000550305) | 0.112771 ± 0.0248646 (W 0.0199687) | 0.03181 ± 0.000154824 (W 0.000244396) | 🔵 faer-fork 3.49× faster than `faer-upstream` | · | `!` between-start range over 5%; `p` position effect over 5% |
+| `gemm/192x192x192/b1` | 0.086833 ± 0.0002893 (W 0.00136351) | 0.2031 ± 0.0145331 (W 0.0196156) | 0.07475 ± 0.000486297 (W 0.000307829) | 🔵 faer-fork 2.34× faster than `faer-upstream` | 🔴 faer-fork 1.16× slower than `lapack-mkl` | `!` between-start range over 5% |
+| `gemm/256x256x256/b1` | 0.165247 ± 0.000677079 (W 0.00147538) | 0.216945 ± 0.0067455 (W 0.0249831) | 0.178975 ± 0.00100632 (W 0.00166311) | 🔵 faer-fork 1.31× faster than `faer-upstream` | 🔵 faer-fork 1.08× faster than `lapack-mkl` | `!` between-start range over 5% |
+| `gemm/384x384x384/b1` | 0.477108 ± 0.00234333 (W 0.00234071) | 0.561899 ± 0.00450644 (W 0.00542807) | 0.515629 ± 0.00239772 (W 0.00242681) | 🔵 faer-fork 1.18× faster than `faer-upstream` | 🔵 faer-fork 1.08× faster than `lapack-mkl` |  |
+| `gemm/512x512x512/b1` | 1.14037 ± 0.00630512 (W 0.00349745) | 1.18589 ± 0.00617903 (W 0.00563771) | 1.51886 ± 0.00469428 (W 0.00424084) | · | 🔵 faer-fork 1.33× faster than `lapack-mkl` |  |
+| `gemm/768x768x768/b1` | 3.89376 ± 0.00791397 (W 0.00740069) | 3.89836 ± 0.0125365 (W 0.00515075) | 4.66462 ± 0.0220074 (W 0.0157556) | · | 🔵 faer-fork 1.20× faster than `lapack-mkl` |  |
+
+## gemm-mid, c64, c order, 1T (CPU 4)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `gemm/128x128x128/b1` | 0.534649 ± 0.0041052 (W 0.00321764) | 0.539058 ± 0.000983619 (W 0.00217754) | 0.647018 ± 0.00371624 (W 0.00824614) | · | 🔵 faer-fork 1.21× faster than `lapack-mkl` |  |
+| `gemm/192x192x192/b1` | 1.80503 ± 0.014977 (W 0.00189035) | 1.81208 ± 0.00926127 (W 0.00385468) | 2.15216 ± 0.0059365 (W 0.0111997) | · | 🔵 faer-fork 1.19× faster than `lapack-mkl` |  |
+| `gemm/256x256x256/b1` | 4.28315 ± 0.0147467 (W 0.00401683) | 4.28606 ± 0.012343 (W 0.0105038) | 5.12717 ± 0.0164736 (W 0.0101933) | · | 🔵 faer-fork 1.20× faster than `lapack-mkl` |  |
+| `gemm/384x384x384/b1` | 14.3996 ± 0.0114414 (W 0.0383451) | 14.4142 ± 0.0422981 (W 0.0125262) | 17.1721 ± 0.0223409 (W 0.021208) | · | 🔵 faer-fork 1.19× faster than `lapack-mkl` |  |
+| `gemm/512x512x512/b1` | 34.3165 ± 0.140051 (W 0.0440803) | 34.2628 ± 0.115407 (W 0.0424044) | 40.9328 ± 0.137137 (W 0.0553355) | · | 🔵 faer-fork 1.19× faster than `lapack-mkl` |  |
+| `gemm/768x768x768/b1` | 116.318 ± 0.314618 (W 0.0945066) | 116.352 ± 0.487206 (W 0.0763773) | 137.54 ± 1.27268 (W 0.286117) | · | 🔵 faer-fork 1.18× faster than `lapack-mkl` |  |
+
+## gemm-mid, c64, c order, 4T (CPU 4-7)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `gemm/128x128x128/b1` | 0.154429 ± 0.000983113 (W 0.000625483) | 0.170667 ± 0.000567853 (W 0.0042376) | 0.234788 ± 0.00245524 (W 0.00130749) | 🔵 faer-fork 1.11× faster than `faer-upstream` | 🔵 faer-fork 1.52× faster than `lapack-mkl` |  |
+| `gemm/192x192x192/b1` | 0.461489 ± 0.00170097 (W 0.00265455) | 0.46077 ± 0.000893578 (W 0.00192692) | 0.750736 ± 0.00386977 (W 0.00596256) | · | 🔵 faer-fork 1.63× faster than `lapack-mkl` |  |
+| `gemm/256x256x256/b1` | 1.11667 ± 0.00263835 (W 0.00193345) | 1.11512 ± 0.00129683 (W 0.00137273) | 1.81276 ± 0.00723596 (W 0.00648428) | · | 🔵 faer-fork 1.62× faster than `lapack-mkl` |  |
+| `gemm/384x384x384/b1` | 3.64666 ± 0.00421556 (W 0.00507211) | 3.63941 ± 0.00154935 (W 0.00547685) | 5.81375 ± 0.0135396 (W 0.0135218) | · | 🔵 faer-fork 1.59× faster than `lapack-mkl` |  |
+| `gemm/512x512x512/b1` | 8.68368 ± 0.00555534 (W 0.00957587) | 8.66452 ± 0.0110218 (W 0.0110432) | 13.8943 ± 0.0126739 (W 0.0130129) | · | 🔵 faer-fork 1.60× faster than `lapack-mkl` |  |
+| `gemm/768x768x768/b1` | 29.4794 ± 0.0246547 (W 0.0207387) | 29.4867 ± 0.0354522 (W 0.0290074) | 46.7444 ± 0.107334 (W 0.105232) | · | 🔵 faer-fork 1.59× faster than `lapack-mkl` |  |
+
+## gemm-mid, c64, c order, 8T (CPU 4-11)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `gemm/128x128x128/b1` | 0.103854 ± 0.000718733 (W 0.00100318) | 0.13968 ± 0.0112177 (W 0.0111757) | 0.094286 ± 0.000364597 (W 0.000803226) | 🔵 faer-fork 1.34× faster than `faer-upstream` | 🔴 faer-fork 1.10× slower than `lapack-mkl` | `!` between-start range over 5%; `p` position effect over 5% |
+| `gemm/192x192x192/b1` | 0.235661 ± 0.00088285 (W 0.00177763) | 0.278 ± 0.000762735 (W 0.00291926) | 0.294238 ± 0.00340882 (W 0.00307782) | 🔵 faer-fork 1.18× faster than `faer-upstream` | 🔵 faer-fork 1.25× faster than `lapack-mkl` |  |
+| `gemm/256x256x256/b1` | 0.583897 ± 0.00368049 (W 0.00213662) | 0.609118 ± 0.00272546 (W 0.0021889) | 0.698364 ± 0.00331805 (W 0.0035162) | · | 🔵 faer-fork 1.20× faster than `lapack-mkl` |  |
+| `gemm/384x384x384/b1` | 1.8356 ± 0.000410913 (W 0.00384259) | 1.82605 ± 0.00534639 (W 0.00633448) | 2.28416 ± 0.0105305 (W 0.00713818) | · | 🔵 faer-fork 1.24× faster than `lapack-mkl` |  |
+| `gemm/512x512x512/b1` | 4.44821 ± 0.0045716 (W 0.0122737) | 4.44146 ± 0.00120786 (W 0.0145818) | 5.56085 ± 0.015168 (W 0.0281129) | · | 🔵 faer-fork 1.25× faster than `lapack-mkl` |  |
+| `gemm/768x768x768/b1` | 14.9383 ± 0.023971 (W 0.0162118) | 14.9343 ± 0.0110335 (W 0.0321269) | 19.0245 ± 0.146228 (W 0.226246) | · | 🔵 faer-fork 1.27× faster than `lapack-mkl` |  |
+
+## gemm-mid, c64, f order, 1T (CPU 4)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `gemm/128x128x128/b1` | 0.538878 ± 0.00101831 (W 0.00430636) | 0.536693 ± 0.0033292 (W 0.00212942) | 0.65042 ± 0.00619465 (W 0.00988155) | · | 🔵 faer-fork 1.21× faster than `lapack-mkl` |  |
+| `gemm/192x192x192/b1` | 1.81607 ± 0.00544009 (W 0.00341215) | 1.80831 ± 0.00804054 (W 0.00466052) | 2.15089 ± 0.00791874 (W 0.0133981) | · | 🔵 faer-fork 1.18× faster than `lapack-mkl` |  |
+| `gemm/256x256x256/b1` | 4.27382 ± 0.0134445 (W 0.00977134) | 4.27167 ± 0.0145577 (W 0.0141132) | 5.12928 ± 0.0186389 (W 0.0290131) | · | 🔵 faer-fork 1.20× faster than `lapack-mkl` |  |
+| `gemm/384x384x384/b1` | 14.41 ± 0.0349053 (W 0.0138566) | 14.4246 ± 0.0612433 (W 0.00919656) | 17.151 ± 0.121187 (W 0.035755) | · | 🔵 faer-fork 1.19× faster than `lapack-mkl` |  |
+| `gemm/512x512x512/b1` | 34.2824 ± 0.171121 (W 0.0364535) | 34.2496 ± 0.108162 (W 0.0474801) | 40.883 ± 0.123225 (W 0.0753636) | · | 🔵 faer-fork 1.19× faster than `lapack-mkl` |  |
+| `gemm/768x768x768/b1` | 116.3 ± 0.235795 (W 0.0721971) | 116.389 ± 0.388535 (W 0.176951) | 137.851 ± 0.397881 (W 0.350534) | · | 🔵 faer-fork 1.19× faster than `lapack-mkl` |  |
+
+## gemm-mid, c64, f order, 4T (CPU 4-7)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `gemm/128x128x128/b1` | 0.154389 ± 0.000668192 (W 0.00137502) | 0.171009 ± 0.000321547 (W 0.00178095) | 0.23622 ± 0.00354203 (W 0.00235075) | 🔵 faer-fork 1.11× faster than `faer-upstream` | 🔵 faer-fork 1.53× faster than `lapack-mkl` |  |
+| `gemm/192x192x192/b1` | 0.457321 ± 0.00176182 (W 0.0021837) | 0.461021 ± 0.0014144 (W 0.001776) | 0.753196 ± 0.00309992 (W 0.00476176) | · | 🔵 faer-fork 1.65× faster than `lapack-mkl` |  |
+| `gemm/256x256x256/b1` | 1.11539 ± 0.00130672 (W 0.00158155) | 1.11376 ± 0.00123914 (W 0.0021271) | 1.80989 ± 0.00226548 (W 0.00552879) | · | 🔵 faer-fork 1.62× faster than `lapack-mkl` |  |
+| `gemm/384x384x384/b1` | 3.63866 ± 0.00537299 (W 0.00655122) | 3.64202 ± 0.00306327 (W 0.00482776) | 5.81604 ± 0.00977216 (W 0.0134988) | · | 🔵 faer-fork 1.60× faster than `lapack-mkl` |  |
+| `gemm/512x512x512/b1` | 8.67821 ± 0.00658585 (W 0.00956539) | 8.67363 ± 0.0213367 (W 0.0174142) | 13.9151 ± 0.046233 (W 0.0390393) | · | 🔵 faer-fork 1.60× faster than `lapack-mkl` |  |
+| `gemm/768x768x768/b1` | 29.5855 ± 0.0609428 (W 0.0428445) | 29.4977 ± 0.0521202 (W 0.0333666) | 46.8188 ± 0.238088 (W 0.0463026) | · | 🔵 faer-fork 1.58× faster than `lapack-mkl` |  |
+
+## gemm-mid, c64, f order, 8T (CPU 4-11)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `gemm/128x128x128/b1` | 0.103383 ± 0.000809929 (W 0.00068285) | 0.120345 ± 0.0129217 (W 0.00826925) | 0.094096 ± 0.000635258 (W 0.00140571) | 🔵 faer-fork 1.16× faster than `faer-upstream` | 🔴 faer-fork 1.10× slower than `lapack-mkl` | `!` between-start range over 5%; `p` position effect over 5% |
+| `gemm/192x192x192/b1` | 0.237111 ± 0.00207353 (W 0.00245677) | 0.279001 ± 0.000876263 (W 0.00275383) | 0.296555 ± 0.00123613 (W 0.00212796) | 🔵 faer-fork 1.18× faster than `faer-upstream` | 🔵 faer-fork 1.25× faster than `lapack-mkl` |  |
+| `gemm/256x256x256/b1` | 0.584441 ± 0.00202325 (W 0.00239704) | 0.611548 ± 0.00266049 (W 0.00218955) | 0.700949 ± 0.00313122 (W 0.00436364) | · | 🔵 faer-fork 1.20× faster than `lapack-mkl` |  |
+| `gemm/384x384x384/b1` | 1.82662 ± 0.00487706 (W 0.00322708) | 1.82729 ± 0.00467069 (W 0.00489685) | 2.28414 ± 0.00328528 (W 0.00790584) | · | 🔵 faer-fork 1.25× faster than `lapack-mkl` |  |
+| `gemm/512x512x512/b1` | 4.43412 ± 0.0069601 (W 0.00673656) | 4.43397 ± 0.0017935 (W 0.00692472) | 5.53801 ± 0.0241319 (W 0.018105) | · | 🔵 faer-fork 1.25× faster than `lapack-mkl` |  |
+| `gemm/768x768x768/b1` | 14.9887 ± 0.0297053 (W 0.0175525) | 14.9423 ± 0.0418351 (W 0.0292131) | 18.7996 ± 0.123716 (W 0.112379) | · | 🔵 faer-fork 1.25× faster than `lapack-mkl` |  |
+
+## gemm-tall, f64, c order, 1T (CPU 4)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `gemm/16x4096x240/b1` | 1.26939 ± 0.0135164 (W 0.00455207) | 1.27346 ± 0.00629425 (W 0.00479802) | 1.64623 ± 0.0837041 (W 0.00398236) | · | 🔵 faer-fork 1.30× faster than `lapack-mkl` | `!` between-start range over 5% |
+| `gemm/4096x16x240/b1` | 1.1336 ± 0.0360237 (W 0.00476379) | 1.07643 ± 0.000897754 (W 0.00189377) | 1.53819 ± 0.00809286 (W 0.0170854) | 🔴 faer-fork 1.05× slower than `faer-upstream` | 🔵 faer-fork 1.36× faster than `lapack-mkl` | `!` between-start range over 5% |
+| `gemm/4096x64x64/b1` | 1.08097 ± 0.00642801 (W 0.0026584) | 1.08784 ± 0.00263008 (W 0.00242555) | 1.55141 ± 0.00850358 (W 0.00516007) | · | 🔵 faer-fork 1.44× faster than `lapack-mkl` |  |
+
+## gemm-tall, f64, c order, 4T (CPU 4-7)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `gemm/16x4096x240/b1` | 0.424051 ± 0.00172906 (W 0.00363247) | 0.43407 ± 0.00100059 (W 0.00379378) | 0.431442 ± 0.0066888 (W 0.00415537) | · | · |  |
+| `gemm/4096x16x240/b1` | 0.310369 ± 0.00299373 (W 0.00281155) | 0.312962 ± 0.00165886 (W 0.00281177) | 0.430123 ± 0.00161184 (W 0.0135425) | · | 🔵 faer-fork 1.39× faster than `lapack-mkl` |  |
+| `gemm/4096x64x64/b1` | 0.278249 ± 0.00321839 (W 0.00204548) | 0.302415 ± 0.00119833 (W 0.00202278) | 0.388603 ± 0.000268799 (W 0.00200983) | 🔵 faer-fork 1.09× faster than `faer-upstream` | 🔵 faer-fork 1.40× faster than `lapack-mkl` |  |
+
+## gemm-tall, f64, c order, 8T (CPU 4-11)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `gemm/16x4096x240/b1` | 0.420903 ± 0.00253618 (W 0.00333037) | 0.424945 ± 0.00191743 (W 0.00336953) | 0.270934 ± 0.000336004 (W 0.00313097) | · | 🔴 faer-fork 1.55× slower than `lapack-mkl` |  |
+| `gemm/4096x16x240/b1` | 0.18733 ± 0.00270196 (W 0.00123509) | 0.191828 ± 0.000342282 (W 0.00306625) | 0.290693 ± 0.00198657 (W 0.00203366) | · | 🔵 faer-fork 1.55× faster than `lapack-mkl` |  |
+| `gemm/4096x64x64/b1` | 0.142445 ± 0.000331001 (W 0.000389871) | 0.200783 ± 0.00198312 (W 0.00939104) | 0.195195 ± 0.00198058 (W 0.00173327) | 🔵 faer-fork 1.41× faster than `faer-upstream` | 🔵 faer-fork 1.37× faster than `lapack-mkl` |  |
+
+## gemm-tall, f64, f order, 1T (CPU 4)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `gemm/16x4096x240/b1` | 1.04164 ± 0.00720507 (W 0.0033341) | 1.0364 ± 0.00919518 (W 0.00420998) | 2.58827 ± 0.0087597 (W 0.00777118) | · | 🔵 faer-fork 2.48× faster than `lapack-mkl` |  |
+| `gemm/4096x16x240/b1` | 1.09944 ± 0.00295732 (W 0.0068257) | 1.09888 ± 0.00934712 (W 0.00439005) | 1.56086 ± 0.0221095 (W 0.027819) | · | 🔵 faer-fork 1.42× faster than `lapack-mkl` |  |
+| `gemm/4096x64x64/b1` | 1.12948 ± 0.00506222 (W 0.00225463) | 1.13258 ± 0.00656568 (W 0.00348709) | 1.24026 ± 0.00336593 (W 0.00683039) | · | 🔵 faer-fork 1.10× faster than `lapack-mkl` |  |
+
+## gemm-tall, f64, f order, 4T (CPU 4-7)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `gemm/16x4096x240/b1` | 0.324774 ± 0.0017652 (W 0.00358123) | 0.706124 ± 0.00261926 (W 0.00327676) | 0.635286 ± 0.00300785 (W 0.00431879) | 🔵 faer-fork 2.17× faster than `faer-upstream` | 🔵 faer-fork 1.96× faster than `lapack-mkl` |  |
+| `gemm/4096x16x240/b1` | 0.298979 ± 0.00153123 (W 0.00180247) | 0.299758 ± 0.00195403 (W 0.00311672) | 0.430601 ± 0.00128286 (W 0.00468344) | · | 🔵 faer-fork 1.44× faster than `lapack-mkl` |  |
+| `gemm/4096x64x64/b1` | 0.295151 ± 0.00188475 (W 0.0032903) | 0.297473 ± 0.00092065 (W 0.00318182) | 0.327362 ± 0.00051763 (W 0.00218159) | · | 🔵 faer-fork 1.11× faster than `lapack-mkl` |  |
+
+## gemm-tall, f64, f order, 8T (CPU 4-11)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `gemm/16x4096x240/b1` | 0.197729 ± 0.00181292 (W 0.00347829) | 1.14822 ± 0.00854697 (W 0.00929491) | 0.339252 ± 0.00208907 (W 0.00364296) | 🔵 faer-fork 5.81× faster than `faer-upstream` | 🔵 faer-fork 1.72× faster than `lapack-mkl` |  |
+| `gemm/4096x16x240/b1` | 0.18195 ± 0.000762026 (W 0.00194053) | 0.181059 ± 0.00125263 (W 0.00246295) | 0.293248 ± 0.00134406 (W 0.00203849) | · | 🔵 faer-fork 1.61× faster than `lapack-mkl` |  |
+| `gemm/4096x64x64/b1` | 0.15589 ± 0.00140151 (W 0.00187832) | 0.156963 ± 0.000186897 (W 0.00111737) | 0.169926 ± 0.000461123 (W 0.00145766) | · | 🔵 faer-fork 1.09× faster than `lapack-mkl` |  |
+
+## gemm-tall, c64, c order, 1T (CPU 4)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `gemm/16x4096x240/b1` | 4.15893 ± 0.00472741 (W 0.0135267) | 4.15593 ± 0.00231836 (W 0.00962836) | 5.74377 ± 0.0124509 (W 0.0088064) | · | 🔵 faer-fork 1.38× faster than `lapack-mkl` |  |
+| `gemm/4096x16x240/b1` | 4.42205 ± 0.0169684 (W 0.0193271) | 4.3866 ± 0.0153168 (W 0.0102881) | 6.2229 ± 0.0539256 (W 0.0286066) | · | 🔵 faer-fork 1.41× faster than `lapack-mkl` |  |
+| `gemm/4096x64x64/b1` | 4.38056 ± 0.015533 (W 0.0102148) | 4.40356 ± 0.0122425 (W 0.00592923) | 5.26481 ± 0.0143025 (W 0.00986866) | · | 🔵 faer-fork 1.20× faster than `lapack-mkl` |  |
+
+## gemm-tall, c64, c order, 4T (CPU 4-7)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `gemm/16x4096x240/b1` | 1.65974 ± 0.0093013 (W 0.00514613) | 1.66355 ± 0.0330185 (W 0.0155616) | 1.95764 ± 0.00757789 (W 0.00468845) | · | 🔵 faer-fork 1.18× faster than `lapack-mkl` |  |
+| `gemm/4096x16x240/b1` | 1.16395 ± 0.00104875 (W 0.00597735) | 1.15694 ± 0.00200691 (W 0.00506999) | 2.10947 ± 0.0561719 (W 0.0197218) | · | 🔵 faer-fork 1.81× faster than `lapack-mkl` |  |
+| `gemm/4096x64x64/b1` | 1.13231 ± 0.000735269 (W 0.00245431) | 1.13955 ± 0.00125206 (W 0.00372421) | 2.06264 ± 0.00878284 (W 0.00430985) | · | 🔵 faer-fork 1.82× faster than `lapack-mkl` |  |
+
+## gemm-tall, c64, c order, 8T (CPU 4-11)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `gemm/16x4096x240/b1` | 0.896343 ± 0.00991444 (W 0.0186877) | 0.90798 ± 0.00584295 (W 0.0183676) | 0.957319 ± 0.00204049 (W 0.00628435) | · | 🔵 faer-fork 1.07× faster than `lapack-mkl` |  |
+| `gemm/4096x16x240/b1` | 0.598609 ± 0.00412542 (W 0.00178043) | 0.600648 ± 0.00221496 (W 0.00411916) | 1.34453 ± 0.00901371 (W 0.0114015) | · | 🔵 faer-fork 2.25× faster than `lapack-mkl` |  |
+| `gemm/4096x64x64/b1` | 0.570436 ± 0.00413371 (W 0.00267976) | 0.592035 ± 0.0189713 (W 0.0173804) | 0.756908 ± 0.00358405 (W 0.00322678) | · | 🔵 faer-fork 1.33× faster than `lapack-mkl` | `!` between-start range over 5% |
+
+## gemm-tall, c64, f order, 1T (CPU 4)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `gemm/16x4096x240/b1` | 4.07451 ± 0.0117096 (W 0.0057546) | 4.07022 ± 0.0111282 (W 0.00735767) | 5.70945 ± 0.0161957 (W 0.0181225) | · | 🔵 faer-fork 1.40× faster than `lapack-mkl` |  |
+| `gemm/4096x16x240/b1` | 4.36882 ± 0.00343252 (W 0.00493204) | 4.38335 ± 0.0130149 (W 0.00591075) | 6.33137 ± 0.0857575 (W 0.0889278) | · | 🔵 faer-fork 1.45× faster than `lapack-mkl` |  |
+| `gemm/4096x64x64/b1` | 4.44569 ± 0.00346707 (W 0.0071238) | 4.45488 ± 0.0137101 (W 0.00518529) | 5.70031 ± 0.0664261 (W 0.0201067) | · | 🔵 faer-fork 1.28× faster than `lapack-mkl` |  |
+
+## gemm-tall, c64, f order, 4T (CPU 4-7)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `gemm/16x4096x240/b1` | 1.18943 ± 0.00206933 (W 0.00221773) | 1.94757 ± 0.00851059 (W 0.00889276) | 20.0964 ± 3.69589 (W 0.0416002) | 🔵 faer-fork 1.64× faster than `faer-upstream` | 🔵 faer-fork 16.90× faster than `lapack-mkl` | `!` between-start range over 5%; `p` position effect over 5% |
+| `gemm/4096x16x240/b1` | 1.15882 ± 0.00569471 (W 0.00254819) | 1.15366 ± 0.0044355 (W 0.00216823) | 2.38278 ± 0.0270305 (W 0.0617777) | · | 🔵 faer-fork 2.06× faster than `lapack-mkl` |  |
+| `gemm/4096x64x64/b1` | 1.16753 ± 0.00133459 (W 0.00332326) | 1.16388 ± 0.00619974 (W 0.00331693) | 2.01455 ± 0.00448182 (W 0.0146747) | · | 🔵 faer-fork 1.73× faster than `lapack-mkl` |  |
+
+## gemm-tall, c64, f order, 8T (CPU 4-11)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `gemm/16x4096x240/b1` | 0.66415 ± 0.00502265 (W 0.00858348) | 2.56321 ± 0.0143308 (W 0.0299804) | 3.78172 ± 0.509939 (W 0.00362455) | 🔵 faer-fork 3.86× faster than `faer-upstream` | 🔵 faer-fork 5.69× faster than `lapack-mkl` | `!` between-start range over 5%; `p` position effect over 5% |
+| `gemm/4096x16x240/b1` | 0.595021 ± 0.00421503 (W 0.00120169) | 0.580716 ± 0.0014528 (W 0.00490748) | 1.804 ± 0.012749 (W 0.0180321) | · | 🔵 faer-fork 3.03× faster than `lapack-mkl` |  |
+| `gemm/4096x64x64/b1` | 0.57477 ± 0.00475399 (W 0.0037868) | 0.574459 ± 0.00351299 (W 0.00373479) | 1.05296 ± 0.0168818 (W 0.0299874) | · | 🔵 faer-fork 1.83× faster than `lapack-mkl` |  |
+
+## gemm-wide, f64, c order, 1T (CPU 4)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `gemm/64x64x4096/b1` | 1.13833 ± 0.0130964 (W 0.00440729) | 1.13281 ± 0.0044128 (W 0.00264786) | 1.24682 ± 0.00257801 (W 0.00283863) | · | 🔵 faer-fork 1.10× faster than `lapack-mkl` |  |
+
+## gemm-wide, f64, c order, 4T (CPU 4-7)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `gemm/64x64x4096/b1` | 0.298015 ± 0.0010323 (W 0.00248996) | 0.296865 ± 0.000686214 (W 0.00214543) | 0.328804 ± 0.00128785 (W 0.00224932) | · | 🔵 faer-fork 1.10× faster than `lapack-mkl` |  |
+
+## gemm-wide, f64, c order, 8T (CPU 4-11)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `gemm/64x64x4096/b1` | 0.156373 ± 0.000249856 (W 0.00142664) | 0.157523 ± 0.000577504 (W 0.00113442) | 0.171389 ± 0.00121254 (W 0.00210846) | · | 🔵 faer-fork 1.10× faster than `lapack-mkl` |  |
+
+## gemm-wide, f64, f order, 1T (CPU 4)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `gemm/64x64x4096/b1` | 1.08898 ± 0.00185869 (W 0.00585183) | 1.09015 ± 0.000978164 (W 0.00160232) | 1.56659 ± 0.00841004 (W 0.00262037) | · | 🔵 faer-fork 1.44× faster than `lapack-mkl` |  |
+
+## gemm-wide, f64, f order, 4T (CPU 4-7)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `gemm/64x64x4096/b1` | 0.281303 ± 0.00218573 (W 0.001899) | 0.303003 ± 0.00107045 (W 0.00210098) | 0.387654 ± 0.0018358 (W 0.00235508) | 🔵 faer-fork 1.08× faster than `faer-upstream` | 🔵 faer-fork 1.38× faster than `lapack-mkl` |  |
+
+## gemm-wide, f64, f order, 8T (CPU 4-11)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `gemm/64x64x4096/b1` | 0.142486 ± 0.000165862 (W 0.00197653) | 0.200194 ± 0.00291242 (W 0.00527084) | 0.197209 ± 0.00168482 (W 0.00160569) | 🔵 faer-fork 1.41× faster than `faer-upstream` | 🔵 faer-fork 1.38× faster than `lapack-mkl` |  |
+
+## gemm-wide, c64, c order, 1T (CPU 4)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `gemm/64x64x4096/b1` | 4.4499 ± 0.00680227 (W 0.00655264) | 4.44854 ± 0.010123 (W 0.00835503) | 5.68984 ± 0.00906305 (W 0.0185198) | · | 🔵 faer-fork 1.28× faster than `lapack-mkl` |  |
+
+## gemm-wide, c64, c order, 4T (CPU 4-7)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `gemm/64x64x4096/b1` | 1.17151 ± 0.00150851 (W 0.00470436) | 1.16121 ± 0.00274979 (W 0.00359674) | 2.03066 ± 0.0122789 (W 0.00791518) | · | 🔵 faer-fork 1.73× faster than `lapack-mkl` |  |
+
+## gemm-wide, c64, c order, 8T (CPU 4-11)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `gemm/64x64x4096/b1` | 0.581105 ± 0.00488437 (W 0.00357903) | 0.580515 ± 0.000821847 (W 0.00410007) | 1.02898 ± 0.0260919 (W 0.0413395) | · | 🔵 faer-fork 1.77× faster than `lapack-mkl` |  |
+
+## gemm-wide, c64, f order, 1T (CPU 4)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `gemm/64x64x4096/b1` | 4.38704 ± 0.0143174 (W 0.00772385) | 4.40509 ± 0.0104616 (W 0.00587553) | 5.33334 ± 0.0449065 (W 0.0442698) | · | 🔵 faer-fork 1.22× faster than `lapack-mkl` |  |
+
+## gemm-wide, c64, f order, 4T (CPU 4-7)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `gemm/64x64x4096/b1` | 1.13508 ± 0.00252894 (W 0.00277469) | 1.14104 ± 0.00364228 (W 0.00151593) | 2.0646 ± 0.00762991 (W 0.00486094) | · | 🔵 faer-fork 1.82× faster than `lapack-mkl` |  |
+
+## gemm-wide, c64, f order, 8T (CPU 4-11)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `gemm/64x64x4096/b1` | 0.574163 ± 0.000543081 (W 0.00269204) | 0.620428 ± 0.00372899 (W 0.0192212) | 0.759871 ± 0.00107058 (W 0.00617337) | 🔵 faer-fork 1.08× faster than `faer-upstream` | 🔵 faer-fork 1.32× faster than `lapack-mkl` |  |
+
+## linalg-small, f64, c order, 1T (CPU 4)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `cholesky/n32/b1` | 0.003517 ± 3.78594e-05 (W 4.96619e-05) | 0.003246 ± 0.000156781 (W 5.78792e-05) | 0.003837 ± 4.3589e-05 (W 6.28267e-05) | 🔴 faer-fork 1.08× slower than `faer-upstream` | 🔵 faer-fork 1.09× faster than `lapack-mkl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n32/b1 [in_place]` | 0.004238 ± 9.64365e-05 (W 3.1305e-05) | 0.004328 ± 0.00108756 (W 2.07364e-05) | - | · | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n64/b1` | 0.016842 ± 0.00209472 (W 6.60174e-05) | 0.016951 ± 0.00104357 (W 4.87781e-05) | 0.015589 ± 6.9282e-05 (W 0.000175443) | · | · | `!` between-start range over 5%; `p` position effect over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n64/b1 [in_place]` | 0.034174 ± 0.00116322 (W 4.54973e-05) | 0.034535 ± 0.00014095 (W 3.70135e-05) | - | · | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `cholesky/n96/b1` | 0.033112 ± 0.001241 (W 0.000139734) | 0.031168 ± 0.00123268 (W 0.000127004) | 0.046857 ± 0.000753371 (W 0.000507769) | 🔴 faer-fork 1.06× slower than `faer-upstream` | 🔵 faer-fork 1.42× faster than `lapack-mkl` | `!` between-start range over 5% |
+| `cholesky/n96/b1 [in_place]` | 0.065262 ± 0.00118738 (W 6.43607e-05) | 0.163866 ± 0.000665235 (W 0.00153133) | - | 🔵 faer-fork 2.51× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `eigh/n32/b1` | 0.110806 ± 0.000441046 (W 0.000278615) | 0.113362 ± 0.000691807 (W 0.000186328) | 0.097571 ± 0.000634289 (W 0.00167277) | · | 🔴 faer-fork 1.14× slower than `lapack-mkl` |  |
+| `eigh/n32/b1 [in_place]` | 0.109684 ± 0.000156387 (W 0.00169043) | 0.112901 ± 0.000467163 (W 0.000196228) | - | · | - | `*` one row has no measurement here |
+| `eigh/n64/b1` | 0.489826 ± 0.00179086 (W 0.00162329) | 0.483563 ± 0.00182939 (W 0.0019076) | 0.387203 ± 0.00094967 (W 0.00213509) | · | 🔴 faer-fork 1.27× slower than `lapack-mkl` |  |
+| `eigh/n64/b1 [in_place]` | 0.488633 ± 0.00168186 (W 0.00268968) | 0.484421 ± 0.00202879 (W 0.00213989) | - | · | - | `*` one row has no measurement here |
+| `eigh/n96/b1` | 1.20492 ± 0.00138209 (W 0.00497802) | 1.17367 ± 0.00570592 (W 0.00357156) | 0.894294 ± 0.00131487 (W 0.00236902) | · | 🔴 faer-fork 1.35× slower than `lapack-mkl` |  |
+| `eigh/n96/b1 [in_place]` | 1.19026 ± 0.00313646 (W 0.00215349) | 1.15364 ± 0.000368355 (W 0.00168475) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/n32/b1` | 0.012694 ± 3.4641e-05 (W 7.20715e-05) | 0.01078 ± 0.000144222 (W 9.73139e-05) | - | 🔴 faer-fork 1.18× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n32/b1 [in_place]` | 0.009838 ± 0.000130615 (W 2.23652e-05) | 0.009017 ± 0.000100167 (W 3.12602e-05) | - | 🔴 faer-fork 1.09× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n64/b1` | 0.052909 ± 0.000340882 (W 0.00175417) | 0.046487 ± 0.00024495 (W 0.000149432) | - | 🔴 faer-fork 1.14× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n64/b1 [in_place]` | 0.059942 ± 0.000796729 (W 0.000991912) | 0.042259 ± 0.000263661 (W 0.000155338) | - | 🔴 faer-fork 1.42× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n96/b1` | 0.148717 ± 0.000413706 (W 0.00384571) | 0.135633 ± 0.000740729 (W 0.00236025) | - | 🔴 faer-fork 1.10× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n96/b1 [in_place]` | 0.156662 ± 0.00279154 (W 0.00453711) | 0.121346 ± 0.000416271 (W 0.00134208) | - | 🔴 faer-fork 1.29× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `householder_apply/n32/b1 [block(basis=32,target=32)]` | 0.008255 ± 0.000115889 (W 4.80541e-05) | 0.008095 ± 3.21455e-05 (W 6.09918e-05) | - | · | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n32/b1 [sequence(basis=32,target=32)]` | 0.008285 ± 3.50761e-05 (W 3.30484e-05) | 0.008055 ± 4.93288e-05 (W 3.78153e-05) | - | · | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n64/b1 [block(basis=64,target=64)]` | 0.040946 ± 0.000487554 (W 0.000169677) | 0.040266 ± 0.000267235 (W 0.000128659) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n64/b1 [sequence(basis=64,target=64)]` | 0.040576 ± 0.000216643 (W 7.96379e-05) | 0.040335 ± 0.0002179 (W 7.26636e-05) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n96/b1 [block(basis=96,target=96)]` | 0.121085 ± 9.67178e-05 (W 0.000178161) | 0.119873 ± 0.000166103 (W 0.00180073) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n96/b1 [sequence(basis=96,target=96)]` | 0.121537 ± 0.000750833 (W 0.00202395) | 0.120055 ± 8.12486e-05 (W 0.000396029) | - | · | - | `*` one row has no measurement here |
+| `lu/n32/b1` | 0.008857 ± 5.55908e-05 (W 6.65597e-05) | 0.007524 ± 0.000197122 (W 0.000137387) | 0.012894 ± 7.2111e-05 (W 0.000105235) | 🔴 faer-fork 1.18× slower than `faer-upstream` | 🔵 faer-fork 1.46× faster than `lapack-mkl` | dispatch-dominated (row under 20 us) |
+| `lu/n32/b1 [in_place]` | 0.007684 ± 0.000211519 (W 3.83406e-05) | 0.007955 ± 0.0001823 (W 3.71376e-05) | - | · | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n64/b1` | 0.031279 ± 5.74485e-05 (W 0.000114962) | 0.026619 ± 7.93725e-05 (W 0.000249522) | 0.044182 ± 0.00025743 (W 0.000165273) | 🔴 faer-fork 1.18× slower than `faer-upstream` | 🔵 faer-fork 1.41× faster than `lapack-mkl` |  |
+| `lu/n64/b1 [in_place]` | 0.03766 ± 0.000573412 (W 0.000267337) | 0.033963 ± 0.000593537 (W 7.75132e-05) | - | 🔴 faer-fork 1.11× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `lu/n96/b1` | 0.078477 ± 0.000191384 (W 0.000477096) | 0.068297 ± 0.000471142 (W 0.00229101) | 0.105557 ± 0.000386097 (W 0.00122024) | 🔴 faer-fork 1.15× slower than `faer-upstream` | 🔵 faer-fork 1.35× faster than `lapack-mkl` |  |
+| `lu/n96/b1 [in_place]` | 0.087232 ± 0.000218749 (W 0.00113789) | 0.083777 ± 0.00117953 (W 0.000645759) | - | · | - | `*` one row has no measurement here |
+| `qr/n32/b1` | 0.030738 ± 0.000121149 (W 0.000180306) | 0.032751 ± 0.000172434 (W 0.000229402) | - | 🔵 faer-fork 1.07× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/n64/b1` | 0.113862 ± 0.000133929 (W 0.00167472) | 0.121026 ± 0.000599215 (W 0.00157156) | - | 🔵 faer-fork 1.06× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/n96/b1` | 0.290844 ± 0.0012709 (W 0.00286867) | 0.30498 ± 0.000323889 (W 0.00364878) | - | · | - | `*` one row has no measurement here |
+| `qr_factor/n32/b1` | 0.022492 ± 1.1547e-05 (W 0.000141236) | 0.028554 ± 0.000223108 (W 0.000223339) | 0.013515 ± 0.000113271 (W 7.91157e-05) | 🔵 faer-fork 1.27× faster than `faer-upstream` | 🔴 faer-fork 1.66× slower than `lapack-mkl` |  |
+| `qr_factor/n64/b1` | 0.08044 ± 0.000888686 (W 0.000250671) | 0.132096 ± 0.000585391 (W 0.00163578) | 0.06444 ± 9.55528e-05 (W 0.00161598) | 🔵 faer-fork 1.64× faster than `faer-upstream` | 🔴 faer-fork 1.25× slower than `lapack-mkl` |  |
+| `qr_factor/n96/b1` | 0.173865 ± 0.000171892 (W 0.00281683) | 0.288046 ± 0.000201472 (W 0.00211435) | 0.195816 ± 0.000330973 (W 0.00214956) | 🔵 faer-fork 1.66× faster than `faer-upstream` | 🔵 faer-fork 1.13× faster than `lapack-mkl` |  |
+| `solve/n32/b1` | 0.009678 ± 4.08697e-05 (W 4.31995e-05) | 0.008135 ± 6.55515e-05 (W 5.60196e-05) | 0.013395 ± 0.000183058 (W 0.000109239) | 🔴 faer-fork 1.19× slower than `faer-upstream` | 🔵 faer-fork 1.38× faster than `lapack-mkl` | dispatch-dominated (row under 20 us) |
+| `solve/n32/b1 [in_place]` | 0.008966 ± 0.000148863 (W 3.50714e-05) | 0.008626 ± 0.000183576 (W 2.86356e-05) | - | · | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n64/b1` | 0.032741 ± 0.000275512 (W 0.000156621) | 0.027681 ± 0.000331029 (W 0.000175993) | 0.043351 ± 8.18535e-05 (W 0.000126387) | 🔴 faer-fork 1.18× slower than `faer-upstream` | 🔵 faer-fork 1.32× faster than `lapack-mkl` |  |
+| `solve/n64/b1 [in_place]` | 0.037971 ± 4.93288e-05 (W 0.000190778) | 0.035506 ± 4.58258e-05 (W 5.81395e-05) | - | 🔴 faer-fork 1.07× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `solve/n96/b1` | 0.08026 ± 0.000280416 (W 0.00262678) | 0.067455 ± 0.00030913 (W 0.00260688) | 0.104775 ± 0.000322351 (W 0.00027908) | 🔴 faer-fork 1.19× slower than `faer-upstream` | 🔵 faer-fork 1.31× faster than `lapack-mkl` |  |
+| `solve/n96/b1 [in_place]` | 0.08639 ± 0.000141214 (W 0.00156471) | 0.083966 ± 9.70069e-05 (W 0.00114204) | - | · | - | `*` one row has no measurement here |
+| `svd_thin/n32/b1` | 0.167192 ± 0.000948785 (W 0.00184671) | 0.185417 ± 0.000969356 (W 0.00157977) | 0.175126 ± 0.000169924 (W 0.00201393) | 🔵 faer-fork 1.11× faster than `faer-upstream` | · |  |
+| `svd_thin/n32/b1 [in_place]` | 0.166882 ± 0.000725608 (W 0.0015512) | 0.183802 ± 0.000816383 (W 0.0017772) | - | 🔵 faer-fork 1.10× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/n64/b1` | 0.858404 ± 0.00107722 (W 0.00286969) | 0.925631 ± 0.00550565 (W 0.0033866) | 0.713894 ± 0.0024724 (W 0.00233699) | 🔵 faer-fork 1.08× faster than `faer-upstream` | 🔴 faer-fork 1.20× slower than `lapack-mkl` |  |
+| `svd_thin/n64/b1 [in_place]` | 0.855139 ± 0.000415442 (W 0.00198486) | 0.918469 ± 0.00284182 (W 0.0031502) | - | 🔵 faer-fork 1.07× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/n96/b1` | 2.02455 ± 0.00744061 (W 0.00147084) | 2.24862 ± 0.00680051 (W 0.00879316) | 1.64076 ± 0.00440872 (W 0.00345618) | 🔵 faer-fork 1.11× faster than `faer-upstream` | 🔴 faer-fork 1.23× slower than `lapack-mkl` |  |
+| `svd_thin/n96/b1 [in_place]` | 2.02738 ± 0.00894555 (W 0.00132639) | 2.15931 ± 0.0067487 (W 0.00126972) | - | 🔵 faer-fork 1.07× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n32/b1` | 0.066915 ± 0.00024379 (W 0.00143109) | 0.140963 ± 0.000698719 (W 0.00137914) | 0.062456 ± 0.000570422 (W 0.000144101) | 🔵 faer-fork 2.11× faster than `faer-upstream` | 🔴 faer-fork 1.07× slower than `lapack-mkl` |  |
+| `svd_values/n32/b1 [in_place]` | 0.066824 ± 0.00020756 (W 0.000301604) | 0.141142 ± 0.000472316 (W 0.00179058) | - | 🔵 faer-fork 2.11× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n64/b1` | 0.236381 ± 0.00152606 (W 0.00162405) | 0.517156 ± 0.00171381 (W 0.00233757) | 0.257781 ± 0.00029236 (W 0.00223594) | 🔵 faer-fork 2.19× faster than `faer-upstream` | 🔵 faer-fork 1.09× faster than `lapack-mkl` |  |
+| `svd_values/n64/b1 [in_place]` | 0.240789 ± 0.000741683 (W 0.00221858) | 0.520582 ± 0.0023674 (W 0.00246616) | - | 🔵 faer-fork 2.16× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n96/b1` | 0.542372 ± 0.000995237 (W 0.00276999) | 1.18006 ± 0.00505025 (W 0.00129645) | 0.607695 ± 0.0018441 (W 0.00310556) | 🔵 faer-fork 2.18× faster than `faer-upstream` | 🔵 faer-fork 1.12× faster than `lapack-mkl` |  |
+| `svd_values/n96/b1 [in_place]` | 0.542229 ± 0.000306785 (W 0.00214591) | 1.18071 ± 0.00306805 (W 0.00232385) | - | 🔵 faer-fork 2.18× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `triangular_solve/n32/b1` | 0.000731 ± 9.50438e-06 (W 2.05718e-05) | 0.000711 ± 1.57162e-05 (W 3.14054e-05) | - | · | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `triangular_solve/n64/b1` | 0.001683 ± 2.13776e-05 (W 3.76072e-05) | 0.001583 ± 1e-05 (W 3.56371e-05) | - | 🔴 faer-fork 1.06× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `triangular_solve/n96/b1` | 0.002995 ± 3.19427e-05 (W 4.81477e-05) | 0.002875 ± 6.1101e-05 (W 5.76914e-05) | - | · | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+
+## linalg-small, f64, c order, 4T (CPU 4-7)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `cholesky/n32/b1` | 0.003557 ± 1.18462e-05 (W 5.39287e-05) | 0.003576 ± 2.58908e-05 (W 3.72196e-05) | 0.003847 ± 2.64575e-05 (W 9.14877e-05) | · | 🔵 faer-fork 1.08× faster than `lapack-mkl` | dispatch-dominated (row under 20 us) |
+| `cholesky/n32/b1 [in_place]` | 0.004258 ± 9.45163e-05 (W 2.60768e-05) | 0.004358 ± 0.00105861 (W 3.17679e-05) | - | · | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n64/b1` | 0.016901 ± 5.57704e-05 (W 4.06977e-05) | 0.015078 ± 0.00116866 (W 5.14898e-05) | 0.015509 ± 0.000225581 (W 0.000109171) | 🔴 faer-fork 1.12× slower than `faer-upstream` | 🔴 faer-fork 1.09× slower than `lapack-mkl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n64/b1 [in_place]` | 0.032581 ± 0.00103794 (W 6.54217e-05) | 0.034564 ± 0.00683705 (W 5.2984e-05) | - | · | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `cholesky/n96/b1` | 0.033773 ± 0.00020502 (W 0.000229535) | 0.03712 ± 0.000373472 (W 0.000580219) | 0.046277 ± 0.000569949 (W 0.00167836) | 🔵 faer-fork 1.10× faster than `faer-upstream` | 🔵 faer-fork 1.37× faster than `lapack-mkl` |  |
+| `cholesky/n96/b1 [in_place]` | 0.066043 ± 0.000253246 (W 0.000209641) | 0.069028 ± 0.0615293 (W 0.00685344) | - | · | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `eigh/n32/b1` | 0.11267 ± 0.000229993 (W 0.000215172) | 0.113181 ± 0.000410366 (W 0.00145144) | 0.10206 ± 0.000254539 (W 0.000477066) | · | 🔴 faer-fork 1.10× slower than `lapack-mkl` |  |
+| `eigh/n32/b1 [in_place]` | 0.11258 ± 0.000676302 (W 0.000332626) | 0.113262 ± 0.000192632 (W 0.00239237) | - | · | - | `*` one row has no measurement here |
+| `eigh/n64/b1` | 0.485005 ± 0.00245598 (W 0.00248077) | 0.484385 ± 0.00168614 (W 0.00228119) | 0.263632 ± 0.00112566 (W 0.00221596) | · | 🔴 faer-fork 1.84× slower than `lapack-mkl` |  |
+| `eigh/n64/b1 [in_place]` | 0.484986 ± 0.00197737 (W 0.00173186) | 0.482388 ± 0.000781338 (W 0.00202547) | - | · | - | `*` one row has no measurement here |
+| `eigh/n96/b1` | 1.17979 ± 0.00394037 (W 0.00342445) | 1.139 ± 0.00288917 (W 0.00434191) | 0.583719 ± 0.00138844 (W 0.00242086) | · | 🔴 faer-fork 2.02× slower than `lapack-mkl` |  |
+| `eigh/n96/b1 [in_place]` | 1.15881 ± 0.0017573 (W 0.00354275) | 1.13752 ± 0.00336582 (W 0.00205382) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/n32/b1` | 0.014006 ± 8.38272e-05 (W 6.61831e-05) | 0.01062 ± 0.00011547 (W 5.96674e-05) | - | 🔴 faer-fork 1.32× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n32/b1 [in_place]` | 0.01097 ± 7.57188e-05 (W 5.99608e-05) | 0.008937 ± 0.000108583 (W 5.76914e-05) | - | 🔴 faer-fork 1.23× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n64/b1` | 0.055413 ± 0.000423783 (W 0.000273778) | 0.046748 ± 0.000397997 (W 0.000176449) | - | 🔴 faer-fork 1.19× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n64/b1 [in_place]` | 0.054632 ± 0.00021226 (W 0.000178209) | 0.042259 ± 0.000233524 (W 0.000144395) | - | 🔴 faer-fork 1.29× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n96/b1` | 0.16694 ± 0.000786061 (W 0.00230241) | 0.13434 ± 0.000443882 (W 0.00233343) | - | 🔴 faer-fork 1.24× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n96/b1 [in_place]` | 0.15498 ± 0.0018184 (W 0.00116374) | 0.120785 ± 0.000200001 (W 0.00175545) | - | 🔴 faer-fork 1.28× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `householder_apply/n32/b1 [block(basis=32,target=32)]` | 0.006472 ± 0.000231733 (W 0.000254641) | 0.008425 ± 6.11583e-05 (W 9.2894e-05) | - | 🔵 faer-fork 1.30× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `householder_apply/n32/b1 [sequence(basis=32,target=32)]` | 0.006091 ± 8.14453e-05 (W 9.70835e-05) | 0.008396 ± 6.4291e-05 (W 5.75613e-05) | - | 🔵 faer-fork 1.38× faster than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n64/b1 [block(basis=64,target=64)]` | 0.020639 ± 6.08276e-06 (W 0.000296266) | 0.020448 ± 0.000300041 (W 0.000475994) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n64/b1 [sequence(basis=64,target=64)]` | 0.019006 ± 0.000295517 (W 0.000106622) | 0.018996 ± 0.000173754 (W 0.000225917) | - | · | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n96/b1 [block(basis=96,target=96)]` | 0.045675 ± 0.000119862 (W 0.000362208) | 0.046426 ± 0.000641759 (W 0.00117523) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n96/b1 [sequence(basis=96,target=96)]` | 0.044433 ± 0.000352855 (W 0.000379514) | 0.044293 ± 0.00017091 (W 0.000294247) | - | · | - | `*` one row has no measurement here |
+| `lu/n32/b1` | 0.008877 ± 5.7735e-07 (W 8.58673e-05) | 0.007373 ± 7.55667e-05 (W 6.55744e-05) | 0.012894 ± 0.000157735 (W 9.74074e-05) | 🔴 faer-fork 1.20× slower than `faer-upstream` | 🔵 faer-fork 1.45× faster than `lapack-mkl` | dispatch-dominated (row under 20 us) |
+| `lu/n32/b1 [in_place]` | 0.007764 ± 0.000111132 (W 3.60555e-05) | 0.007715 ± 0.000119528 (W 4.60435e-05) | - | · | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n64/b1` | 0.031258 ± 0.000255969 (W 0.000127052) | 0.030256 ± 0.00028564 (W 0.000995548) | 0.044373 ± 0.000333458 (W 0.000100316) | · | 🔵 faer-fork 1.42× faster than `lapack-mkl` |  |
+| `lu/n64/b1 [in_place]` | 0.031569 ± 0.00022926 (W 0.000184558) | 0.036548 ± 0.000387888 (W 0.000378189) | - | 🔵 faer-fork 1.16× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `lu/n96/b1` | 0.08075 ± 0.000435546 (W 0.0024891) | 0.075531 ± 0.00170524 (W 0.00186465) | 0.089076 ± 0.000198578 (W 0.00171167) | 🔴 faer-fork 1.07× slower than `faer-upstream` | 🔵 faer-fork 1.10× faster than `lapack-mkl` |  |
+| `lu/n96/b1 [in_place]` | 0.071262 ± 0.000340237 (W 0.000349342) | 0.089166 ± 0.00229539 (W 0.00223994) | - | 🔵 faer-fork 1.25× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/n32/b1` | 0.03222 ± 5.50757e-05 (W 0.000163234) | 0.046968 ± 0.000414581 (W 0.000549983) | - | 🔵 faer-fork 1.46× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/n64/b1` | 0.106669 ± 0.000566428 (W 0.000735203) | 0.188471 ± 0.00064949 (W 0.00177141) | - | 🔵 faer-fork 1.77× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/n96/b1` | 0.242914 ± 0.000779217 (W 0.00308505) | 0.405404 ± 0.000667272 (W 0.00269518) | - | 🔵 faer-fork 1.67× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr_factor/n32/b1` | 0.023304 ± 0.000100167 (W 9.43785e-05) | 0.04271 ± 0.000146857 (W 0.000612752) | 0.013445 ± 0.00010116 (W 8.7967e-05) | 🔵 faer-fork 1.83× faster than `faer-upstream` | 🔴 faer-fork 1.73× slower than `lapack-mkl` |  |
+| `qr_factor/n64/b1` | 0.073357 ± 0.00033 (W 0.000315511) | 0.209031 ± 0.00098091 (W 0.00172232) | 0.0642 ± 0.000259474 (W 0.00178091) | 🔵 faer-fork 2.85× faster than `faer-upstream` | 🔴 faer-fork 1.14× slower than `lapack-mkl` |  |
+| `qr_factor/n96/b1` | 0.143468 ± 0.000333818 (W 0.000478737) | 0.430744 ± 0.00165908 (W 0.00314373) | 0.179885 ± 0.000710147 (W 0.0017928) | 🔵 faer-fork 3.00× faster than `faer-upstream` | 🔵 faer-fork 1.25× faster than `lapack-mkl` |  |
+| `solve/n32/b1` | 0.010148 ± 6.82422e-05 (W 7.21679e-05) | 0.008146 ± 0.000108076 (W 4.51475e-05) | 0.013545 ± 9.0185e-05 (W 0.000122762) | 🔴 faer-fork 1.25× slower than `faer-upstream` | 🔵 faer-fork 1.33× faster than `lapack-mkl` | dispatch-dominated (row under 20 us) |
+| `solve/n32/b1 [in_place]` | 0.009248 ± 0.000225522 (W 5.50454e-05) | 0.008536 ± 0.00025658 (W 4.11133e-05) | - | 🔴 faer-fork 1.08× slower than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `solve/n64/b1` | 0.033463 ± 0.000129384 (W 0.000165197) | 0.030427 ± 0.000326702 (W 0.0007324) | 0.04335 ± 0.000133293 (W 0.000141528) | 🔴 faer-fork 1.10× slower than `faer-upstream` | 🔵 faer-fork 1.30× faster than `lapack-mkl` |  |
+| `solve/n64/b1 [in_place]` | 0.032921 ± 9.65419e-05 (W 0.000152661) | 0.038021 ± 0.00060654 (W 0.000566861) | - | 🔵 faer-fork 1.15× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `solve/n96/b1` | 0.084647 ± 0.000737667 (W 0.000276498) | 0.072465 ± 0.000312769 (W 0.000627066) | 0.088114 ± 0.000190815 (W 0.0016971) | 🔴 faer-fork 1.17× slower than `faer-upstream` | · |  |
+| `solve/n96/b1 [in_place]` | 0.073197 ± 0.000266246 (W 0.000282462) | 0.087654 ± 0.00249772 (W 0.00137691) | - | 🔵 faer-fork 1.20× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_thin/n32/b1` | 0.17125 ± 0.000681861 (W 0.00193404) | 0.183843 ± 0.000132035 (W 0.000542467) | 0.183412 ± 0.000532411 (W 0.00187879) | 🔵 faer-fork 1.07× faster than `faer-upstream` | 🔵 faer-fork 1.07× faster than `lapack-mkl` |  |
+| `svd_thin/n32/b1 [in_place]` | 0.168794 ± 0.000210557 (W 0.000255177) | 0.183563 ± 0.000188566 (W 0.00186878) | - | 🔵 faer-fork 1.09× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/n64/b1` | 0.857576 ± 0.0140444 (W 0.00211581) | 0.907354 ± 0.00217017 (W 0.00266352) | 0.653867 ± 0.00140168 (W 0.00277866) | 🔵 faer-fork 1.06× faster than `faer-upstream` | 🔴 faer-fork 1.31× slower than `lapack-mkl` |  |
+| `svd_thin/n64/b1 [in_place]` | 0.849952 ± 0.00359966 (W 0.00238361) | 0.906334 ± 0.00158712 (W 0.000775515) | - | 🔵 faer-fork 1.07× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/n96/b1` | 1.99183 ± 0.00652346 (W 0.00522919) | 2.10383 ± 0.00493416 (W 0.00449788) | 1.35284 ± 0.00333434 (W 0.00325197) | 🔵 faer-fork 1.06× faster than `faer-upstream` | 🔴 faer-fork 1.47× slower than `lapack-mkl` |  |
+| `svd_thin/n96/b1 [in_place]` | 1.98552 ± 0.00486083 (W 0.00378355) | 2.09844 ± 0.00186795 (W 0.0016459) | - | 🔵 faer-fork 1.06× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n32/b1` | 0.068989 ± 0.000663426 (W 0.000170676) | 0.141614 ± 0.000813882 (W 0.00152877) | 0.063148 ± 0.000259577 (W 0.002077) | 🔵 faer-fork 2.05× faster than `faer-upstream` | 🔴 faer-fork 1.09× slower than `lapack-mkl` |  |
+| `svd_values/n32/b1 [in_place]` | 0.068007 ± 0.000382362 (W 0.000130266) | 0.141022 ± 0.000474917 (W 0.00196841) | - | 🔵 faer-fork 2.07× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n64/b1` | 0.245138 ± 0.00297404 (W 0.00194086) | 0.518896 ± 0.00155822 (W 0.00235737) | 0.263723 ± 0.00093395 (W 0.00244331) | 🔵 faer-fork 2.12× faster than `faer-upstream` | 🔵 faer-fork 1.08× faster than `lapack-mkl` |  |
+| `svd_values/n64/b1 [in_place]` | 0.244635 ± 0.000894425 (W 0.00124544) | 0.517716 ± 0.00235526 (W 0.00216173) | - | 🔵 faer-fork 2.12× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n96/b1` | 0.581993 ± 0.0090249 (W 0.00248373) | 1.1923 ± 0.00145997 (W 0.00296507) | 0.587428 ± 0.00150349 (W 0.00282802) | 🔵 faer-fork 2.05× faster than `faer-upstream` | · |  |
+| `svd_values/n96/b1 [in_place]` | 0.583699 ± 0.00140465 (W 0.00246313) | 1.19447 ± 0.00546173 (W 0.00311631) | - | 🔵 faer-fork 2.05× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `triangular_solve/n32/b1` | 0.000962 ± 5.7735e-06 (W 1.64317e-05) | 0.000691 ± 1.57162e-05 (W 1.89816e-05) | - | 🔴 faer-fork 1.39× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `triangular_solve/n64/b1` | 0.002094 ± 1.18462e-05 (W 3.11448e-05) | 0.001553 ± 8.14453e-05 (W 3.43511e-05) | - | 🔴 faer-fork 1.35× slower than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `triangular_solve/n96/b1` | 0.003676 ± 5.54106e-05 (W 2.19089e-05) | 0.002785 ± 3.4641e-05 (W 4.82701e-05) | - | 🔴 faer-fork 1.32× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+
+## linalg-small, f64, c order, 8T (CPU 4-11)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `cholesky/n32/b1` | 0.003547 ± 1.51767e-05 (W 6.03183e-05) | 0.003586 ± 6.08276e-06 (W 4.11376e-05) | 0.003867 ± 5.03322e-05 (W 9.1214e-05) | · | 🔵 faer-fork 1.09× faster than `lapack-mkl` | dispatch-dominated (row under 20 us) |
+| `cholesky/n32/b1 [in_place]` | 0.004108 ± 8.0829e-05 (W 2.48998e-05) | 0.004318 ± 0.00119752 (W 2.91582e-05) | - | · | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n64/b1` | 0.015048 ± 0.00114421 (W 4.6683e-05) | 0.017002 ± 0.00105354 (W 7.72658e-05) | 0.015489 ± 0.000234884 (W 7.64022e-05) | 🔵 faer-fork 1.13× faster than `faer-upstream` | · | `!` between-start range over 5%; `p` position effect over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n64/b1 [in_place]` | 0.032359 ± 0.00109181 (W 5.23183e-05) | 0.034634 ± 0.00667154 (W 4.8736e-05) | - | · | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `cholesky/n96/b1` | 0.031518 ± 0.00203403 (W 0.000216911) | 0.03752 ± 0.00155051 (W 0.000342407) | 0.046425 ± 0.00065311 (W 0.000120459) | 🔵 faer-fork 1.19× faster than `faer-upstream` | 🔵 faer-fork 1.47× faster than `lapack-mkl` | `!` between-start range over 5% |
+| `cholesky/n96/b1 [in_place]` | 0.063847 ± 0.00013267 (W 0.000237594) | 0.057477 ± 0.00626628 (W 0.0015292) | - | · | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `eigh/n32/b1` | 0.112139 ± 0.000486396 (W 0.00183788) | 0.113729 ± 0.00016142 (W 0.00146883) | 0.10249 ± 0.000255768 (W 0.00168014) | · | 🔴 faer-fork 1.09× slower than `lapack-mkl` |  |
+| `eigh/n32/b1 [in_place]` | 0.112199 ± 0.00045962 (W 0.000115024) | 0.11268 ± 0.00087058 (W 0.000331644) | - | · | - | `*` one row has no measurement here |
+| `eigh/n64/b1` | 0.485176 ± 0.0019451 (W 0.00183352) | 0.484474 ± 0.000829915 (W 0.00181112) | 0.256859 ± 0.000518036 (W 0.00274826) | · | 🔴 faer-fork 1.89× slower than `lapack-mkl` |  |
+| `eigh/n64/b1 [in_place]` | 0.483538 ± 0.00220451 (W 0.00211749) | 0.486117 ± 0.000847862 (W 0.00185122) | - | · | - | `*` one row has no measurement here |
+| `eigh/n96/b1` | 1.18307 ± 0.00458608 (W 0.00320347) | 1.14415 ± 0.00132536 (W 0.00226825) | 0.563442 ± 0.00164269 (W 0.00281793) | · | 🔴 faer-fork 2.10× slower than `lapack-mkl` |  |
+| `eigh/n96/b1 [in_place]` | 1.16016 ± 0.00332473 (W 0.00468135) | 1.14165 ± 0.000491133 (W 0.00336783) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/n32/b1` | 0.013946 ± 0.000180093 (W 0.000107015) | 0.01074 ± 8.7178e-05 (W 5.22427e-05) | - | 🔴 faer-fork 1.30× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n32/b1 [in_place]` | 0.011161 ± 0.000150444 (W 6.17673e-05) | 0.008906 ± 0.000127189 (W 5.02812e-05) | - | 🔴 faer-fork 1.25× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n64/b1` | 0.054923 ± 0.000399699 (W 0.00032031) | 0.046826 ± 0.000272081 (W 0.000205488) | - | 🔴 faer-fork 1.17× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n64/b1 [in_place]` | 0.054802 ± 0.000349434 (W 0.000341893) | 0.041858 ± 0.000186736 (W 0.000160344) | - | 🔴 faer-fork 1.31× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n96/b1` | 0.178112 ± 0.000613502 (W 0.00264527) | 0.134877 ± 0.000195975 (W 0.0022295) | - | 🔴 faer-fork 1.32× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n96/b1 [in_place]` | 0.158641 ± 0.00128479 (W 0.00108016) | 0.119583 ± 0.000480419 (W 0.00239534) | - | 🔴 faer-fork 1.33× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `householder_apply/n32/b1 [block(basis=32,target=32)]` | 0.005991 ± 8.71799e-05 (W 0.000464177) | 0.008406 ± 6.08276e-06 (W 6.76557e-05) | - | 🔵 faer-fork 1.40× faster than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n32/b1 [sequence(basis=32,target=32)]` | 0.006312 ± 0.000272067 (W 0.000145559) | 0.008436 ± 1.47309e-05 (W 4.56979e-05) | - | 🔵 faer-fork 1.34× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `householder_apply/n64/b1 [block(basis=64,target=64)]` | 0.014838 ± 0.000229544 (W 0.000222457) | 0.019537 ± 0.000197654 (W 0.000494837) | - | 🔵 faer-fork 1.32× faster than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n64/b1 [sequence(basis=64,target=64)]` | 0.014608 ± 2.51064e-05 (W 0.000223122) | 0.019736 ± 0.000360676 (W 0.000328612) | - | 🔵 faer-fork 1.35× faster than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n96/b1 [block(basis=96,target=96)]` | 0.031748 ± 0.000390272 (W 0.000556422) | 0.056024 ± 0.00127647 (W 0.000829939) | - | 🔵 faer-fork 1.76× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `householder_apply/n96/b1 [sequence(basis=96,target=96)]` | 0.032109 ± 0.000273 (W 0.000512314) | 0.056475 ± 0.00115294 (W 0.00080596) | - | 🔵 faer-fork 1.76× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `lu/n32/b1` | 0.008987 ± 5.55908e-05 (W 7.33846e-05) | 0.007273 ± 0.000136346 (W 9.69087e-05) | 0.012884 ± 0.000115889 (W 9.92839e-05) | 🔴 faer-fork 1.24× slower than `faer-upstream` | 🔵 faer-fork 1.43× faster than `lapack-mkl` | dispatch-dominated (row under 20 us) |
+| `lu/n32/b1 [in_place]` | 0.007804 ± 0.000287484 (W 7.37516e-05) | 0.007634 ± 9.59184e-05 (W 7.09098e-05) | - | · | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `lu/n64/b1` | 0.031269 ± 8.82119e-05 (W 0.000155163) | 0.030978 ± 0.000188261 (W 0.000368109) | 0.043912 ± 0.000305123 (W 0.000266022) | · | 🔵 faer-fork 1.40× faster than `lapack-mkl` |  |
+| `lu/n64/b1 [in_place]` | 0.030356 ± 0.00012761 (W 0.000212637) | 0.036178 ± 0.000692025 (W 0.000130312) | - | 🔵 faer-fork 1.19× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `lu/n96/b1` | 0.082905 ± 0.000227254 (W 0.00232486) | 0.078214 ± 0.000601794 (W 0.00223135) | 0.086963 ± 0.000338002 (W 0.00132616) | 🔴 faer-fork 1.06× slower than `faer-upstream` | · |  |
+| `lu/n96/b1 [in_place]` | 0.06567 ± 0.00039694 (W 0.000202208) | 0.091298 ± 0.0013193 (W 0.000533091) | - | 🔵 faer-fork 1.39× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/n32/b1` | 0.032339 ± 8.96902e-05 (W 0.000218204) | 0.054089 ± 0.000874328 (W 0.000578463) | - | 🔵 faer-fork 1.67× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/n64/b1` | 0.106515 ± 0.000300094 (W 0.000358965) | 0.230781 ± 0.00166948 (W 0.00221772) | - | 🔵 faer-fork 2.17× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/n96/b1` | 0.239225 ± 0.00181416 (W 0.00310498) | 0.488491 ± 0.00229929 (W 0.00394127) | - | 🔵 faer-fork 2.04× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr_factor/n32/b1` | 0.023183 ± 0.000141234 (W 6.65071e-05) | 0.052558 ± 0.000556908 (W 0.000802681) | 0.013484 ± 0.000267378 (W 6.02495e-05) | 🔵 faer-fork 2.27× faster than `faer-upstream` | 🔴 faer-fork 1.72× slower than `lapack-mkl` |  |
+| `qr_factor/n64/b1` | 0.072726 ± 0.000276664 (W 0.0001794) | 0.248062 ± 0.00268371 (W 0.00382396) | 0.06514 ± 0.000533568 (W 0.00182916) | 🔵 faer-fork 3.41× faster than `faer-upstream` | 🔴 faer-fork 1.12× slower than `lapack-mkl` |  |
+| `qr_factor/n96/b1` | 0.1358 ± 0.000826613 (W 0.00168249) | 0.51251 ± 0.00530285 (W 0.003005) | 0.176974 ± 0.000715343 (W 0.00172933) | 🔵 faer-fork 3.77× faster than `faer-upstream` | 🔵 faer-fork 1.30× faster than `lapack-mkl` |  |
+| `solve/n32/b1` | 0.010239 ± 6.65833e-05 (W 6.9857e-05) | 0.008075 ± 0.000115529 (W 7.4507e-05) | 0.013475 ± 0.000187705 (W 7.75713e-05) | 🔴 faer-fork 1.27× slower than `faer-upstream` | 🔵 faer-fork 1.32× faster than `lapack-mkl` | dispatch-dominated (row under 20 us) |
+| `solve/n32/b1 [in_place]` | 0.009267 ± 0.000100664 (W 6.09697e-05) | 0.008386 ± 0.000257003 (W 5.27655e-05) | - | 🔴 faer-fork 1.11× slower than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `solve/n64/b1` | 0.033252 ± 0.000161649 (W 0.000184774) | 0.030727 ± 0.000479504 (W 0.00086032) | 0.043479 ± 0.000135692 (W 0.00020391) | 🔴 faer-fork 1.08× slower than `faer-upstream` | 🔵 faer-fork 1.31× faster than `lapack-mkl` |  |
+| `solve/n64/b1 [in_place]` | 0.033211 ± 0.000207357 (W 0.000175081) | 0.038472 ± 0.000490971 (W 0.000498456) | - | 🔵 faer-fork 1.16× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `solve/n96/b1` | 0.087401 ± 0.000492303 (W 0.000406616) | 0.075278 ± 9.14403e-05 (W 0.00242852) | 0.085176 ± 0.000472318 (W 0.000168601) | 🔴 faer-fork 1.16× slower than `faer-upstream` | · |  |
+| `solve/n96/b1 [in_place]` | 0.069217 ± 7.502e-05 (W 0.000296919) | 0.087894 ± 0.000895321 (W 0.000266941) | - | 🔵 faer-fork 1.27× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/n32/b1` | 0.169556 ± 0.000676434 (W 0.00229918) | 0.183782 ± 0.0014843 (W 0.00169062) | 0.185186 ± 0.000345144 (W 0.00160983) | 🔵 faer-fork 1.08× faster than `faer-upstream` | 🔵 faer-fork 1.09× faster than `lapack-mkl` |  |
+| `svd_thin/n32/b1 [in_place]` | 0.169887 ± 0.000520631 (W 0.00182331) | 0.183928 ± 0.0118036 (W 0.00197398) | - | 🔵 faer-fork 1.08× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_thin/n64/b1` | 0.86514 ± 0.000701645 (W 0.00334452) | 0.91333 ± 0.00011466 (W 0.00132981) | 0.640065 ± 0.00024387 (W 0.00227242) | 🔵 faer-fork 1.06× faster than `faer-upstream` | 🔴 faer-fork 1.35× slower than `lapack-mkl` |  |
+| `svd_thin/n64/b1 [in_place]` | 0.848077 ± 0.00216044 (W 0.0012251) | 0.911651 ± 0.00117559 (W 0.00143597) | - | 🔵 faer-fork 1.07× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/n96/b1` | 1.99859 ± 0.00653774 (W 0.00696256) | 2.11744 ± 0.00793309 (W 0.00533425) | 1.30595 ± 0.00442367 (W 0.00367349) | 🔵 faer-fork 1.06× faster than `faer-upstream` | 🔴 faer-fork 1.53× slower than `lapack-mkl` |  |
+| `svd_thin/n96/b1 [in_place]` | 1.99103 ± 0.00268048 (W 0.00512262) | 2.11681 ± 0.00561386 (W 0.00258063) | - | 🔵 faer-fork 1.06× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n32/b1` | 0.067796 ± 0.000336931 (W 0.000177995) | 0.141433 ± 0.000819594 (W 0.00161813) | 0.062496 ± 0.00102618 (W 0.00012973) | 🔵 faer-fork 2.09× faster than `faer-upstream` | 🔴 faer-fork 1.08× slower than `lapack-mkl` |  |
+| `svd_values/n32/b1 [in_place]` | 0.067596 ± 0.000433314 (W 0.000134377) | 0.140503 ± 0.000349138 (W 0.00209849) | - | 🔵 faer-fork 2.08× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n64/b1` | 0.244785 ± 0.00194551 (W 0.00217152) | 0.51439 ± 0.00235803 (W 0.00237736) | 0.262228 ± 0.0011064 (W 0.00215988) | 🔵 faer-fork 2.10× faster than `faer-upstream` | 🔵 faer-fork 1.07× faster than `lapack-mkl` |  |
+| `svd_values/n64/b1 [in_place]` | 0.244235 ± 0.000845621 (W 0.000924382) | 0.515079 ± 0.00276957 (W 0.00275093) | - | 🔵 faer-fork 2.11× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n96/b1` | 0.603546 ± 0.00220554 (W 0.00214952) | 1.19084 ± 0.00523873 (W 0.00172466) | 0.577991 ± 0.00503909 (W 0.00294505) | 🔵 faer-fork 1.97× faster than `faer-upstream` | · |  |
+| `svd_values/n96/b1 [in_place]` | 0.60032 ± 0.00175951 (W 0.00167586) | 1.18109 ± 0.00643912 (W 0.00141521) | - | 🔵 faer-fork 1.97× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `triangular_solve/n32/b1` | 0.000951 ± 1.48436e-05 (W 2.77489e-05) | 0.000691 ± 1.51767e-05 (W 2.33731e-05) | - | 🔴 faer-fork 1.38× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `triangular_solve/n64/b1` | 0.002123 ± 1.12694e-05 (W 2.86356e-05) | 0.001583 ± 3.51188e-05 (W 4.14729e-05) | - | 🔴 faer-fork 1.34× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `triangular_solve/n96/b1` | 0.003707 ± 5.50757e-05 (W 3.56371e-05) | 0.002845 ± 9.03715e-05 (W 5.30594e-05) | - | 🔴 faer-fork 1.30× slower than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+
+## linalg-small, f64, f order, 1T (CPU 4)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `cholesky/n32/b1` | 0.003407 ± 0.000333169 (W 6.32558e-05) | 0.003376 ± 0.000153731 (W 6.25556e-05) | 0.003025 ± 1.58219e-05 (W 7.06555e-05) | · | 🔴 faer-fork 1.13× slower than `lapack-mkl` | `!` between-start range over 5%; `p` position effect over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n32/b1 [in_place]` | 0.002825 ± 0.000304025 (W 2.86391e-05) | 0.002785 ± 0.000341361 (W 2.50998e-05) | - | · | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n64/b1` | 0.016571 ± 0.00114586 (W 5.21843e-05) | 0.014738 ± 0.00121491 (W 6.64251e-05) | 0.012774 ± 0.000162287 (W 0.000110473) | 🔴 faer-fork 1.12× slower than `faer-upstream` | 🔴 faer-fork 1.30× slower than `lapack-mkl` | `!` between-start range over 5%; `p` position effect over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n64/b1 [in_place]` | 0.012994 ± 0.00181548 (W 4.11133e-05) | 0.013044 ± 0.00124875 (W 4.16437e-05) | - | · | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n96/b1` | 0.033162 ± 0.00173264 (W 0.000350821) | 0.03244 ± 0.00027004 (W 0.000353586) | 0.035005 ± 0.000191547 (W 0.000101327) | · | 🔵 faer-fork 1.06× faster than `lapack-mkl` | `!` between-start range over 5% |
+| `cholesky/n96/b1 [in_place]` | 0.029334 ± 0.00155597 (W 0.00122101) | 0.029014 ± 9.50807e-05 (W 5.06685e-05) | - | · | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `eigh/n32/b1` | 0.110306 ± 7.14866e-05 (W 0.000256373) | 0.11269 ± 0.000410041 (W 0.000259166) | 0.095278 ± 7.2111e-05 (W 0.00153267) | · | 🔴 faer-fork 1.16× slower than `lapack-mkl` |  |
+| `eigh/n32/b1 [in_place]` | 0.109826 ± 0.000352629 (W 0.00159495) | 0.112881 ± 0.000194243 (W 0.00142077) | - | · | - | `*` one row has no measurement here |
+| `eigh/n64/b1` | 0.490748 ± 0.000950314 (W 0.00203867) | 0.483953 ± 0.00104912 (W 0.00213168) | 0.382405 ± 0.00203068 (W 0.00197989) | · | 🔴 faer-fork 1.28× slower than `lapack-mkl` |  |
+| `eigh/n64/b1 [in_place]` | 0.490616 ± 0.00297125 (W 0.00419481) | 0.482417 ± 0.00150666 (W 0.00262534) | - | · | - | `*` one row has no measurement here |
+| `eigh/n96/b1` | 1.20184 ± 0.00581362 (W 0.00572427) | 1.16853 ± 0.00366233 (W 0.0030714) | 0.874034 ± 0.00288481 (W 0.00192289) | · | 🔴 faer-fork 1.38× slower than `lapack-mkl` |  |
+| `eigh/n96/b1 [in_place]` | 1.18782 ± 0.001138 (W 0.00348459) | 1.15191 ± 0.00180683 (W 0.0024332) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/n32/b1` | 0.011031 ± 8.02081e-05 (W 7.24099e-05) | 0.010499 ± 0.000105642 (W 8.38648e-05) | - | · | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n32/b1 [in_place]` | 0.009718 ± 7.97517e-05 (W 5.50454e-05) | 0.008997 ± 8.07279e-05 (W 4.60999e-05) | - | 🔴 faer-fork 1.08× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n64/b1` | 0.047078 ± 0.000200849 (W 0.000523118) | 0.045415 ± 0.000326702 (W 0.000134429) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/n64/b1 [in_place]` | 0.045454 ± 0.000140215 (W 9.11384e-05) | 0.042278 ± 0.00032259 (W 0.00173225) | - | 🔴 faer-fork 1.08× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n96/b1` | 0.136173 ± 0.000496873 (W 0.00304284) | 0.133659 ± 4.0501e-05 (W 0.00247374) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/n96/b1 [in_place]` | 0.133258 ± 9.63397e-05 (W 0.0016634) | 0.120915 ± 0.000244166 (W 0.00135627) | - | 🔴 faer-fork 1.10× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `householder_apply/n32/b1 [block(basis=32,target=32)]` | 0.008465 ± 0.00010591 (W 0.00010849) | 0.008365 ± 4.09512e-05 (W 0.000100664) | - | · | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n32/b1 [sequence(basis=32,target=32)]` | 0.008496 ± 7.50555e-05 (W 7.75061e-05) | 0.008356 ± 6.05558e-05 (W 7.32277e-05) | - | · | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n64/b1 [block(basis=64,target=64)]` | 0.040536 ± 0.000522925 (W 0.000106442) | 0.039984 ± 8.56174e-05 (W 0.00140977) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n64/b1 [sequence(basis=64,target=64)]` | 0.040486 ± 8e-05 (W 0.000138677) | 0.039985 ± 8.1304e-05 (W 0.000108436) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n96/b1 [block(basis=96,target=96)]` | 0.124401 ± 0.000715817 (W 0.00179251) | 0.122419 ± 0.00035021 (W 0.000990112) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n96/b1 [sequence(basis=96,target=96)]` | 0.124613 ± 0.000739572 (W 0.000440648) | 0.12315 ± 0.000925838 (W 0.000818407) | - | · | - | `*` one row has no measurement here |
+| `lu/n32/b1` | 0.007334 ± 0.000125301 (W 7.04982e-05) | 0.007243 ± 4.93288e-05 (W 5.36964e-05) | 0.010309 ± 2.51661e-05 (W 0.000104083) | · | 🔵 faer-fork 1.41× faster than `lapack-mkl` | dispatch-dominated (row under 20 us) |
+| `lu/n32/b1 [in_place]` | 0.005941 ± 0.000134859 (W 6.67083e-05) | 0.005871 ± 7.05006e-05 (W 3.36155e-05) | - | · | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n64/b1` | 0.025989 ± 0.00018965 (W 0.000152807) | 0.025798 ± 0.000121244 (W 0.000123585) | 0.034123 ± 0.000162973 (W 0.000146517) | · | 🔵 faer-fork 1.31× faster than `lapack-mkl` |  |
+| `lu/n64/b1 [in_place]` | 0.022773 ± 0.000153948 (W 0.000140145) | 0.022351 ± 0.000148987 (W 8.21584e-05) | - | · | - | `*` one row has no measurement here |
+| `lu/n96/b1` | 0.066384 ± 0.000502653 (W 0.00234323) | 0.066094 ± 0.000125819 (W 0.00230224) | 0.075961 ± 0.000281255 (W 0.000315432) | · | 🔵 faer-fork 1.14× faster than `lapack-mkl` |  |
+| `lu/n96/b1 [in_place]` | 0.05338 ± 0.000564899 (W 0.000334917) | 0.052778 ± 6.55744e-05 (W 0.000283612) | - | · | - | `*` one row has no measurement here |
+| `qr/n32/b1` | 0.029334 ± 0.000351663 (W 0.000182199) | 0.032601 ± 0.000236855 (W 0.00011836) | - | 🔵 faer-fork 1.11× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/n64/b1` | 0.107029 ± 0.000572015 (W 0.00188936) | 0.117991 ± 0.00164035 (W 0.000350725) | - | 🔵 faer-fork 1.10× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/n96/b1` | 0.275094 ± 0.000853328 (W 0.00308896) | 0.29967 ± 0.00108666 (W 0.00354172) | - | 🔵 faer-fork 1.09× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr_factor/n32/b1` | 0.015389 ± 6.69104e-05 (W 0.000150234) | 0.018805 ± 0.00032532 (W 0.00179814) | 0.01086 ± 4.16333e-05 (W 9.07871e-05) | 🔵 faer-fork 1.22× faster than `faer-upstream` | 🔴 faer-fork 1.42× slower than `lapack-mkl` | dispatch-dominated (row under 20 us) |
+| `qr_factor/n64/b1` | 0.065412 ± 9.21973e-05 (W 0.000185149) | 0.076262 ± 0.000425537 (W 0.000244439) | 0.054262 ± 0.000382467 (W 0.00039034) | 🔵 faer-fork 1.17× faster than `faer-upstream` | 🔴 faer-fork 1.21× slower than `lapack-mkl` |  |
+| `qr_factor/n96/b1` | 0.141103 ± 0.000828622 (W 0.00222556) | 0.165919 ± 0.000928847 (W 0.00223509) | 0.166531 ± 0.000175215 (W 0.00191846) | 🔵 faer-fork 1.18× faster than `faer-upstream` | 🔵 faer-fork 1.18× faster than `lapack-mkl` |  |
+| `solve/n32/b1` | 0.008105 ± 5.68624e-05 (W 6.96003e-05) | 0.007805 ± 0.000150111 (W 5.52268e-05) | 0.010349 ± 5.7735e-06 (W 7.30068e-05) | · | 🔵 faer-fork 1.28× faster than `lapack-mkl` | dispatch-dominated (row under 20 us) |
+| `solve/n32/b1 [in_place]` | 0.006472 ± 2.88675e-05 (W 7.8867e-05) | 0.006322 ± 0.000117898 (W 4.15933e-05) | - | · | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n64/b1` | 0.027371 ± 1e-05 (W 0.000209044) | 0.02691 ± 0.000187751 (W 0.000171596) | 0.033754 ± 0.000190386 (W 0.000230862) | · | 🔵 faer-fork 1.23× faster than `lapack-mkl` |  |
+| `solve/n64/b1 [in_place]` | 0.023253 ± 0.00018815 (W 0.000105024) | 0.023304 ± 0.000138529 (W 0.000172706) | - | · | - | `*` one row has no measurement here |
+| `solve/n96/b1` | 0.067697 ± 0.000341 (W 0.00255135) | 0.065572 ± 0.000269718 (W 0.00256878) | 0.07506 ± 0.000123423 (W 0.0015713) | · | 🔵 faer-fork 1.11× faster than `lapack-mkl` |  |
+| `solve/n96/b1 [in_place]` | 0.05356 ± 0.000435431 (W 7.58894e-05) | 0.05328 ± 0.000125381 (W 0.000157109) | - | · | - | `*` one row has no measurement here |
+| `svd_thin/n32/b1` | 0.169496 ± 0.000343052 (W 0.00196399) | 0.186258 ± 0.0011462 (W 0.00178811) | 0.165039 ± 0.00061601 (W 0.00171066) | 🔵 faer-fork 1.10× faster than `faer-upstream` | · |  |
+| `svd_thin/n32/b1 [in_place]` | 0.168315 ± 0.000396814 (W 0.00190019) | 0.184222 ± 0.00155335 (W 0.00140007) | - | 🔵 faer-fork 1.09× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/n64/b1` | 0.901383 ± 0.0024509 (W 0.00108031) | 0.962231 ± 0.00144017 (W 0.00117961) | 0.680631 ± 0.00284971 (W 0.00159785) | 🔵 faer-fork 1.07× faster than `faer-upstream` | 🔴 faer-fork 1.32× slower than `lapack-mkl` |  |
+| `svd_thin/n64/b1 [in_place]` | 0.898968 ± 0.000638221 (W 0.00226724) | 0.959611 ± 0.00333951 (W 0.00096213) | - | 🔵 faer-fork 1.07× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/n96/b1` | 2.02487 ± 0.00969963 (W 0.00529238) | 2.24046 ± 0.0114548 (W 0.00251836) | 1.57146 ± 0.00022953 (W 0.00394501) | 🔵 faer-fork 1.11× faster than `faer-upstream` | 🔴 faer-fork 1.29× slower than `lapack-mkl` |  |
+| `svd_thin/n96/b1 [in_place]` | 2.01926 ± 0.00534029 (W 0.00252241) | 2.15154 ± 0.00663922 (W 0.00558506) | - | 🔵 faer-fork 1.07× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n32/b1` | 0.066194 ± 0.000314681 (W 0.000201741) | 0.142927 ± 0.000506953 (W 0.00172344) | 0.057357 ± 0.000731609 (W 0.000173363) | 🔵 faer-fork 2.16× faster than `faer-upstream` | 🔴 faer-fork 1.15× slower than `lapack-mkl` |  |
+| `svd_values/n32/b1 [in_place]` | 0.065953 ± 0.000224346 (W 0.00162065) | 0.142617 ± 0.00076287 (W 0.00156996) | - | 🔵 faer-fork 2.16× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n64/b1` | 0.239998 ± 0.000972763 (W 0.00147248) | 0.536702 ± 0.0010117 (W 0.00207105) | 0.247031 ± 0.000731551 (W 0.00177656) | 🔵 faer-fork 2.24× faster than `faer-upstream` | · |  |
+| `svd_values/n64/b1 [in_place]` | 0.244427 ± 0.0009238 (W 0.00175396) | 0.539668 ± 0.00217202 (W 0.00292839) | - | 🔵 faer-fork 2.21× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n96/b1` | 0.550669 ± 0.00328977 (W 0.00199255) | 1.18713 ± 0.00219263 (W 0.00375363) | 0.587336 ± 0.000722973 (W 0.00247003) | 🔵 faer-fork 2.16× faster than `faer-upstream` | 🔵 faer-fork 1.07× faster than `lapack-mkl` |  |
+| `svd_values/n96/b1 [in_place]` | 0.553064 ± 0.00431199 (W 0.00195174) | 1.18636 ± 0.00069124 (W 0.00242058) | - | 🔵 faer-fork 2.15× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `triangular_solve/n32/b1` | 0.000822 ± 0 (W 3.23759e-05) | 0.000771 ± 1.09697e-05 (W 2.05985e-05) | - | 🔴 faer-fork 1.07× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `triangular_solve/n64/b1` | 0.002084 ± 1.1547e-05 (W 1.87083e-05) | 0.002004 ± 9.50438e-06 (W 2.81478e-05) | - | · | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `triangular_solve/n96/b1` | 0.003326 ± 2.88675e-05 (W 4.36268e-05) | 0.003166 ± 3.51188e-05 (W 4.39454e-05) | - | · | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+
+## linalg-small, f64, f order, 4T (CPU 4-7)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `cholesky/n32/b1` | 0.003437 ± 3.00056e-05 (W 5.10715e-05) | 0.003476 ± 0.000248462 (W 5.80973e-05) | 0.003036 ± 2.13776e-05 (W 6.96003e-05) | · | 🔴 faer-fork 1.13× slower than `lapack-mkl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n32/b1 [in_place]` | 0.002826 ± 3.59212e-05 (W 2.88097e-05) | 0.002785 ± 0.000171273 (W 2.48998e-05) | - | · | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n64/b1` | 0.01644 ± 0.00129151 (W 7.71123e-05) | 0.015168 ± 0.0010658 (W 5.79155e-05) | 0.012864 ± 0.000148436 (W 6.42199e-05) | · | 🔴 faer-fork 1.28× slower than `lapack-mkl` | `!` between-start range over 5%; `p` position effect over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n64/b1 [in_place]` | 0.015018 ± 0.00116708 (W 6.12887e-05) | 0.013164 ± 0.00113708 (W 3.37239e-05) | - | 🔴 faer-fork 1.14× slower than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n96/b1` | 0.033041 ± 0.00012897 (W 0.000191813) | 0.036028 ± 0.00110924 (W 0.000628149) | 0.035516 ± 0.000132742 (W 9.51488e-05) | 🔵 faer-fork 1.09× faster than `faer-upstream` | 🔵 faer-fork 1.07× faster than `lapack-mkl` | `!` between-start range over 5% |
+| `cholesky/n96/b1 [in_place]` | 0.029796 ± 6.55515e-05 (W 0.000121582) | 0.030727 ± 0.00125784 (W 0.000329927) | - | · | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `eigh/n32/b1` | 0.113201 ± 0.000459805 (W 0.000173232) | 0.11296 ± 0.000243395 (W 0.00187963) | 0.100107 ± 0.0001505 (W 0.00202794) | · | 🔴 faer-fork 1.13× slower than `lapack-mkl` |  |
+| `eigh/n32/b1 [in_place]` | 0.111769 ± 0.000293053 (W 0.000110275) | 0.112971 ± 0.000405833 (W 0.000185543) | - | · | - | `*` one row has no measurement here |
+| `eigh/n64/b1` | 0.484806 ± 0.00109182 (W 0.00259325) | 0.483801 ± 0.000898132 (W 0.00200279) | 0.257651 ± 0.000677527 (W 0.00148634) | · | 🔴 faer-fork 1.88× slower than `lapack-mkl` |  |
+| `eigh/n64/b1 [in_place]` | 0.483312 ± 0.000732975 (W 0.00224988) | 0.48321 ± 0.00186548 (W 0.00244504) | - | · | - | `*` one row has no measurement here |
+| `eigh/n96/b1` | 1.17713 ± 0.00418403 (W 0.00582276) | 1.13923 ± 0.00241522 (W 0.0028402) | 0.5695 ± 0.00125918 (W 0.00273437) | · | 🔴 faer-fork 2.07× slower than `lapack-mkl` |  |
+| `eigh/n96/b1 [in_place]` | 1.15781 ± 0.00343352 (W 0.00262849) | 1.13564 ± 0.0017677 (W 0.00140864) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/n32/b1` | 0.012363 ± 0.000162235 (W 7.9172e-05) | 0.010389 ± 1.70392e-05 (W 5.15005e-05) | - | 🔴 faer-fork 1.19× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n32/b1 [in_place]` | 0.01105 ± 7.20902e-05 (W 6.53934e-05) | 0.008957 ± 2.85832e-05 (W 6.3065e-05) | - | 🔴 faer-fork 1.23× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n64/b1` | 0.049753 ± 0.000208495 (W 0.00025335) | 0.045645 ± 0.000101129 (W 0.000115501) | - | 🔴 faer-fork 1.09× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n64/b1 [in_place]` | 0.047599 ± 0.000306051 (W 0.000180923) | 0.042138 ± 0.00017091 (W 0.000155545) | - | 🔴 faer-fork 1.13× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n96/b1` | 0.153757 ± 0.00126011 (W 0.00302994) | 0.132597 ± 0.000205899 (W 0.00271433) | - | 🔴 faer-fork 1.16× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n96/b1 [in_place]` | 0.142836 ± 0.0013525 (W 0.000609586) | 0.120655 ± 0.000369514 (W 0.000268813) | - | 🔴 faer-fork 1.18× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `householder_apply/n32/b1 [block(basis=32,target=32)]` | 0.006221 ± 7.59408e-05 (W 4.05487e-05) | 0.008416 ± 4.64794e-05 (W 7.19458e-05) | - | 🔵 faer-fork 1.35× faster than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n32/b1 [sequence(basis=32,target=32)]` | 0.006633 ± 0.000161463 (W 0.000172917) | 0.008506 ± 3.21455e-05 (W 5.63028e-05) | - | 🔵 faer-fork 1.28× faster than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n64/b1 [block(basis=64,target=64)]` | 0.019467 ± 0.000119876 (W 0.000238155) | 0.019276 ± 0.000194569 (W 0.000206395) | - | · | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n64/b1 [sequence(basis=64,target=64)]` | 0.019576 ± 0.000175519 (W 0.00021783) | 0.019216 ± 0.000125607 (W 0.000287671) | - | · | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n96/b1 [block(basis=96,target=96)]` | 0.043792 ± 0.000305123 (W 0.000399737) | 0.044363 ± 0.000344515 (W 0.00032468) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n96/b1 [sequence(basis=96,target=96)]` | 0.044202 ± 0.000609487 (W 0.000364773) | 0.043842 ± 6.08276e-05 (W 0.000158752) | - | · | - | `*` one row has no measurement here |
+| `lu/n32/b1` | 0.007534 ± 2.08167e-05 (W 7.56968e-05) | 0.007304 ± 6.08276e-05 (W 0.000145476) | 0.010349 ± 5.19615e-05 (W 8.59081e-05) | · | 🔵 faer-fork 1.37× faster than `lapack-mkl` | dispatch-dominated (row under 20 us) |
+| `lu/n32/b1 [in_place]` | 0.005992 ± 6.05833e-05 (W 6.07964e-05) | 0.005841 ± 4.04145e-05 (W 4.23934e-05) | - | · | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n64/b1` | 0.026379 ± 0.000150444 (W 0.000197188) | 0.029515 ± 0.00029621 (W 0.000276678) | 0.033893 ± 0.00010065 (W 0.000103379) | 🔵 faer-fork 1.12× faster than `faer-upstream` | 🔵 faer-fork 1.28× faster than `lapack-mkl` |  |
+| `lu/n64/b1 [in_place]` | 0.023334 ± 9.56574e-05 (W 0.0002326) | 0.025347 ± 0.000193521 (W 0.000668155) | - | 🔵 faer-fork 1.09× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `lu/n96/b1` | 0.069379 ± 0.00016137 (W 0.00238153) | 0.074088 ± 0.000575866 (W 0.0025502) | 0.076693 ± 0.00024077 (W 0.0015727) | 🔵 faer-fork 1.07× faster than `faer-upstream` | 🔵 faer-fork 1.11× faster than `lapack-mkl` |  |
+| `lu/n96/b1 [in_place]` | 0.052718 ± 0.000311256 (W 0.000402456) | 0.059151 ± 0.00025743 (W 0.000528057) | - | 🔵 faer-fork 1.12× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/n32/b1` | 0.030647 ± 3.21455e-05 (W 0.00011045) | 0.046397 ± 0.000330807 (W 0.00156187) | - | 🔵 faer-fork 1.51× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/n64/b1` | 0.099616 ± 5.7735e-06 (W 0.000245212) | 0.186168 ± 0.000711506 (W 0.0024693) | - | 🔵 faer-fork 1.87× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/n96/b1` | 0.226102 ± 0.001887 (W 0.00281428) | 0.398363 ± 0.000952429 (W 0.00220008) | - | 🔵 faer-fork 1.76× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr_factor/n32/b1` | 0.016441 ± 3.55012e-05 (W 0.000115496) | 0.03234 ± 0.000684241 (W 0.000787468) | 0.01103 ± 0.0001005 (W 0.00127619) | 🔵 faer-fork 1.97× faster than `faer-upstream` | 🔴 faer-fork 1.49× slower than `lapack-mkl` | dispatch-dominated (row under 20 us) |
+| `qr_factor/n64/b1` | 0.065943 ± 0.000203126 (W 0.00022797) | 0.147616 ± 0.00122235 (W 0.00205868) | 0.054412 ± 0.000536005 (W 0.000138924) | 🔵 faer-fork 2.24× faster than `faer-upstream` | 🔴 faer-fork 1.21× slower than `lapack-mkl` |  |
+| `qr_factor/n96/b1` | 0.127708 ± 0.000544691 (W 0.000264303) | 0.292876 ± 0.00247785 (W 0.00329073) | 0.168976 ± 0.00162856 (W 0.00210986) | 🔵 faer-fork 2.29× faster than `faer-upstream` | 🔵 faer-fork 1.32× faster than `lapack-mkl` |  |
+| `solve/n32/b1` | 0.008616 ± 0.00010504 (W 6.20484e-05) | 0.007795 ± 4.62637e-05 (W 5.81378e-05) | 0.01034 ± 4.00042e-05 (W 0.000101505) | 🔴 faer-fork 1.11× slower than `faer-upstream` | 🔵 faer-fork 1.20× faster than `lapack-mkl` | dispatch-dominated (row under 20 us) |
+| `solve/n32/b1 [in_place]` | 0.006933 ± 8.56174e-05 (W 5.14801e-05) | 0.006452 ± 0.000110274 (W 6.32456e-05) | - | 🔴 faer-fork 1.07× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n64/b1` | 0.027852 ± 8.32666e-05 (W 0.000106551) | 0.028984 ± 0.000800526 (W 0.000812424) | 0.033893 ± 2.52389e-05 (W 0.000108766) | · | 🔵 faer-fork 1.22× faster than `lapack-mkl` | `!` between-start range over 5% |
+| `solve/n64/b1 [in_place]` | 0.024335 ± 0.000130615 (W 0.000113004) | 0.025698 ± 4.50925e-05 (W 0.000505678) | - | 🔵 faer-fork 1.06× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `solve/n96/b1` | 0.072986 ± 0.00013302 (W 0.00238787) | 0.070171 ± 0.00052823 (W 0.00129388) | 0.07512 ± 0.000260743 (W 0.000125854) | · | · |  |
+| `solve/n96/b1 [in_place]` | 0.056175 ± 0.000184481 (W 0.000169497) | 0.057056 ± 0.000255147 (W 0.00042209) | - | · | - | `*` one row has no measurement here |
+| `svd_thin/n32/b1` | 0.172332 ± 0.00170486 (W 0.000536567) | 0.185535 ± 0.000303058 (W 0.001814) | 0.172913 ± 0.000785068 (W 0.00174981) | 🔵 faer-fork 1.08× faster than `faer-upstream` | · |  |
+| `svd_thin/n32/b1 [in_place]` | 0.17106 ± 0.000638679 (W 0.000339221) | 0.186138 ± 0.00117872 (W 0.00214051) | - | 🔵 faer-fork 1.09× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/n64/b1` | 0.917796 ± 0.0100173 (W 0.00262669) | 0.95254 ± 0.00446668 (W 0.00208398) | 0.624247 ± 0.000860034 (W 0.00263835) | · | 🔴 faer-fork 1.47× slower than `lapack-mkl` |  |
+| `svd_thin/n64/b1 [in_place]` | 0.896435 ± 0.00270567 (W 0.00384518) | 0.951228 ± 0.000765013 (W 0.000847845) | - | 🔵 faer-fork 1.06× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/n96/b1` | 1.98938 ± 0.00507671 (W 0.00388944) | 2.09913 ± 0.000664268 (W 0.00212672) | 1.32134 ± 0.00289824 (W 0.00554387) | 🔵 faer-fork 1.06× faster than `faer-upstream` | 🔴 faer-fork 1.51× slower than `lapack-mkl` |  |
+| `svd_thin/n96/b1 [in_place]` | 1.98772 ± 0.00684829 (W 0.00357173) | 2.09712 ± 0.00117802 (W 0.00168705) | - | 🔵 faer-fork 1.06× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n32/b1` | 0.067737 ± 0.000324639 (W 0.000187249) | 0.142867 ± 0.000644146 (W 0.000321502) | 0.057867 ± 0.000151681 (W 0.000161314) | 🔵 faer-fork 2.11× faster than `faer-upstream` | 🔴 faer-fork 1.17× slower than `lapack-mkl` |  |
+| `svd_values/n32/b1 [in_place]` | 0.066704 ± 0.000116148 (W 0.000170032) | 0.142325 ± 0.000606644 (W 0.000414045) | - | 🔵 faer-fork 2.13× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n64/b1` | 0.247581 ± 0.000704999 (W 0.00162333) | 0.535409 ± 0.00275013 (W 0.00232899) | 0.252091 ± 0.0011302 (W 0.00216247) | 🔵 faer-fork 2.16× faster than `faer-upstream` | · |  |
+| `svd_values/n64/b1 [in_place]` | 0.24665 ± 0.00038841 (W 0.00164146) | 0.537955 ± 0.00291964 (W 0.00279048) | - | 🔵 faer-fork 2.18× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n96/b1` | 0.591724 ± 0.0032527 (W 0.0025363) | 1.19528 ± 0.000919144 (W 0.00185888) | 0.585365 ± 0.00319548 (W 0.00274667) | 🔵 faer-fork 2.02× faster than `faer-upstream` | · |  |
+| `svd_values/n96/b1 [in_place]` | 0.590534 ± 0.00178451 (W 0.00199179) | 1.1998 ± 0.00244668 (W 0.00249158) | - | 🔵 faer-fork 2.03× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `triangular_solve/n32/b1` | 0.001012 ± 1e-05 (W 3.70135e-05) | 0.000792 ± 0 (W 3.2362e-05) | - | 🔴 faer-fork 1.28× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `triangular_solve/n64/b1` | 0.002354 ± 2.12211e-05 (W 3.15167e-05) | 0.001853 ± 1.0504e-05 (W 2.47043e-05) | - | 🔴 faer-fork 1.27× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `triangular_solve/n96/b1` | 0.003967 ± 2.70247e-05 (W 3.55711e-05) | 0.003246 ± 2.51661e-05 (W 2.19089e-05) | - | 🔴 faer-fork 1.22× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+
+## linalg-small, f64, f order, 8T (CPU 4-11)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `cholesky/n32/b1` | 0.003166 ± 0.000159478 (W 4.63681e-05) | 0.003196 ± 0.000142116 (W 3.67451e-05) | 0.003015 ± 5.03322e-05 (W 5.71769e-05) | · | · | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n32/b1 [in_place]` | 0.002795 ± 2.13776e-05 (W 2.98714e-05) | 0.002505 ± 0.000173811 (W 3.50714e-05) | - | 🔴 faer-fork 1.12× slower than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n64/b1` | 0.014537 ± 5.18684e-05 (W 6.68581e-05) | 0.014978 ± 0.00113848 (W 5.1672e-05) | 0.012714 ± 0.000164418 (W 8.91701e-05) | · | 🔴 faer-fork 1.14× slower than `lapack-mkl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n64/b1 [in_place]` | 0.013645 ± 0.00104159 (W 3.80789e-05) | 0.013195 ± 0.00106754 (W 5.63028e-05) | - | · | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n96/b1` | 0.03266 ± 0.00153109 (W 0.000124355) | 0.039232 ± 0.000160502 (W 0.000266675) | 0.034996 ± 5.77437e-05 (W 0.00010318) | 🔵 faer-fork 1.20× faster than `faer-upstream` | 🔵 faer-fork 1.07× faster than `lapack-mkl` | `!` between-start range over 5% |
+| `cholesky/n96/b1 [in_place]` | 0.02723 ± 0.00138406 (W 7.0852e-05) | 0.034434 ± 0.000333169 (W 0.000220722) | - | 🔵 faer-fork 1.26× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `eigh/n32/b1` | 0.112119 ± 0.000677606 (W 0.00191991) | 0.113833 ± 0.000668998 (W 0.00233475) | 0.101068 ± 0.000279185 (W 0.00020069) | · | 🔴 faer-fork 1.11× slower than `lapack-mkl` |  |
+| `eigh/n32/b1 [in_place]` | 0.111688 ± 0.000279214 (W 0.000411527) | 0.112289 ± 0.000521638 (W 0.00026266) | - | · | - | `*` one row has no measurement here |
+| `eigh/n64/b1` | 0.487395 ± 0.00303547 (W 0.00237622) | 0.487249 ± 0.00222372 (W 0.00172032) | 0.251021 ± 0.0112527 (W 0.00208695) | · | 🔴 faer-fork 1.94× slower than `lapack-mkl` | `!` between-start range over 5% |
+| `eigh/n64/b1 [in_place]` | 0.483298 ± 0.00203481 (W 0.00245076) | 0.482651 ± 0.00282461 (W 0.00202751) | - | · | - | `*` one row has no measurement here |
+| `eigh/n96/b1` | 1.1814 ± 0.00703654 (W 0.00358944) | 1.14298 ± 0.000836692 (W 0.00108322) | 0.5533 ± 0.00169768 (W 0.00257097) | · | 🔴 faer-fork 2.14× slower than `lapack-mkl` |  |
+| `eigh/n96/b1 [in_place]` | 1.1578 ± 0.00546629 (W 0.00311608) | 1.14133 ± 0.00112814 (W 0.00323953) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/n32/b1` | 0.012353 ± 0.00016563 (W 7.89886e-05) | 0.010529 ± 0.000133167 (W 8.71223e-05) | - | 🔴 faer-fork 1.17× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n32/b1 [in_place]` | 0.01099 ± 0.000169766 (W 5.16265e-05) | 0.009157 ± 0.0001395 (W 6.78233e-05) | - | 🔴 faer-fork 1.20× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n64/b1` | 0.049723 ± 0.000241758 (W 0.000182839) | 0.045574 ± 0.000164652 (W 0.00017806) | - | 🔴 faer-fork 1.09× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n64/b1 [in_place]` | 0.047539 ± 0.000395892 (W 0.000167336) | 0.042419 ± 0.000333169 (W 0.00170004) | - | 🔴 faer-fork 1.12× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n96/b1` | 0.163905 ± 0.000756361 (W 0.00210529) | 0.133705 ± 0.000816318 (W 0.00138401) | - | 🔴 faer-fork 1.23× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n96/b1 [in_place]` | 0.152018 ± 0.000988885 (W 0.00113326) | 0.119353 ± 0.000158664 (W 0.000200037) | - | 🔴 faer-fork 1.27× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `householder_apply/n32/b1 [block(basis=32,target=32)]` | 0.005801 ± 0.000168968 (W 8.89455e-05) | 0.008456 ± 2.08167e-05 (W 6.53628e-05) | - | 🔵 faer-fork 1.46× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `householder_apply/n32/b1 [sequence(basis=32,target=32)]` | 0.005841 ± 4.50925e-05 (W 7.88746e-05) | 0.008466 ± 6.02771e-05 (W 5.92132e-05) | - | 🔵 faer-fork 1.45× faster than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n64/b1 [block(basis=64,target=64)]` | 0.014627 ± 6.1403e-05 (W 0.000166523) | 0.020228 ± 0.000217095 (W 0.000353314) | - | 🔵 faer-fork 1.38× faster than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n64/b1 [sequence(basis=64,target=64)]` | 0.014898 ± 7.76745e-05 (W 0.000182705) | 0.020297 ± 0.000136847 (W 0.00034273) | - | 🔵 faer-fork 1.36× faster than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n96/b1 [block(basis=96,target=96)]` | 0.030076 ± 0.00015009 (W 0.000320573) | 0.055592 ± 0.00023886 (W 0.000785488) | - | 🔵 faer-fork 1.85× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `householder_apply/n96/b1 [sequence(basis=96,target=96)]` | 0.030117 ± 0.000243313 (W 0.000273458) | 0.055443 ± 0.00042004 (W 0.000758816) | - | 🔵 faer-fork 1.84× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `lu/n32/b1` | 0.007614 ± 4.51331e-05 (W 9.23434e-05) | 0.007293 ± 5.50757e-05 (W 0.000119776) | 0.01037 ± 0.00011537 (W 9.06052e-05) | · | 🔵 faer-fork 1.36× faster than `lapack-mkl` | dispatch-dominated (row under 20 us) |
+| `lu/n32/b1 [in_place]` | 0.006061 ± 6.84617e-05 (W 7.9254e-05) | 0.005801 ± 5.17397e-05 (W 6.67855e-05) | - | · | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n64/b1` | 0.026378 ± 8.53834e-05 (W 0.000158821) | 0.030087 ± 0.000149078 (W 0.000316078) | 0.034094 ± 6.21932e-05 (W 0.000152287) | 🔵 faer-fork 1.14× faster than `faer-upstream` | 🔵 faer-fork 1.29× faster than `lapack-mkl` |  |
+| `lu/n64/b1 [in_place]` | 0.023072 ± 0.00018231 (W 0.000182809) | 0.025968 ± 0.000339559 (W 0.000657435) | - | 🔵 faer-fork 1.13× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `lu/n96/b1` | 0.07065 ± 0.000738961 (W 0.0022594) | 0.075541 ± 0.000745102 (W 0.00270482) | 0.076293 ± 0.000429258 (W 0.00252567) | 🔵 faer-fork 1.07× faster than `faer-upstream` | 🔵 faer-fork 1.08× faster than `lapack-mkl` |  |
+| `lu/n96/b1 [in_place]` | 0.052756 ± 0.000509865 (W 0.000400841) | 0.060633 ± 0.00830952 (W 0.000731034) | - | 🔵 faer-fork 1.15× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr/n32/b1` | 0.030536 ± 4.45758e-05 (W 0.000103905) | 0.053739 ± 0.000213192 (W 0.000832807) | - | 🔵 faer-fork 1.76× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/n64/b1` | 0.100468 ± 0.000961762 (W 0.000602229) | 0.229998 ± 0.000887511 (W 0.00274724) | - | 🔵 faer-fork 2.29× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/n96/b1` | 0.224678 ± 0.000812726 (W 0.00215362) | 0.482631 ± 0.00118543 (W 0.00349576) | - | 🔵 faer-fork 2.15× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr_factor/n32/b1` | 0.016221 ± 9.0813e-05 (W 0.000145774) | 0.040915 ± 0.000111122 (W 0.0010063) | 0.01087 ± 6.02771e-05 (W 9.09082e-05) | 🔵 faer-fork 2.52× faster than `faer-upstream` | 🔴 faer-fork 1.49× slower than `lapack-mkl` | dispatch-dominated (row under 20 us) |
+| `qr_factor/n64/b1` | 0.065583 ± 0.000473393 (W 0.000397393) | 0.196065 ± 0.00209623 (W 0.00296229) | 0.054242 ± 0.000300934 (W 0.000190995) | 🔵 faer-fork 2.99× faster than `faer-upstream` | 🔴 faer-fork 1.21× slower than `lapack-mkl` |  |
+| `qr_factor/n96/b1` | 0.126906 ± 0.000178802 (W 0.000561226) | 0.378845 ± 0.00523062 (W 0.00311796) | 0.166365 ± 0.000406041 (W 0.00177704) | 🔵 faer-fork 2.99× faster than `faer-upstream` | 🔵 faer-fork 1.31× faster than `lapack-mkl` |  |
+| `solve/n32/b1` | 0.008536 ± 0.000101195 (W 8.34865e-05) | 0.007764 ± 0.000122202 (W 3.97492e-05) | 0.010409 ± 6.80686e-05 (W 7.91833e-05) | 🔴 faer-fork 1.10× slower than `faer-upstream` | 🔵 faer-fork 1.22× faster than `lapack-mkl` | dispatch-dominated (row under 20 us) |
+| `solve/n32/b1 [in_place]` | 0.007084 ± 7.83603e-05 (W 8.76482e-05) | 0.006382 ± 6.1101e-05 (W 4.18473e-05) | - | 🔴 faer-fork 1.11× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n64/b1` | 0.027501 ± 0.00029 (W 0.000117415) | 0.029595 ± 0.00031225 (W 0.000831551) | 0.033621 ± 0.000220826 (W 0.000176089) | 🔵 faer-fork 1.08× faster than `faer-upstream` | 🔵 faer-fork 1.22× faster than `lapack-mkl` |  |
+| `solve/n64/b1 [in_place]` | 0.024325 ± 0.000138684 (W 9.79091e-05) | 0.026199 ± 1.95021e-05 (W 0.000175321) | - | 🔵 faer-fork 1.08× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `solve/n96/b1` | 0.075621 ± 0.0003271 (W 0.0024656) | 0.073294 ± 0.000682684 (W 0.00261416) | 0.075158 ± 0.000226125 (W 0.0018846) | · | · |  |
+| `solve/n96/b1 [in_place]` | 0.056545 ± 0.00018231 (W 0.000266157) | 0.058429 ± 0.000171701 (W 0.00147322) | - | · | - | `*` one row has no measurement here |
+| `svd_thin/n32/b1` | 0.171295 ± 0.000479438 (W 0.000334141) | 0.186603 ± 0.000445249 (W 0.0014004) | 0.176153 ± 0.00106706 (W 0.00152845) | 🔵 faer-fork 1.09× faster than `faer-upstream` | · |  |
+| `svd_thin/n32/b1 [in_place]` | 0.174701 ± 0.00290521 (W 0.00143526) | 0.184529 ± 0.000882037 (W 0.00214598) | - | 🔵 faer-fork 1.06× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/n64/b1` | 0.914847 ± 0.00618328 (W 0.004132) | 0.956116 ± 0.00293629 (W 0.00164731) | 0.618352 ± 0.00207879 (W 0.00357069) | · | 🔴 faer-fork 1.48× slower than `lapack-mkl` |  |
+| `svd_thin/n64/b1 [in_place]` | 0.89144 ± 0.00384336 (W 0.00152678) | 0.954571 ± 0.00321694 (W 0.00126771) | - | 🔵 faer-fork 1.07× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/n96/b1` | 2.0017 ± 0.00459862 (W 0.00141645) | 2.11481 ± 0.000510331 (W 0.00168924) | 1.27034 ± 0.00281474 (W 0.00312279) | 🔵 faer-fork 1.06× faster than `faer-upstream` | 🔴 faer-fork 1.58× slower than `lapack-mkl` |  |
+| `svd_thin/n96/b1 [in_place]` | 1.99299 ± 0.00940836 (W 0.00417421) | 2.11057 ± 0.00553739 (W 0.00153688) | - | 🔵 faer-fork 1.06× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n32/b1` | 0.067496 ± 0.000431577 (W 0.000194544) | 0.142562 ± 0.000167311 (W 0.000311915) | 0.057307 ± 0.000388383 (W 0.000172979) | 🔵 faer-fork 2.11× faster than `faer-upstream` | 🔴 faer-fork 1.18× slower than `lapack-mkl` |  |
+| `svd_values/n32/b1 [in_place]` | 0.067123 ± 0.000215131 (W 0.000157564) | 0.142526 ± 0.000876596 (W 0.00165047) | - | 🔵 faer-fork 2.12× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n64/b1` | 0.247564 ± 0.00131392 (W 0.00211224) | 0.537092 ± 0.00225918 (W 0.00270919) | 0.250449 ± 0.00160561 (W 0.00153614) | 🔵 faer-fork 2.17× faster than `faer-upstream` | · |  |
+| `svd_values/n64/b1 [in_place]` | 0.247374 ± 0.000664396 (W 0.00421869) | 0.536822 ± 0.00191719 (W 0.00213573) | - | 🔵 faer-fork 2.17× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n96/b1` | 0.607916 ± 0.00151059 (W 0.00309319) | 1.19545 ± 0.00360633 (W 0.00541939) | 0.579644 ± 0.00220014 (W 0.00228576) | 🔵 faer-fork 1.97× faster than `faer-upstream` | · |  |
+| `svd_values/n96/b1 [in_place]` | 0.609068 ± 0.000492057 (W 0.00194304) | 1.18905 ± 0.00374557 (W 0.00615716) | - | 🔵 faer-fork 1.95× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `triangular_solve/n32/b1` | 0.000982 ± 6.08276e-06 (W 1.35351e-05) | 0.000761 ± 5.7735e-07 (W 2.28976e-05) | - | 🔴 faer-fork 1.29× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `triangular_solve/n64/b1` | 0.002355 ± 3.61985e-05 (W 5.35724e-05) | 0.001814 ± 5.7735e-07 (W 3.24238e-05) | - | 🔴 faer-fork 1.30× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `triangular_solve/n96/b1` | 0.003987 ± 7.63763e-05 (W 5.37047e-05) | 0.003186 ± 1.73205e-05 (W 3.27109e-05) | - | 🔴 faer-fork 1.25× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+
+## linalg-small, c64, c order, 1T (CPU 4)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `cholesky/n32/b1` | 0.004959 ± 3.05505e-05 (W 5.72713e-05) | 0.00519 ± 4.17971e-05 (W 4.68327e-05) | 0.007985 ± 3.78594e-05 (W 8.58487e-05) | · | 🔵 faer-fork 1.61× faster than `lapack-mkl` | dispatch-dominated (row under 20 us) |
+| `cholesky/n32/b1 [in_place]` | 0.012654 ± 0 (W 2.13378e-05) | 0.012643 ± 0.00010843 (W 2.19089e-05) | - | · | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `cholesky/n64/b1` | 0.029846 ± 0.000230111 (W 0.000122235) | 0.030236 ± 3.27159e-05 (W 9.16962e-05) | 0.04797 ± 0.000375661 (W 0.000235991) | · | 🔵 faer-fork 1.61× faster than `lapack-mkl` |  |
+| `cholesky/n64/b1 [in_place]` | 0.100297 ± 0.000195594 (W 0.00020348) | 0.100208 ± 0.00014405 (W 0.000338739) | - | · | - | `*` one row has no measurement here |
+| `cholesky/n96/b1` | 0.084578 ± 0.000333342 (W 0.000230586) | 0.083837 ± 0.000292394 (W 0.000179389) | 0.132738 ± 0.000681941 (W 0.00200385) | · | 🔵 faer-fork 1.57× faster than `lapack-mkl` |  |
+| `cholesky/n96/b1 [in_place]` | 0.194653 ± 0.000153657 (W 0.00159605) | 0.440042 ± 0.00108859 (W 0.00198099) | - | 🔵 faer-fork 2.26× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `eigh/n32/b1` | 0.139801 ± 9.84886e-05 (W 0.000965461) | 0.142195 ± 0.00074305 (W 0.00157409) | 0.14475 ± 0.000877886 (W 0.00194372) | · | · |  |
+| `eigh/n32/b1 [in_place]` | 0.139731 ± 0.00074648 (W 0.000306696) | 0.140512 ± 0.000351002 (W 0.00181199) | - | · | - | `*` one row has no measurement here |
+| `eigh/n64/b1` | 0.675808 ± 0.00198961 (W 0.00407953) | 0.663395 ± 0.00155933 (W 0.00361891) | 0.789216 ± 0.0018598 (W 0.00186172) | · | 🔵 faer-fork 1.17× faster than `lapack-mkl` |  |
+| `eigh/n64/b1 [in_place]` | 0.652149 ± 0.000920306 (W 0.00175779) | 0.643378 ± 0.00334872 (W 0.00265524) | - | · | - | `*` one row has no measurement here |
+| `eigh/n96/b1` | 1.64163 ± 0.00341252 (W 0.00359688) | 1.60239 ± 0.00309716 (W 0.00354781) | 1.99408 ± 0.00119604 (W 0.00243792) | · | 🔵 faer-fork 1.21× faster than `lapack-mkl` |  |
+| `eigh/n96/b1 [in_place]` | 1.64262 ± 0.00243731 (W 0.00419239) | 1.60323 ± 0.00298696 (W 0.00311891) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/n32/b1` | 0.019115 ± 0.000221654 (W 0.000103669) | 0.015839 ± 4.39356e-05 (W 7.19535e-05) | - | 🔴 faer-fork 1.21× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n32/b1 [in_place]` | 0.015449 ± 0.000132035 (W 8.60233e-05) | 0.014077 ± 0.00017361 (W 6.46398e-05) | - | 🔴 faer-fork 1.10× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n64/b1` | 0.100217 ± 0.000439391 (W 0.00157692) | 0.092172 ± 0.00012897 (W 0.00035998) | - | 🔴 faer-fork 1.09× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n64/b1 [in_place]` | 0.106489 ± 0.000689068 (W 0.001896) | 0.084707 ± 0.000324768 (W 0.00030767) | - | 🔴 faer-fork 1.26× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n96/b1` | 0.330597 ± 0.0028005 (W 0.00372417) | 0.312444 ± 0.00133705 (W 0.00209464) | - | 🔴 faer-fork 1.06× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n96/b1 [in_place]` | 0.296692 ± 0.00171863 (W 0.00240768) | 0.266798 ± 0.000969243 (W 0.0020655) | - | 🔴 faer-fork 1.11× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `householder_apply/n32/b1 [block(basis=32,target=32)]` | 0.028253 ± 8.55005e-05 (W 7.08329e-05) | 0.027872 ± 2.51661e-05 (W 6.46529e-05) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n32/b1 [sequence(basis=32,target=32)]` | 0.028243 ± 8.09135e-05 (W 8.10198e-05) | 0.027832 ± 9.16515e-05 (W 0.000117317) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n64/b1 [block(basis=64,target=64)]` | 0.159057 ± 0.000175072 (W 0.00147039) | 0.158065 ± 0.000230111 (W 0.00204595) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n64/b1 [sequence(basis=64,target=64)]` | 0.159168 ± 0.000542754 (W 0.00144522) | 0.157945 ± 7.95634e-05 (W 0.0019844) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n96/b1 [block(basis=96,target=96)]` | 0.469347 ± 0.00258857 (W 0.000403141) | 0.469688 ± 0.000863007 (W 0.00276258) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n96/b1 [sequence(basis=96,target=96)]` | 0.470289 ± 0.00176957 (W 0.000406487) | 0.468392 ± 0.00117894 (W 0.00196474) | - | · | - | `*` one row has no measurement here |
+| `lu/n32/b1` | 0.014297 ± 0.000115846 (W 6.04003e-05) | 0.011722 ± 4.04145e-05 (W 5.45894e-05) | 0.018445 ± 6.48614e-05 (W 8.62514e-05) | 🔴 faer-fork 1.22× slower than `faer-upstream` | 🔵 faer-fork 1.29× faster than `lapack-mkl` | dispatch-dominated (row under 20 us) |
+| `lu/n32/b1 [in_place]` | 0.01112 ± 6.08276e-06 (W 4.51907e-05) | 0.010851 ± 6.95725e-05 (W 4.91559e-05) | - | · | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n64/b1` | 0.061535 ± 0.000260577 (W 0.000246401) | 0.054462 ± 6.0803e-05 (W 0.000316007) | 0.090038 ± 0.000495895 (W 0.000403958) | 🔴 faer-fork 1.13× slower than `faer-upstream` | 🔵 faer-fork 1.46× faster than `lapack-mkl` |  |
+| `lu/n64/b1 [in_place]` | 0.067085 ± 7.81025e-05 (W 9.07039e-05) | 0.055122 ± 0.000327949 (W 0.00135379) | - | 🔴 faer-fork 1.22× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `lu/n96/b1` | 0.207598 ± 0.00108867 (W 0.00287066) | 0.192639 ± 0.000590043 (W 0.00214082) | 0.233898 ± 0.000180724 (W 0.00208594) | 🔴 faer-fork 1.08× slower than `faer-upstream` | 🔵 faer-fork 1.13× faster than `lapack-mkl` |  |
+| `lu/n96/b1 [in_place]` | 0.172871 ± 0.000657523 (W 0.00149335) | 0.146804 ± 0.000205427 (W 0.00161455) | - | 🔴 faer-fork 1.18× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/n32/b1` | 0.068658 ± 0.00049439 (W 0.00167066) | 0.068287 ± 0.000223943 (W 0.000304013) | - | · | - | `*` one row has no measurement here |
+| `qr/n64/b1` | 0.331921 ± 0.000600189 (W 0.00303016) | 0.335825 ± 0.000907365 (W 0.0030314) | - | · | - | `*` one row has no measurement here |
+| `qr/n96/b1` | 0.842523 ± 0.00287405 (W 0.00376796) | 0.857353 ± 0.00216225 (W 0.0018274) | - | · | - | `*` one row has no measurement here |
+| `qr_factor/n32/b1` | 0.039695 ± 0.000153461 (W 0.000274264) | 0.045615 ± 0.000207632 (W 0.000129689) | 0.027983 ± 0.000441272 (W 9.05058e-05) | 🔵 faer-fork 1.15× faster than `faer-upstream` | 🔴 faer-fork 1.42× slower than `lapack-mkl` |  |
+| `qr_factor/n64/b1` | 0.168505 ± 0.00136604 (W 0.00200921) | 0.236472 ± 7.32211e-05 (W 0.0020198) | 0.16086 ± 0.000890942 (W 0.000801257) | 🔵 faer-fork 1.40× faster than `faer-upstream` | · |  |
+| `qr_factor/n96/b1` | 0.407338 ± 0.000176458 (W 0.0022342) | 0.538888 ± 0.00219335 (W 0.00292683) | 0.49815 ± 0.000948144 (W 0.00265047) | 🔵 faer-fork 1.32× faster than `faer-upstream` | 🔵 faer-fork 1.22× faster than `lapack-mkl` |  |
+| `solve/n32/b1` | 0.015459 ± 0.000140119 (W 8.21048e-05) | 0.013345 ± 3.09892e-05 (W 7.62516e-05) | 0.018795 ± 0.000105357 (W 0.000104303) | 🔴 faer-fork 1.16× slower than `faer-upstream` | 🔵 faer-fork 1.22× faster than `lapack-mkl` | dispatch-dominated (row under 20 us) |
+| `solve/n32/b1 [in_place]` | 0.012122 ± 0.000119528 (W 6.45306e-05) | 0.011862 ± 0.000205516 (W 7.81748e-05) | - | · | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n64/b1` | 0.063068 ± 0.000371862 (W 0.00012982) | 0.056164 ± 0.000107193 (W 9.98764e-05) | 0.088916 ± 0.00037526 (W 0.00183433) | 🔴 faer-fork 1.12× slower than `faer-upstream` | 🔵 faer-fork 1.41× faster than `lapack-mkl` |  |
+| `solve/n64/b1 [in_place]` | 0.06917 ± 0.000306596 (W 0.000135224) | 0.057046 ± 0.000255969 (W 0.00168946) | - | 🔴 faer-fork 1.21× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `solve/n96/b1` | 0.209169 ± 0.00245033 (W 0.00278131) | 0.193231 ± 0.00252362 (W 0.00310732) | 0.228285 ± 0.000371166 (W 0.00181643) | 🔴 faer-fork 1.08× slower than `faer-upstream` | 🔵 faer-fork 1.09× faster than `lapack-mkl` |  |
+| `solve/n96/b1 [in_place]` | 0.175378 ± 0.000276623 (W 0.000867918) | 0.149239 ± 0.000397318 (W 0.00163217) | - | 🔴 faer-fork 1.18× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/n32/b1` | 0.21968 ± 0.000989947 (W 0.00190943) | 0.235789 ± 0.00158493 (W 0.00182896) | 0.248814 ± 0.00103034 (W 0.00211755) | 🔵 faer-fork 1.07× faster than `faer-upstream` | 🔵 faer-fork 1.13× faster than `lapack-mkl` |  |
+| `svd_thin/n32/b1 [in_place]` | 0.218887 ± 0.000224146 (W 0.00163617) | 0.233105 ± 0.000684602 (W 0.00145845) | - | 🔵 faer-fork 1.06× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/n64/b1` | 1.16097 ± 0.001207 (W 0.00107816) | 1.21739 ± 0.00157216 (W 0.00233306) | 1.37878 ± 0.00175923 (W 0.00434646) | · | 🔵 faer-fork 1.19× faster than `lapack-mkl` |  |
+| `svd_thin/n64/b1 [in_place]` | 1.16744 ± 0.000237337 (W 0.00377853) | 1.216 ± 0.00413615 (W 0.00370729) | - | · | - | `*` one row has no measurement here |
+| `svd_thin/n96/b1` | 3.00445 ± 0.00925511 (W 0.00837368) | 3.11506 ± 0.00708671 (W 0.00776367) | 3.54034 ± 0.00783077 (W 0.0086775) | · | 🔵 faer-fork 1.18× faster than `lapack-mkl` |  |
+| `svd_thin/n96/b1 [in_place]` | 3.0026 ± 0.0020324 (W 0.00388434) | 3.10527 ± 0.00539367 (W 0.00590694) | - | · | - | `*` one row has no measurement here |
+| `svd_values/n32/b1` | 0.083055 ± 0.000110151 (W 0.000205108) | 0.160941 ± 0.000813104 (W 0.00168492) | 0.098934 ± 0.000541634 (W 0.00160404) | 🔵 faer-fork 1.94× faster than `faer-upstream` | 🔵 faer-fork 1.19× faster than `lapack-mkl` |  |
+| `svd_values/n32/b1 [in_place]` | 0.084087 ± 0.000308293 (W 0.0013869) | 0.16155 ± 0.000210811 (W 0.00160111) | - | 🔵 faer-fork 1.92× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n64/b1` | 0.345044 ± 0.000951643 (W 0.00175097) | 0.646957 ± 0.000715243 (W 0.00248341) | 0.474876 ± 0.00120865 (W 0.00215519) | 🔵 faer-fork 1.87× faster than `faer-upstream` | 🔵 faer-fork 1.38× faster than `lapack-mkl` |  |
+| `svd_values/n64/b1 [in_place]` | 0.346366 ± 0.00479668 (W 0.00225703) | 0.648993 ± 0.00018654 (W 0.00342138) | - | 🔵 faer-fork 1.87× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n96/b1` | 0.861891 ± 0.000836724 (W 0.00205189) | 1.5121 ± 0.0047222 (W 0.00458031) | 1.33197 ± 0.00513467 (W 0.0042012) | 🔵 faer-fork 1.75× faster than `faer-upstream` | 🔵 faer-fork 1.55× faster than `lapack-mkl` |  |
+| `svd_values/n96/b1 [in_place]` | 0.859935 ± 0.00124375 (W 0.00281286) | 1.50316 ± 0.0019218 (W 0.00321223) | - | 🔵 faer-fork 1.75× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `triangular_solve/n32/b1` | 0.001172 ± 1e-05 (W 2.29412e-05) | 0.001092 ± 5.7735e-06 (W 2.16795e-05) | - | 🔴 faer-fork 1.07× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `triangular_solve/n64/b1` | 0.002895 ± 1.21244e-05 (W 3.11978e-05) | 0.002755 ± 2.6839e-05 (W 3.36155e-05) | - | · | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `triangular_solve/n96/b1` | 0.00527 ± 7.2111e-05 (W 5.35724e-05) | 0.00499 ± 5.16753e-05 (W 4.5676e-05) | - | 🔴 faer-fork 1.06× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+
+## linalg-small, c64, c order, 4T (CPU 4-7)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `cholesky/n32/b1` | 0.00519 ± 3.78594e-05 (W 6.08786e-05) | 0.00525 ± 4.50925e-05 (W 4.86826e-05) | 0.008055 ± 3.05505e-05 (W 7.12404e-05) | · | 🔵 faer-fork 1.55× faster than `lapack-mkl` | dispatch-dominated (row under 20 us) |
+| `cholesky/n32/b1 [in_place]` | 0.012763 ± 2.51064e-05 (W 2.70592e-05) | 0.012713 ± 2.52389e-05 (W 1.3274e-05) | - | · | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `cholesky/n64/b1` | 0.029946 ± 0.000182045 (W 0.000196998) | 0.030507 ± 0.000316598 (W 0.000155667) | 0.049071 ± 0.000398954 (W 0.000355064) | · | 🔵 faer-fork 1.64× faster than `lapack-mkl` |  |
+| `cholesky/n64/b1 [in_place]` | 0.101098 ± 0.000243284 (W 0.000323155) | 0.101159 ± 0.000459749 (W 0.00169782) | - | · | - | `*` one row has no measurement here |
+| `cholesky/n96/b1` | 0.078988 ± 0.000299149 (W 0.00061048) | 0.088676 ± 0.000589187 (W 0.0016958) | 0.130574 ± 0.000653504 (W 0.000209686) | 🔵 faer-fork 1.12× faster than `faer-upstream` | 🔵 faer-fork 1.65× faster than `lapack-mkl` |  |
+| `cholesky/n96/b1 [in_place]` | 0.188821 ± 0.000445468 (W 0.00184645) | 0.17134 ± 0.0161869 (W 0.106623) | - | 🔴 faer-fork 1.10× slower than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `eigh/n32/b1` | 0.137276 ± 0.00072222 (W 0.000718923) | 0.141224 ± 0.000719355 (W 0.00155611) | 0.148727 ± 0.000140998 (W 0.00150667) | · | 🔵 faer-fork 1.08× faster than `lapack-mkl` |  |
+| `eigh/n32/b1 [in_place]` | 0.136645 ± 0.000577221 (W 0.0015339) | 0.141915 ± 6.51178e-05 (W 0.000402086) | - | · | - | `*` one row has no measurement here |
+| `eigh/n64/b1` | 0.591802 ± 0.00207999 (W 0.00565248) | 0.616841 ± 0.00123134 (W 0.00259503) | 0.532695 ± 0.000414677 (W 0.00221585) | · | 🔴 faer-fork 1.11× slower than `lapack-mkl` |  |
+| `eigh/n64/b1 [in_place]` | 0.565933 ± 0.00271906 (W 0.00336478) | 0.616688 ± 0.000862788 (W 0.00180112) | - | 🔵 faer-fork 1.09× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `eigh/n96/b1` | 1.3543 ± 0.00429312 (W 0.00268833) | 1.44419 ± 0.00235367 (W 0.003161) | 1.11632 ± 0.00266808 (W 0.00437032) | 🔵 faer-fork 1.07× faster than `faer-upstream` | 🔴 faer-fork 1.21× slower than `lapack-mkl` |  |
+| `eigh/n96/b1 [in_place]` | 1.35156 ± 0.00479611 (W 0.00396036) | 1.43557 ± 0.00278248 (W 0.00350323) | - | 🔵 faer-fork 1.06× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n32/b1` | 0.020458 ± 2.51661e-05 (W 0.000102811) | 0.015709 ± 0.000168622 (W 5.59035e-05) | - | 🔴 faer-fork 1.30× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n32/b1 [in_place]` | 0.016691 ± 0.000221081 (W 7.42577e-05) | 0.013896 ± 2.88675e-05 (W 7.1624e-05) | - | 🔴 faer-fork 1.20× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n64/b1` | 0.105417 ± 0.00020656 (W 0.000311902) | 0.09139 ± 0.000420181 (W 0.00032434) | - | 🔴 faer-fork 1.15× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n64/b1 [in_place]` | 0.103102 ± 0.00166806 (W 0.000893416) | 0.085158 ± 0.000266335 (W 0.000239289) | - | 🔴 faer-fork 1.21× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n96/b1` | 0.304017 ± 0.00389001 (W 0.0021085) | 0.266086 ± 0.000799977 (W 0.00290359) | - | 🔴 faer-fork 1.14× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n96/b1 [in_place]` | 0.248243 ± 0.00236664 (W 0.00202714) | 0.266876 ± 0.000769062 (W 0.0012815) | - | 🔵 faer-fork 1.08× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `householder_apply/n32/b1 [block(basis=32,target=32)]` | 0.014717 ± 6.55515e-05 (W 0.000155724) | 0.028333 ± 0.000110604 (W 7.09225e-05) | - | 🔵 faer-fork 1.93× faster than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n32/b1 [sequence(basis=32,target=32)]` | 0.014287 ± 3.05505e-05 (W 0.000109724) | 0.028233 ± 6.65833e-05 (W 0.000126112) | - | 🔵 faer-fork 1.98× faster than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n64/b1 [block(basis=64,target=64)]` | 0.061054 ± 7.57188e-05 (W 0.00115724) | 0.060513 ± 0.000174443 (W 0.000845392) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n64/b1 [sequence(basis=64,target=64)]` | 0.060644 ± 0.000556059 (W 0.00189204) | 0.059992 ± 0.00019713 (W 0.000510942) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n96/b1 [block(basis=96,target=96)]` | 0.151192 ± 0.000111879 (W 0.000393367) | 0.150902 ± 0.000907177 (W 0.000726975) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n96/b1 [sequence(basis=96,target=96)]` | 0.152004 ± 7.97517e-05 (W 0.00149376) | 0.15002 ± 0.000538666 (W 0.00188564) | - | · | - | `*` one row has no measurement here |
+| `lu/n32/b1` | 0.014317 ± 2.00083e-05 (W 8.13652e-05) | 0.011721 ± 5.50485e-05 (W 8.74831e-05) | 0.018605 ± 3.27159e-05 (W 7.52615e-05) | 🔴 faer-fork 1.22× slower than `faer-upstream` | 🔵 faer-fork 1.30× faster than `lapack-mkl` | dispatch-dominated (row under 20 us) |
+| `lu/n32/b1 [in_place]` | 0.011101 ± 8.17945e-05 (W 7.55334e-05) | 0.0109 ± 6.1101e-05 (W 4.57417e-05) | - | · | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n64/b1` | 0.063288 ± 0.000102211 (W 0.00154408) | 0.054221 ± 0.000149901 (W 0.000104098) | 0.087964 ± 0.000225522 (W 0.000430058) | 🔴 faer-fork 1.17× slower than `faer-upstream` | 🔵 faer-fork 1.39× faster than `lapack-mkl` |  |
+| `lu/n64/b1 [in_place]` | 0.063539 ± 0.00141359 (W 0.000938749) | 0.054802 ± 0.000621869 (W 0.000337369) | - | 🔴 faer-fork 1.16× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `lu/n96/b1` | 0.210432 ± 0.000731763 (W 0.00288382) | 0.145341 ± 0.00102217 (W 0.00183635) | 0.21913 ± 0.00106102 (W 0.0028522) | 🔴 faer-fork 1.45× slower than `faer-upstream` | · |  |
+| `lu/n96/b1 [in_place]` | 0.153587 ± 0.00371715 (W 0.00252567) | 0.144019 ± 0.000802504 (W 0.00131903) | - | 🔴 faer-fork 1.07× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/n32/b1` | 0.063639 ± 0.000316596 (W 0.000451441) | 0.082013 ± 0.000156781 (W 0.000526175) | - | 🔵 faer-fork 1.29× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/n64/b1` | 0.21952 ± 0.00453052 (W 0.00344884) | 0.344634 ± 0.000897223 (W 0.00280639) | - | 🔵 faer-fork 1.57× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/n96/b1` | 0.510403 ± 0.00248577 (W 0.00288334) | 0.708182 ± 0.00220671 (W 0.00355335) | - | 🔵 faer-fork 1.39× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr_factor/n32/b1` | 0.040566 ± 0.000292592 (W 0.000613542) | 0.059531 ± 0.000312714 (W 0.00185302) | 0.028233 ± 0.000246408 (W 0.000107723) | 🔵 faer-fork 1.47× faster than `faer-upstream` | 🔴 faer-fork 1.44× slower than `lapack-mkl` |  |
+| `qr_factor/n64/b1` | 0.124852 ± 0.000591744 (W 0.000501712) | 0.291374 ± 0.00166303 (W 0.00189475) | 0.158496 ± 0.00121222 (W 0.00170201) | 🔵 faer-fork 2.33× faster than `faer-upstream` | 🔵 faer-fork 1.27× faster than `lapack-mkl` |  |
+| `qr_factor/n96/b1` | 0.266828 ± 0.00104051 (W 0.00233868) | 0.576984 ± 0.000912779 (W 0.0020036) | 0.482257 ± 0.00058501 (W 0.00226677) | 🔵 faer-fork 2.16× faster than `faer-upstream` | 🔵 faer-fork 1.81× faster than `lapack-mkl` |  |
+| `solve/n32/b1` | 0.01597 ± 6.07481e-05 (W 0.000117959) | 0.013004 ± 4.89932e-05 (W 6.46862e-05) | 0.018985 ± 3.19427e-05 (W 7.69435e-05) | 🔴 faer-fork 1.23× slower than `faer-upstream` | 🔵 faer-fork 1.19× faster than `lapack-mkl` | dispatch-dominated (row under 20 us) |
+| `solve/n32/b1 [in_place]` | 0.012824 ± 7e-05 (W 9.80214e-05) | 0.011832 ± 0.000100167 (W 5.36656e-05) | - | 🔴 faer-fork 1.08× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n64/b1` | 0.066194 ± 0.00172039 (W 0.000189063) | 0.056324 ± 0.000119528 (W 0.000301273) | 0.085259 ± 0.000181248 (W 0.0012392) | 🔴 faer-fork 1.18× slower than `faer-upstream` | 🔵 faer-fork 1.29× faster than `lapack-mkl` |  |
+| `solve/n64/b1 [in_place]` | 0.066314 ± 0.000219621 (W 0.00128096) | 0.057177 ± 0.000101489 (W 0.000232402) | - | 🔴 faer-fork 1.16× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `solve/n96/b1` | 0.212107 ± 0.00243173 (W 0.0027547) | 0.146935 ± 0.00208867 (W 0.00192141) | 0.211184 ± 0.000331937 (W 0.00203581) | 🔴 faer-fork 1.44× slower than `faer-upstream` | · |  |
+| `solve/n96/b1 [in_place]` | 0.153726 ± 0.000702131 (W 0.00101804) | 0.1452 ± 0.000542081 (W 0.000952018) | - | 🔴 faer-fork 1.06× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/n32/b1` | 0.216133 ± 0.00113577 (W 0.0017968) | 0.234296 ± 0.000666627 (W 0.00262501) | 0.256828 ± 0.000702648 (W 0.00156063) | 🔵 faer-fork 1.08× faster than `faer-upstream` | 🔵 faer-fork 1.19× faster than `lapack-mkl` |  |
+| `svd_thin/n32/b1 [in_place]` | 0.213619 ± 0.00101499 (W 0.0017544) | 0.23538 ± 0.000517745 (W 0.00196544) | - | 🔵 faer-fork 1.10× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/n64/b1` | 1.00278 ± 0.00575024 (W 0.00163196) | 1.15082 ± 0.00155776 (W 0.00228235) | 1.05238 ± 0.00590341 (W 0.00367323) | 🔵 faer-fork 1.15× faster than `faer-upstream` | · |  |
+| `svd_thin/n64/b1 [in_place]` | 1.00717 ± 0.00378337 (W 0.00179829) | 1.15247 ± 0.00112454 (W 0.00391779) | - | 🔵 faer-fork 1.14× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/n96/b1` | 2.50988 ± 0.00750135 (W 0.00579503) | 2.7891 ± 0.00353059 (W 0.00271966) | 2.54651 ± 0.00462898 (W 0.00987244) | 🔵 faer-fork 1.11× faster than `faer-upstream` | · |  |
+| `svd_thin/n96/b1 [in_place]` | 2.51498 ± 0.00652857 (W 0.0044155) | 2.78381 ± 0.00487531 (W 0.00723291) | - | 🔵 faer-fork 1.11× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n32/b1` | 0.08543 ± 0.000411651 (W 0.00222562) | 0.16087 ± 0.000121162 (W 0.00206773) | 0.099366 ± 0.000479097 (W 0.0011465) | 🔵 faer-fork 1.88× faster than `faer-upstream` | 🔵 faer-fork 1.16× faster than `lapack-mkl` |  |
+| `svd_values/n32/b1 [in_place]` | 0.084748 ± 0.00036722 (W 0.000210203) | 0.161091 ± 0.000175215 (W 0.00145198) | - | 🔵 faer-fork 1.90× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n64/b1` | 0.351374 ± 0.000949145 (W 0.00213479) | 0.64862 ± 0.000621723 (W 0.00237238) | 0.474005 ± 0.00182441 (W 0.0027481) | 🔵 faer-fork 1.85× faster than `faer-upstream` | 🔵 faer-fork 1.35× faster than `lapack-mkl` |  |
+| `svd_values/n64/b1 [in_place]` | 0.352839 ± 0.00266873 (W 0.00172384) | 0.652299 ± 0.00248031 (W 0.00195444) | - | 🔵 faer-fork 1.85× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n96/b1` | 0.794038 ± 0.00200811 (W 0.00298838) | 1.50482 ± 0.00289332 (W 0.00382958) | 1.30995 ± 0.000842992 (W 0.00200288) | 🔵 faer-fork 1.90× faster than `faer-upstream` | 🔵 faer-fork 1.65× faster than `lapack-mkl` |  |
+| `svd_values/n96/b1 [in_place]` | 0.796407 ± 0.00172104 (W 0.00287372) | 1.50581 ± 0.00367601 (W 0.00234138) | - | 🔵 faer-fork 1.89× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `triangular_solve/n32/b1` | 0.001433 ± 1.18462e-05 (W 1.79499e-05) | 0.001082 ± 1.73205e-05 (W 1.81659e-05) | - | 🔴 faer-fork 1.32× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `triangular_solve/n64/b1` | 0.003466 ± 1.78979e-05 (W 2.86217e-05) | 0.002705 ± 5.19615e-06 (W 2.58844e-05) | - | 🔴 faer-fork 1.28× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `triangular_solve/n96/b1` | 0.006092 ± 3.04467e-05 (W 3.89269e-05) | 0.00502 ± 5.57704e-05 (W 3.58371e-05) | - | 🔴 faer-fork 1.21× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+
+## linalg-small, c64, c order, 8T (CPU 4-11)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `cholesky/n32/b1` | 0.00511 ± 5.05008e-05 (W 4.76886e-05) | 0.005279 ± 5.32948e-05 (W 3.96232e-05) | 0.008015 ± 7.02377e-05 (W 8.69437e-05) | · | 🔵 faer-fork 1.57× faster than `lapack-mkl` | dispatch-dominated (row under 20 us) |
+| `cholesky/n32/b1 [in_place]` | 0.012804 ± 4.3589e-05 (W 3.12618e-05) | 0.012653 ± 7.29178e-05 (W 3.57799e-05) | - | · | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `cholesky/n64/b1` | 0.030036 ± 6.55769e-05 (W 6.22093e-05) | 0.030827 ± 8.02932e-05 (W 9.93444e-05) | 0.048719 ± 0.000381448 (W 0.000256334) | · | 🔵 faer-fork 1.62× faster than `lapack-mkl` |  |
+| `cholesky/n64/b1 [in_place]` | 0.101088 ± 0.000509219 (W 0.000306576) | 0.101038 ± 0.000336117 (W 0.0017946) | - | · | - | `*` one row has no measurement here |
+| `cholesky/n96/b1` | 0.078868 ± 0.000615614 (W 0.000265532) | 0.088725 ± 0.000581103 (W 0.00111832) | 0.132677 ± 0.00104668 (W 0.000410165) | 🔵 faer-fork 1.12× faster than `faer-upstream` | 🔵 faer-fork 1.68× faster than `lapack-mkl` |  |
+| `cholesky/n96/b1 [in_place]` | 0.188271 ± 0.000108099 (W 0.00133981) | 0.167268 ± 7.11407e-05 (W 0.00153082) | - | 🔴 faer-fork 1.13× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `eigh/n32/b1` | 0.137596 ± 0.000158483 (W 0.000666402) | 0.142265 ± 0.000124444 (W 0.000397119) | 0.150316 ± 0.000513843 (W 0.000372231) | · | 🔵 faer-fork 1.09× faster than `lapack-mkl` |  |
+| `eigh/n32/b1 [in_place]` | 0.136221 ± 0.000427811 (W 0.000235071) | 0.14151 ± 0.000605461 (W 0.000382093) | - | · | - | `*` one row has no measurement here |
+| `eigh/n64/b1` | 0.58696 ± 0.00264223 (W 0.00394352) | 0.619894 ± 0.000821984 (W 0.00235785) | 0.513765 ± 0.00349296 (W 0.00279732) | 🔵 faer-fork 1.06× faster than `faer-upstream` | 🔴 faer-fork 1.14× slower than `lapack-mkl` |  |
+| `eigh/n64/b1 [in_place]` | 0.565884 ± 0.00314322 (W 0.0018826) | 0.617171 ± 0.000644306 (W 0.00324534) | - | 🔵 faer-fork 1.09× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `eigh/n96/b1` | 1.32347 ± 0.00134478 (W 0.00504695) | 1.44729 ± 0.00384739 (W 0.0049442) | 0.997135 ± 0.00178569 (W 0.00488264) | 🔵 faer-fork 1.09× faster than `faer-upstream` | 🔴 faer-fork 1.33× slower than `lapack-mkl` |  |
+| `eigh/n96/b1 [in_place]` | 1.31915 ± 0.00210823 (W 0.00313176) | 1.44546 ± 0.00751138 (W 0.00567679) | - | 🔵 faer-fork 1.10× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n32/b1` | 0.020588 ± 0.000295162 (W 7.33158e-05) | 0.01595 ± 0.00017493 (W 0.000100723) | - | 🔴 faer-fork 1.29× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n32/b1 [in_place]` | 0.017102 ± 8.95005e-05 (W 0.000103804) | 0.013915 ± 9.50281e-05 (W 9.48488e-05) | - | 🔴 faer-fork 1.23× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n64/b1` | 0.109434 ± 0.00188946 (W 0.000430942) | 0.091421 ± 0.000428039 (W 0.00141551) | - | 🔴 faer-fork 1.20× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n64/b1 [in_place]` | 0.108018 ± 0.000700187 (W 0.000607069) | 0.085487 ± 0.000235858 (W 0.000275408) | - | 🔴 faer-fork 1.26× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n96/b1` | 0.312803 ± 0.00380267 (W 0.00138713) | 0.266437 ± 0.000629746 (W 0.00225976) | - | 🔴 faer-fork 1.17× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n96/b1 [in_place]` | 0.244727 ± 0.00759354 (W 0.00220289) | 0.265839 ± 0.000883044 (W 0.00200788) | - | 🔵 faer-fork 1.09× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `householder_apply/n32/b1 [block(basis=32,target=32)]` | 0.01061 ± 9.33292e-05 (W 0.000149024) | 0.028223 ± 5.55908e-05 (W 0.000118025) | - | 🔵 faer-fork 2.66× faster than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n32/b1 [sequence(basis=32,target=32)]` | 0.01074 ± 9.58662e-05 (W 0.00011521) | 0.028173 ± 8.14125e-05 (W 0.00017972) | - | 🔵 faer-fork 2.62× faster than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n64/b1 [block(basis=64,target=64)]` | 0.036668 ± 0.000280951 (W 0.000313967) | 0.060543 ± 0.000229705 (W 0.000513333) | - | 🔵 faer-fork 1.65× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `householder_apply/n64/b1 [sequence(basis=64,target=64)]` | 0.037179 ± 0.000216472 (W 0.000270272) | 0.060612 ± 0.000221121 (W 0.0016862) | - | 🔵 faer-fork 1.63× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `householder_apply/n96/b1 [block(basis=96,target=96)]` | 0.086471 ± 0.000215007 (W 0.00170285) | 0.150216 ± 0.000361959 (W 0.00158797) | - | 🔵 faer-fork 1.74× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `householder_apply/n96/b1 [sequence(basis=96,target=96)]` | 0.086449 ± 0.000178799 (W 0.000439667) | 0.15076 ± 0.000757436 (W 0.0020365) | - | 🔵 faer-fork 1.74× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `lu/n32/b1` | 0.014206 ± 4.07063e-05 (W 8.44393e-05) | 0.011732 ± 5.54106e-05 (W 5.89763e-05) | 0.018495 ± 8.58545e-05 (W 8.14936e-05) | 🔴 faer-fork 1.21× slower than `faer-upstream` | 🔵 faer-fork 1.30× faster than `lapack-mkl` | dispatch-dominated (row under 20 us) |
+| `lu/n32/b1 [in_place]` | 0.01104 ± 7.2111e-05 (W 3.83693e-05) | 0.01079 ± 6.55744e-05 (W 4.97996e-05) | - | · | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n64/b1` | 0.066763 ± 6.04511e-05 (W 0.000177342) | 0.054841 ± 0.000407575 (W 0.000244486) | 0.087943 ± 0.000146773 (W 0.00034688) | 🔴 faer-fork 1.22× slower than `faer-upstream` | 🔵 faer-fork 1.32× faster than `lapack-mkl` |  |
+| `lu/n64/b1 [in_place]` | 0.063959 ± 0.000386566 (W 0.000951471) | 0.055633 ± 0.000410727 (W 0.000210505) | - | 🔴 faer-fork 1.15× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `lu/n96/b1` | 0.211529 ± 0.000762248 (W 0.00231793) | 0.144739 ± 0.000461381 (W 0.00175541) | 0.218321 ± 0.000315506 (W 0.00233033) | 🔴 faer-fork 1.46× slower than `faer-upstream` | · |  |
+| `lu/n96/b1 [in_place]` | 0.15056 ± 0.00110742 (W 0.000997085) | 0.144786 ± 0.000978741 (W 0.00150817) | - | · | - | `*` one row has no measurement here |
+| `qr/n32/b1` | 0.063307 ± 0.000457807 (W 0.0005182) | 0.089527 ± 0.000786225 (W 0.00137218) | - | 🔵 faer-fork 1.41× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/n64/b1` | 0.214304 ± 0.000841759 (W 0.00364241) | 0.382883 ± 0.00259073 (W 0.00192959) | - | 🔵 faer-fork 1.79× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/n96/b1` | 0.45678 ± 0.00406069 (W 0.00374323) | 0.780292 ± 0.00180487 (W 0.00467944) | - | 🔵 faer-fork 1.71× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr_factor/n32/b1` | 0.039153 ± 0.000209956 (W 0.000147345) | 0.068355 ± 0.000714593 (W 0.0020668) | 0.027942 ± 0.000551136 (W 5.69148e-05) | 🔵 faer-fork 1.75× faster than `faer-upstream` | 🔴 faer-fork 1.40× slower than `lapack-mkl` |  |
+| `qr_factor/n64/b1` | 0.120315 ± 0.00114311 (W 0.000436791) | 0.32171 ± 0.000799325 (W 0.00644452) | 0.157824 ± 0.000969623 (W 0.00192625) | 🔵 faer-fork 2.67× faster than `faer-upstream` | 🔵 faer-fork 1.31× faster than `lapack-mkl` |  |
+| `qr_factor/n96/b1` | 0.24131 ± 0.000898762 (W 0.00279506) | 0.631201 ± 0.00452223 (W 0.00723377) | 0.481917 ± 0.00256241 (W 0.00214848) | 🔵 faer-fork 2.62× faster than `faer-upstream` | 🔵 faer-fork 2.00× faster than `lapack-mkl` |  |
+| `solve/n32/b1` | 0.01586 ± 0.000110817 (W 8.36558e-05) | 0.013084 ± 9.60902e-05 (W 3.96232e-05) | 0.018845 ± 5.19615e-05 (W 8.68976e-05) | 🔴 faer-fork 1.21× slower than `faer-upstream` | 🔵 faer-fork 1.19× faster than `lapack-mkl` | dispatch-dominated (row under 20 us) |
+| `solve/n32/b1 [in_place]` | 0.012864 ± 1.1547e-05 (W 3.89872e-05) | 0.011832 ± 0.000200333 (W 6.62661e-05) | - | 🔴 faer-fork 1.09× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n64/b1` | 0.069207 ± 0.000154399 (W 0.000165548) | 0.056514 ± 0.000292155 (W 0.0018061) | 0.08578 ± 0.000255864 (W 0.000225877) | 🔴 faer-fork 1.22× slower than `faer-upstream` | 🔵 faer-fork 1.24× faster than `lapack-mkl` |  |
+| `solve/n64/b1 [in_place]` | 0.069359 ± 0.000488285 (W 0.000361366) | 0.057155 ± 0.000392676 (W 0.000311728) | - | 🔴 faer-fork 1.21× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `solve/n96/b1` | 0.214805 ± 0.00256551 (W 0.00391689) | 0.148066 ± 0.000351433 (W 0.00250794) | 0.209951 ± 9.21973e-05 (W 0.00199463) | 🔴 faer-fork 1.45× slower than `faer-upstream` | · |  |
+| `solve/n96/b1 [in_place]` | 0.147004 ± 0.000739409 (W 0.000657359) | 0.147702 ± 0.000737478 (W 0.00171171) | - | · | - | `*` one row has no measurement here |
+| `svd_thin/n32/b1` | 0.214499 ± 0.00137606 (W 0.00146655) | 0.240267 ± 0.00960023 (W 0.00230538) | 0.258933 ± 0.000393505 (W 0.00212818) | 🔵 faer-fork 1.12× faster than `faer-upstream` | 🔵 faer-fork 1.21× faster than `lapack-mkl` | `!` between-start range over 5% |
+| `svd_thin/n32/b1 [in_place]` | 0.214439 ± 0.000600137 (W 0.00173077) | 0.234051 ± 0.00157197 (W 0.00220958) | - | 🔵 faer-fork 1.09× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/n64/b1` | 0.996008 ± 0.00146356 (W 0.0027388) | 1.15379 ± 0.00166115 (W 0.00210847) | 0.956435 ± 0.00121353 (W 0.00326591) | 🔵 faer-fork 1.16× faster than `faer-upstream` | · |  |
+| `svd_thin/n64/b1 [in_place]` | 0.998497 ± 0.000749104 (W 0.00300677) | 1.15584 ± 0.0010861 (W 0.00188816) | - | 🔵 faer-fork 1.16× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/n96/b1` | 2.45832 ± 0.00624727 (W 0.0029933) | 2.80401 ± 0.00270407 (W 0.00544512) | 2.36012 ± 0.0072482 (W 0.00646193) | 🔵 faer-fork 1.14× faster than `faer-upstream` | · |  |
+| `svd_thin/n96/b1 [in_place]` | 2.47232 ± 0.00840668 (W 0.00782876) | 2.80959 ± 0.00396561 (W 0.00231306) | - | 🔵 faer-fork 1.14× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n32/b1` | 0.085568 ± 0.000605658 (W 0.000274254) | 0.161962 ± 0.000535489 (W 0.0018082) | 0.098725 ± 0.000867718 (W 0.00179539) | 🔵 faer-fork 1.89× faster than `faer-upstream` | 🔵 faer-fork 1.15× faster than `lapack-mkl` |  |
+| `svd_values/n32/b1 [in_place]` | 0.085009 ± 0.000392918 (W 0.000117827) | 0.161087 ± 0.000348871 (W 0.00239674) | - | 🔵 faer-fork 1.89× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n64/b1` | 0.359952 ± 0.0022037 (W 0.0018316) | 0.654008 ± 0.000595198 (W 0.00233416) | 0.477919 ± 0.00325912 (W 0.00219123) | 🔵 faer-fork 1.82× faster than `faer-upstream` | 🔵 faer-fork 1.33× faster than `lapack-mkl` |  |
+| `svd_values/n64/b1 [in_place]` | 0.360052 ± 0.00199317 (W 0.00229122) | 0.652009 ± 0.00382684 (W 0.00327209) | - | 🔵 faer-fork 1.81× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n96/b1` | 0.824056 ± 0.00563303 (W 0.00220819) | 1.50708 ± 0.00571043 (W 0.00383153) | 1.30923 ± 0.00225007 (W 0.00217257) | 🔵 faer-fork 1.83× faster than `faer-upstream` | 🔵 faer-fork 1.59× faster than `lapack-mkl` |  |
+| `svd_values/n96/b1 [in_place]` | 0.820156 ± 0.00454196 (W 0.00316229) | 1.50749 ± 0.00340324 (W 0.00506738) | - | 🔵 faer-fork 1.84× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `triangular_solve/n32/b1` | 0.001443 ± 2.64575e-05 (W 2.41702e-05) | 0.001082 ± 1.1547e-05 (W 3.31662e-05) | - | 🔴 faer-fork 1.33× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `triangular_solve/n64/b1` | 0.003447 ± 1.51767e-05 (W 3.29287e-05) | 0.002685 ± 2.51661e-05 (W 3.27109e-05) | - | 🔴 faer-fork 1.28× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `triangular_solve/n96/b1` | 0.006101 ± 4.16333e-05 (W 5.03607e-05) | 0.004969 ± 5.56776e-05 (W 5.31977e-05) | - | 🔴 faer-fork 1.23× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+
+## linalg-small, c64, f order, 1T (CPU 4)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `cholesky/n32/b1` | 0.00528 ± 0 (W 8.95059e-05) | 0.005199 ± 1.53948e-05 (W 7.04982e-05) | 0.007063 ± 9.50438e-06 (W 5.58865e-05) | · | 🔵 faer-fork 1.34× faster than `lapack-mkl` | dispatch-dominated (row under 20 us) |
+| `cholesky/n32/b1 [in_place]` | 0.004398 ± 8.54225e-05 (W 3.63208e-05) | 0.004488 ± 3.49333e-05 (W 2.55969e-05) | - | · | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `cholesky/n64/b1` | 0.029495 ± 0.000355805 (W 0.000157312) | 0.030006 ± 0.000144684 (W 7.15842e-05) | 0.041247 ± 0.000332591 (W 0.000111616) | · | 🔵 faer-fork 1.40× faster than `lapack-mkl` |  |
+| `cholesky/n64/b1 [in_place]` | 0.026841 ± 0.000160894 (W 4.25476e-05) | 0.027321 ± 0.000558034 (W 5.76038e-05) | - | · | - | `*` one row has no measurement here |
+| `cholesky/n96/b1` | 0.083806 ± 0.000115326 (W 0.00162209) | 0.083166 ± 0.00020551 (W 0.000183055) | 0.119704 ± 0.000386162 (W 0.00254965) | · | 🔵 faer-fork 1.43× faster than `lapack-mkl` |  |
+| `cholesky/n96/b1 [in_place]` | 0.077395 ± 0.000503161 (W 8.30662e-05) | 0.077975 ± 0.000186566 (W 0.00162811) | - | · | - | `*` one row has no measurement here |
+| `eigh/n32/b1` | 0.139691 ± 0.000926344 (W 0.001647) | 0.141613 ± 0.000338129 (W 0.00135383) | 0.142636 ± 0.000823297 (W 0.000129442) | · | · |  |
+| `eigh/n32/b1 [in_place]` | 0.140632 ± 0.000570661 (W 0.00171092) | 0.140883 ± 0.00171903 (W 0.00164418) | - | · | - | `*` one row has no measurement here |
+| `eigh/n64/b1` | 0.674218 ± 0.00173881 (W 0.00316091) | 0.663759 ± 0.00161095 (W 0.00348364) | 0.776321 ± 0.00104211 (W 0.00340269) | · | 🔵 faer-fork 1.15× faster than `lapack-mkl` |  |
+| `eigh/n64/b1 [in_place]` | 0.652801 ± 0.00125144 (W 0.00311707) | 0.645246 ± 0.00424873 (W 0.00213618) | - | · | - | `*` one row has no measurement here |
+| `eigh/n96/b1` | 1.64353 ± 0.00329336 (W 0.00263707) | 1.60322 ± 0.000707065 (W 0.00445579) | 1.96303 ± 0.00213879 (W 0.00628744) | · | 🔵 faer-fork 1.19× faster than `lapack-mkl` |  |
+| `eigh/n96/b1 [in_place]` | 1.64096 ± 0.0024941 (W 0.0049675) | 1.60343 ± 0.00113571 (W 0.00274578) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/n32/b1` | 0.017323 ± 0.000125061 (W 8.30741e-05) | 0.01611 ± 6.65833e-05 (W 0.000103102) | - | 🔴 faer-fork 1.08× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n32/b1 [in_place]` | 0.015429 ± 0.000197445 (W 0.000104505) | 0.013866 ± 5.19615e-06 (W 3.72988e-05) | - | 🔴 faer-fork 1.11× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n64/b1` | 0.093585 ± 8.5049e-05 (W 0.000287395) | 0.090648 ± 0.000408118 (W 0.0017795) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/n64/b1 [in_place]` | 0.089907 ± 0.000304535 (W 0.000312315) | 0.084578 ± 0.000141539 (W 0.000988061) | - | 🔴 faer-fork 1.06× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n96/b1` | 0.315088 ± 0.00341753 (W 0.00207914) | 0.310838 ± 0.00113511 (W 0.00351946) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/n96/b1 [in_place]` | 0.269855 ± 0.00474875 (W 0.00196633) | 0.265265 ± 0.000844721 (W 0.0021187) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n32/b1 [block(basis=32,target=32)]` | 0.028262 ± 4.10731e-05 (W 0.000184689) | 0.027721 ± 0.000144938 (W 7.48331e-05) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n32/b1 [sequence(basis=32,target=32)]` | 0.028172 ± 4.2194e-05 (W 6.60924e-05) | 0.027792 ± 0.000146277 (W 8.89056e-05) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n64/b1 [block(basis=64,target=64)]` | 0.157675 ± 0.00050114 (W 0.0015062) | 0.156793 ± 0.000493097 (W 0.000154225) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n64/b1 [sequence(basis=64,target=64)]` | 0.158335 ± 0.000537168 (W 0.00166592) | 0.156833 ± 0.000432154 (W 0.00196713) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n96/b1 [block(basis=96,target=96)]` | 0.466912 ± 0.00346202 (W 0.000959097) | 0.463884 ± 0.00439165 (W 0.00102449) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n96/b1 [sequence(basis=96,target=96)]` | 0.463062 ± 0.00164014 (W 0.00029096) | 0.463673 ± 0.000629521 (W 0.00169807) | - | · | - | `*` one row has no measurement here |
+| `lu/n32/b1` | 0.012383 ± 1.73205e-05 (W 6.83374e-05) | 0.011892 ± 2.5632e-05 (W 5.1672e-05) | 0.01601 ± 2.88675e-05 (W 5.76194e-05) | · | 🔵 faer-fork 1.29× faster than `lapack-mkl` | dispatch-dominated (row under 20 us) |
+| `lu/n32/b1 [in_place]` | 0.01035 ± 5.87963e-05 (W 4.30116e-05) | 0.010138 ± 0.00010602 (W 3.63318e-05) | - | · | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n64/b1` | 0.054262 ± 0.000162687 (W 0.000264683) | 0.052758 ± 0.00038725 (W 0.000102007) | 0.079157 ± 0.000294456 (W 0.000220833) | · | 🔵 faer-fork 1.46× faster than `lapack-mkl` |  |
+| `lu/n64/b1 [in_place]` | 0.048601 ± 0.000120554 (W 0.000106207) | 0.0479 ± 0.000124022 (W 0.000265274) | - | · | - | `*` one row has no measurement here |
+| `lu/n96/b1` | 0.191165 ± 0.0010996 (W 0.00268509) | 0.186519 ± 0.00169406 (W 0.00263781) | 0.200674 ± 0.00185593 (W 0.00157773) | · | · |  |
+| `lu/n96/b1 [in_place]` | 0.133269 ± 0.000701571 (W 0.00181758) | 0.131055 ± 0.0001757 (W 0.002107) | - | · | - | `*` one row has no measurement here |
+| `qr/n32/b1` | 0.067075 ± 0.000274858 (W 0.000396574) | 0.068277 ± 0.000481349 (W 0.000333268) | - | · | - | `*` one row has no measurement here |
+| `qr/n64/b1` | 0.324727 ± 0.00150993 (W 0.00328246) | 0.33301 ± 0.00264151 (W 0.00247634) | - | · | - | `*` one row has no measurement here |
+| `qr/n96/b1` | 0.828817 ± 0.00289493 (W 0.00358154) | 0.852343 ± 0.00280278 (W 0.00267718) | - | · | - | `*` one row has no measurement here |
+| `qr_factor/n32/b1` | 0.03206 ± 0.000275228 (W 0.000321641) | 0.033773 ± 0.000223943 (W 0.000234989) | 0.025197 ± 0.000228685 (W 6.09918e-05) | 🔵 faer-fork 1.05× faster than `faer-upstream` | 🔴 faer-fork 1.27× slower than `lapack-mkl` |  |
+| `qr_factor/n64/b1` | 0.151021 ± 0.000384449 (W 0.0019212) | 0.161472 ± 0.000817639 (W 0.000692937) | 0.150141 ± 0.000945157 (W 0.00174475) | 🔵 faer-fork 1.07× faster than `faer-upstream` | · |  |
+| `qr_factor/n96/b1` | 0.368689 ± 0.00050462 (W 0.00263097) | 0.397059 ± 0.00192995 (W 0.00286296) | 0.46779 ± 0.0013484 (W 0.0038752) | 🔵 faer-fork 1.08× faster than `faer-upstream` | 🔵 faer-fork 1.27× faster than `lapack-mkl` |  |
+| `solve/n32/b1` | 0.013445 ± 0.000144777 (W 9.00927e-05) | 0.013265 ± 0.000161661 (W 0.000432493) | 0.01607 ± 0.000145523 (W 0.00101797) | · | 🔵 faer-fork 1.20× faster than `lapack-mkl` | dispatch-dominated (row under 20 us) |
+| `solve/n32/b1 [in_place]` | 0.011221 ± 8.3865e-05 (W 4.85201e-05) | 0.01087 ± 3.66106e-05 (W 4.75847e-05) | - | · | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n64/b1` | 0.055975 ± 0.000245683 (W 0.00158713) | 0.054552 ± 2.58908e-05 (W 0.00100984) | 0.077074 ± 0.000171039 (W 0.00160932) | · | 🔵 faer-fork 1.38× faster than `lapack-mkl` |  |
+| `solve/n64/b1 [in_place]` | 0.050945 ± 0.000414138 (W 7.34847e-05) | 0.050143 ± 9.64365e-05 (W 7.86022e-05) | - | · | - | `*` one row has no measurement here |
+| `solve/n96/b1` | 0.1932 ± 0.00107723 (W 0.00442616) | 0.190025 ± 0.00113224 (W 0.00289659) | 0.194372 ± 0.000171235 (W 0.00179483) | · | · |  |
+| `solve/n96/b1 [in_place]` | 0.134942 ± 0.000629131 (W 0.00127812) | 0.133438 ± 0.000314045 (W 0.000190304) | - | · | - | `*` one row has no measurement here |
+| `svd_thin/n32/b1` | 0.218096 ± 0.000360609 (W 0.00134282) | 0.231752 ± 0.000375543 (W 0.00217624) | 0.244685 ± 0.000381142 (W 0.0021763) | 🔵 faer-fork 1.06× faster than `faer-upstream` | 🔵 faer-fork 1.12× faster than `lapack-mkl` |  |
+| `svd_thin/n32/b1 [in_place]` | 0.216964 ± 0.000518383 (W 0.0013866) | 0.230058 ± 0.000261077 (W 0.00216108) | - | 🔵 faer-fork 1.06× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/n64/b1` | 1.1926 ± 0.00118332 (W 0.00299952) | 1.24809 ± 0.00194968 (W 0.00174274) | 1.32471 ± 0.00267628 (W 0.00456164) | · | 🔵 faer-fork 1.11× faster than `lapack-mkl` |  |
+| `svd_thin/n64/b1 [in_place]` | 1.19404 ± 0.00150729 (W 0.00228045) | 1.24318 ± 0.00465153 (W 0.0027349) | - | · | - | `*` one row has no measurement here |
+| `svd_thin/n96/b1` | 2.9532 ± 0.00503152 (W 0.00614432) | 3.07683 ± 0.00208828 (W 0.00766443) | 3.44477 ± 0.0195214 (W 0.00378444) | · | 🔵 faer-fork 1.17× faster than `lapack-mkl` |  |
+| `svd_thin/n96/b1 [in_place]` | 2.9568 ± 0.00613262 (W 0.00373462) | 3.06701 ± 0.0058154 (W 0.00490742) | - | · | - | `*` one row has no measurement here |
+| `svd_values/n32/b1` | 0.084017 ± 0.0004135 (W 0.000149484) | 0.159267 ± 0.000249393 (W 0.00181558) | 0.097271 ± 0.000678503 (W 0.000162518) | 🔵 faer-fork 1.90× faster than `faer-upstream` | 🔵 faer-fork 1.16× faster than `lapack-mkl` |  |
+| `svd_values/n32/b1 [in_place]` | 0.084637 ± 0.00027159 (W 0.00115635) | 0.159277 ± 0.000115036 (W 0.00166826) | - | 🔵 faer-fork 1.88× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n64/b1` | 0.341979 ± 0.000771168 (W 0.00206486) | 0.625238 ± 0.00144929 (W 0.0019575) | 0.463485 ± 0.00370033 (W 0.00274791) | 🔵 faer-fork 1.83× faster than `faer-upstream` | 🔵 faer-fork 1.36× faster than `lapack-mkl` |  |
+| `svd_values/n64/b1 [in_place]` | 0.343119 ± 0.000702125 (W 0.00225205) | 0.624863 ± 0.000488361 (W 0.00235264) | - | 🔵 faer-fork 1.82× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n96/b1` | 0.856695 ± 0.00137155 (W 0.00246569) | 1.4789 ± 0.00574713 (W 0.00272628) | 1.3014 ± 0.000781441 (W 0.00279123) | 🔵 faer-fork 1.73× faster than `faer-upstream` | 🔵 faer-fork 1.52× faster than `lapack-mkl` |  |
+| `svd_values/n96/b1 [in_place]` | 0.856108 ± 0.00130883 (W 0.00200547) | 1.47664 ± 0.00406651 (W 0.00373403) | - | 🔵 faer-fork 1.72× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `triangular_solve/n32/b1` | 0.001263 ± 1.67432e-05 (W 2.52646e-05) | 0.001342 ± 1.12694e-05 (W 2.56963e-05) | - | 🔵 faer-fork 1.06× faster than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `triangular_solve/n64/b1` | 0.002835 ± 1.52753e-05 (W 3.72048e-05) | 0.002905 ± 1.18462e-05 (W 2.85867e-05) | - | · | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `triangular_solve/n96/b1` | 0.00521 ± 3.00056e-05 (W 3.36333e-05) | 0.00535 ± 4e-05 (W 4.81664e-05) | - | · | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+
+## linalg-small, c64, f order, 4T (CPU 4-7)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `cholesky/n32/b1` | 0.00525 ± 9.29157e-05 (W 8.7116e-05) | 0.00524 ± 2.64575e-05 (W 3.63359e-05) | 0.007133 ± 5.03322e-05 (W 4.87155e-05) | · | 🔵 faer-fork 1.36× faster than `lapack-mkl` | dispatch-dominated (row under 20 us) |
+| `cholesky/n32/b1 [in_place]` | 0.004248 ± 3.78594e-05 (W 6.94982e-05) | 0.004499 ± 2.08167e-05 (W 3.62119e-05) | - | 🔵 faer-fork 1.06× faster than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `cholesky/n64/b1` | 0.029505 ± 0.000148436 (W 0.000121915) | 0.030236 ± 0.000152306 (W 7.82943e-05) | 0.041518 ± 0.000381458 (W 0.000123771) | · | 🔵 faer-fork 1.41× faster than `lapack-mkl` |  |
+| `cholesky/n64/b1 [in_place]` | 0.026981 ± 6.28517e-05 (W 9.83123e-05) | 0.027621 ± 0.000141846 (W 7.39067e-05) | - | · | - | `*` one row has no measurement here |
+| `cholesky/n96/b1` | 0.078075 ± 0.000406113 (W 0.001306) | 0.088295 ± 0.000277039 (W 0.00131764) | 0.120285 ± 0.000309744 (W 0.00162641) | 🔵 faer-fork 1.13× faster than `faer-upstream` | 🔵 faer-fork 1.54× faster than `lapack-mkl` |  |
+| `cholesky/n96/b1 [in_place]` | 0.070191 ± 0.000348239 (W 0.000291519) | 0.08013 ± 0.000148561 (W 0.00178186) | - | 🔵 faer-fork 1.14× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `eigh/n32/b1` | 0.136554 ± 0.000648908 (W 0.00167663) | 0.141714 ± 8.18189e-05 (W 0.000851595) | 0.146573 ± 0.000374166 (W 0.00152283) | · | 🔵 faer-fork 1.07× faster than `lapack-mkl` |  |
+| `eigh/n32/b1 [in_place]` | 0.135793 ± 0.000327735 (W 0.000707603) | 0.141775 ± 0.000216472 (W 0.00242911) | - | · | - | `*` one row has no measurement here |
+| `eigh/n64/b1` | 0.590824 ± 0.00418623 (W 0.00739776) | 0.617494 ± 0.00407455 (W 0.00275182) | 0.526863 ± 0.000893161 (W 0.00210872) | · | 🔴 faer-fork 1.12× slower than `lapack-mkl` |  |
+| `eigh/n64/b1 [in_place]` | 0.569885 ± 0.000604923 (W 0.00342713) | 0.615129 ± 0.00279919 (W 0.00207978) | - | 🔵 faer-fork 1.08× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `eigh/n96/b1` | 1.35222 ± 0.00400666 (W 0.0036751) | 1.44282 ± 0.00200277 (W 0.00164811) | 1.09162 ± 0.00296779 (W 0.00398204) | 🔵 faer-fork 1.07× faster than `faer-upstream` | 🔴 faer-fork 1.24× slower than `lapack-mkl` |  |
+| `eigh/n96/b1 [in_place]` | 1.35026 ± 0.00199133 (W 0.00329519) | 1.4376 ± 0.00307173 (W 0.00514998) | - | 🔵 faer-fork 1.06× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n32/b1` | 0.018645 ± 0.00026939 (W 0.000110898) | 0.01575 ± 5.68624e-05 (W 6.67623e-05) | - | 🔴 faer-fork 1.18× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n32/b1 [in_place]` | 0.016792 ± 0.000239952 (W 0.000132258) | 0.013926 ± 0.000720689 (W 8.5844e-05) | - | 🔴 faer-fork 1.21× slower than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n64/b1` | 0.097873 ± 0.000993938 (W 0.000403244) | 0.089557 ± 0.000278342 (W 0.000180619) | - | 🔴 faer-fork 1.09× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n64/b1 [in_place]` | 0.094045 ± 0.00146833 (W 0.000494101) | 0.084988 ± 0.000334605 (W 0.000362247) | - | 🔴 faer-fork 1.11× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n96/b1` | 0.28925 ± 0.00230882 (W 0.00226208) | 0.263781 ± 0.000590899 (W 0.00236617) | - | 🔴 faer-fork 1.10× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n96/b1 [in_place]` | 0.229639 ± 0.00219104 (W 0.00192732) | 0.267087 ± 7.51088e-05 (W 0.00192315) | - | 🔵 faer-fork 1.16× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `householder_apply/n32/b1 [block(basis=32,target=32)]` | 0.015018 ± 0.000110151 (W 0.000172424) | 0.028163 ± 6.15386e-05 (W 0.000110473) | - | 🔵 faer-fork 1.88× faster than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n32/b1 [sequence(basis=32,target=32)]` | 0.014737 ± 9.86577e-05 (W 0.000197714) | 0.027982 ± 8.71799e-05 (W 0.000113666) | - | 🔵 faer-fork 1.90× faster than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n64/b1 [block(basis=64,target=64)]` | 0.061133 ± 0.000315596 (W 0.000269112) | 0.060503 ± 0.000162891 (W 0.000332179) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n64/b1 [sequence(basis=64,target=64)]` | 0.061044 ± 0.000311433 (W 0.000378379) | 0.059992 ± 0.000102632 (W 0.00030904) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n96/b1 [block(basis=96,target=96)]` | 0.149539 ± 0.000610972 (W 0.0004328) | 0.147765 ± 0.000414273 (W 0.000319809) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n96/b1 [sequence(basis=96,target=96)]` | 0.150462 ± 0.0002616 (W 0.00160081) | 0.147755 ± 0.000163323 (W 0.000364843) | - | · | - | `*` one row has no measurement here |
+| `lu/n32/b1` | 0.012544 ± 6.62596e-05 (W 9.21808e-05) | 0.011872 ± 7.03586e-05 (W 6.62518e-05) | 0.01608 ± 5e-05 (W 5.27257e-05) | 🔴 faer-fork 1.06× slower than `faer-upstream` | 🔵 faer-fork 1.28× faster than `lapack-mkl` | dispatch-dominated (row under 20 us) |
+| `lu/n32/b1 [in_place]` | 0.010339 ± 0.000101425 (W 4.35465e-05) | 0.010149 ± 1.1547e-05 (W 4.219e-05) | - | · | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n64/b1` | 0.05889 ± 0.00176464 (W 0.000209833) | 0.052979 ± 0.000479845 (W 0.000321839) | 0.079639 ± 5.00033e-05 (W 0.00013885) | 🔴 faer-fork 1.11× slower than `faer-upstream` | 🔵 faer-fork 1.35× faster than `lapack-mkl` | `!` between-start range over 5% |
+| `lu/n64/b1 [in_place]` | 0.052739 ± 0.00143004 (W 0.00130153) | 0.04783 ± 0.000122094 (W 0.000198402) | - | 🔴 faer-fork 1.10× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `lu/n96/b1` | 0.194072 ± 0.00161492 (W 0.00196506) | 0.138378 ± 0.00197299 (W 0.00199081) | 0.202288 ± 0.000394422 (W 0.00266643) | 🔴 faer-fork 1.40× slower than `faer-upstream` | · |  |
+| `lu/n96/b1 [in_place]` | 0.132417 ± 0.0026767 (W 0.00217966) | 0.128139 ± 0.000226276 (W 0.0023013) | - | · | - | `*` one row has no measurement here |
+| `qr/n32/b1` | 0.061384 ± 0.000236925 (W 0.000518701) | 0.082824 ± 0.000449535 (W 0.00144184) | - | 🔵 faer-fork 1.35× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/n64/b1` | 0.211745 ± 0.000622736 (W 0.00291681) | 0.343552 ± 0.00207351 (W 0.00388148) | - | 🔵 faer-fork 1.62× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/n96/b1` | 0.494745 ± 0.00253058 (W 0.00167774) | 0.704055 ± 0.00214288 (W 0.00641172) | - | 🔵 faer-fork 1.42× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr_factor/n32/b1` | 0.030897 ± 0.000182237 (W 0.000218733) | 0.047539 ± 0.00015308 (W 0.000515709) | 0.025587 ± 0.000360317 (W 8.52643e-05) | 🔵 faer-fork 1.54× faster than `faer-upstream` | 🔴 faer-fork 1.21× slower than `lapack-mkl` |  |
+| `qr_factor/n64/b1` | 0.115315 ± 0.000732347 (W 0.000518835) | 0.211545 ± 0.00122173 (W 0.00170358) | 0.15048 ± 0.00129844 (W 0.00212658) | 🔵 faer-fork 1.83× faster than `faer-upstream` | 🔵 faer-fork 1.30× faster than `lapack-mkl` |  |
+| `qr_factor/n96/b1` | 0.242361 ± 0.00275677 (W 0.00178346) | 0.425514 ± 0.00430637 (W 0.00453446) | 0.469043 ± 0.00459882 (W 0.00366881) | 🔵 faer-fork 1.76× faster than `faer-upstream` | 🔵 faer-fork 1.94× faster than `lapack-mkl` |  |
+| `solve/n32/b1` | 0.013766 ± 0.000139249 (W 0.000149768) | 0.013064 ± 2.5697e-05 (W 6.11089e-05) | 0.01599 ± 3.60555e-05 (W 5.61249e-05) | 🔴 faer-fork 1.05× slower than `faer-upstream` | 🔵 faer-fork 1.16× faster than `lapack-mkl` | dispatch-dominated (row under 20 us) |
+| `solve/n32/b1 [in_place]` | 0.011732 ± 8.2282e-05 (W 4.16209e-05) | 0.011011 ± 3.15753e-05 (W 6.02345e-05) | - | 🔴 faer-fork 1.07× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n64/b1` | 0.062156 ± 0.00194168 (W 0.00164295) | 0.054712 ± 0.000162863 (W 6.95938e-05) | 0.077835 ± 0.00012897 (W 0.000295147) | 🔴 faer-fork 1.14× slower than `faer-upstream` | 🔵 faer-fork 1.25× faster than `lapack-mkl` | `!` between-start range over 5% |
+| `solve/n64/b1 [in_place]` | 0.054632 ± 0.000408303 (W 0.0013786) | 0.050825 ± 6e-05 (W 5.11097e-05) | - | 🔴 faer-fork 1.07× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `solve/n96/b1` | 0.195866 ± 0.00266132 (W 0.00318384) | 0.14449 ± 0.00206754 (W 0.00297124) | 0.196195 ± 0.000489021 (W 0.00211654) | 🔴 faer-fork 1.36× slower than `faer-upstream` | · |  |
+| `solve/n96/b1 [in_place]` | 0.132397 ± 0.000454993 (W 0.00176733) | 0.129291 ± 0.00121512 (W 0.00155816) | - | · | - | `*` one row has no measurement here |
+| `svd_thin/n32/b1` | 0.213879 ± 0.000452364 (W 0.00197545) | 0.232013 ± 0.00135643 (W 0.00209469) | 0.25163 ± 0.000981419 (W 0.00172283) | 🔵 faer-fork 1.08× faster than `faer-upstream` | 🔵 faer-fork 1.18× faster than `lapack-mkl` |  |
+| `svd_thin/n32/b1 [in_place]` | 0.210544 ± 0.00111733 (W 0.00202236) | 0.232174 ± 0.000842696 (W 0.00170008) | - | 🔵 faer-fork 1.10× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/n64/b1` | 1.03719 ± 0.0026672 (W 0.00329674) | 1.17893 ± 0.00347104 (W 0.00254975) | 0.994065 ± 0.00328012 (W 0.0033754) | 🔵 faer-fork 1.14× faster than `faer-upstream` | · |  |
+| `svd_thin/n64/b1 [in_place]` | 1.03667 ± 0.00210158 (W 0.00185109) | 1.1839 ± 0.00180915 (W 0.00180244) | - | 🔵 faer-fork 1.14× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/n96/b1` | 2.45787 ± 0.00190517 (W 0.00316183) | 2.75117 ± 0.00458941 (W 0.00358756) | 2.50171 ± 0.00987362 (W 0.00295843) | 🔵 faer-fork 1.12× faster than `faer-upstream` | · |  |
+| `svd_thin/n96/b1 [in_place]` | 2.45746 ± 0.00638553 (W 0.0062027) | 2.74999 ± 0.00452102 (W 0.00794514) | - | 🔵 faer-fork 1.12× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n32/b1` | 0.08557 ± 0.000130564 (W 0.000177815) | 0.158546 ± 0.000228985 (W 0.00163884) | 0.098374 ± 0.000492668 (W 0.00207425) | 🔵 faer-fork 1.85× faster than `faer-upstream` | 🔵 faer-fork 1.15× faster than `lapack-mkl` |  |
+| `svd_values/n32/b1 [in_place]` | 0.085419 ± 0.000301613 (W 7.04982e-05) | 0.158876 ± 0.000222614 (W 0.00645462) | - | 🔵 faer-fork 1.86× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n64/b1` | 0.351947 ± 0.000317396 (W 0.00149676) | 0.623395 ± 0.00345297 (W 0.00235985) | 0.467952 ± 0.00434868 (W 0.00229032) | 🔵 faer-fork 1.77× faster than `faer-upstream` | 🔵 faer-fork 1.33× faster than `lapack-mkl` |  |
+| `svd_values/n64/b1 [in_place]` | 0.351245 ± 0.000890138 (W 0.00130567) | 0.626426 ± 0.0014646 (W 0.00215706) | - | 🔵 faer-fork 1.78× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n96/b1` | 0.798011 ± 0.00284895 (W 0.00180032) | 1.47676 ± 0.00279109 (W 0.00480362) | 1.30452 ± 0.0021827 (W 0.0016558) | 🔵 faer-fork 1.85× faster than `faer-upstream` | 🔵 faer-fork 1.63× faster than `lapack-mkl` |  |
+| `svd_values/n96/b1 [in_place]` | 0.794545 ± 0.0069794 (W 0.00213397) | 1.47851 ± 0.0015041 (W 0.00246238) | - | 🔵 faer-fork 1.86× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `triangular_solve/n32/b1` | 0.001443 ± 2.08167e-05 (W 1.87963e-05) | 0.001263 ± 1.58219e-05 (W 2.23674e-05) | - | 🔴 faer-fork 1.14× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `triangular_solve/n64/b1` | 0.003336 ± 1.1547e-05 (W 2.84464e-05) | 0.002935 ± 1.1547e-05 (W 2.59673e-05) | - | 🔴 faer-fork 1.14× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `triangular_solve/n96/b1` | 0.006071 ± 2.51661e-05 (W 3e-05) | 0.00533 ± 2.60832e-05 (W 3.34664e-05) | - | 🔴 faer-fork 1.14× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+
+## linalg-small, c64, f order, 8T (CPU 4-11)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `cholesky/n32/b1` | 0.00528 ± 4.58258e-05 (W 6.64251e-05) | 0.00531 ± 1e-05 (W 5.44261e-05) | 0.007073 ± 4.72582e-05 (W 8.12404e-05) | · | 🔵 faer-fork 1.34× faster than `lapack-mkl` | dispatch-dominated (row under 20 us) |
+| `cholesky/n32/b1 [in_place]` | 0.004268 ± 3.60555e-05 (W 4.36371e-05) | 0.004478 ± 4.39356e-05 (W 2.39625e-05) | - | · | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `cholesky/n64/b1` | 0.029596 ± 0.000183195 (W 0.000140428) | 0.030135 ± 0.000153819 (W 9.01288e-05) | 0.041456 ± 0.000337937 (W 0.0023617) | · | 🔵 faer-fork 1.40× faster than `lapack-mkl` |  |
+| `cholesky/n64/b1 [in_place]` | 0.02705 ± 0.000218351 (W 5.87988e-05) | 0.027861 ± 0.000145041 (W 7.60013e-05) | - | · | - | `*` one row has no measurement here |
+| `cholesky/n96/b1` | 0.078765 ± 0.000444858 (W 0.00023506) | 0.087491 ± 0.000466789 (W 0.00111967) | 0.120335 ± 0.000421792 (W 0.00197229) | 🔵 faer-fork 1.11× faster than `faer-upstream` | 🔵 faer-fork 1.53× faster than `lapack-mkl` |  |
+| `cholesky/n96/b1 [in_place]` | 0.070259 ± 0.000414066 (W 0.000129515) | 0.080661 ± 0.000200327 (W 0.000220385) | - | 🔵 faer-fork 1.15× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `eigh/n32/b1` | 0.137092 ± 0.000423986 (W 0.000297181) | 0.142296 ± 0.000184554 (W 0.000262862) | 0.148137 ± 0.000330246 (W 0.00207021) | · | 🔵 faer-fork 1.08× faster than `lapack-mkl` |  |
+| `eigh/n32/b1 [in_place]` | 0.136812 ± 0.000643502 (W 0.000269324) | 0.142325 ± 0.000790798 (W 0.00037135) | - | · | - | `*` one row has no measurement here |
+| `eigh/n64/b1` | 0.587672 ± 0.000986363 (W 0.00395611) | 0.618087 ± 0.000934634 (W 0.00245632) | 0.504048 ± 0.00349021 (W 0.00283327) | 🔵 faer-fork 1.05× faster than `faer-upstream` | 🔴 faer-fork 1.17× slower than `lapack-mkl` |  |
+| `eigh/n64/b1 [in_place]` | 0.561095 ± 0.000551415 (W 0.00216097) | 0.618127 ± 0.00152557 (W 0.00268166) | - | 🔵 faer-fork 1.10× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `eigh/n96/b1` | 1.32368 ± 0.00509164 (W 0.00298026) | 1.45116 ± 0.00964336 (W 0.00358845) | 0.984161 ± 0.00427771 (W 0.0107135) | 🔵 faer-fork 1.10× faster than `faer-upstream` | 🔴 faer-fork 1.34× slower than `lapack-mkl` |  |
+| `eigh/n96/b1 [in_place]` | 1.31961 ± 0.00117001 (W 0.00517634) | 1.44276 ± 0.00245247 (W 0.00334631) | - | 🔵 faer-fork 1.09× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n32/b1` | 0.018524 ± 0.000120554 (W 9.41807e-05) | 0.015929 ± 8.12835e-05 (W 0.00159349) | - | 🔴 faer-fork 1.16× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n32/b1 [in_place]` | 0.016821 ± 4.16333e-05 (W 0.000101529) | 0.013906 ± 0.000173494 (W 5.38173e-05) | - | 🔴 faer-fork 1.21× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n64/b1` | 0.102932 ± 0.00060288 (W 0.000570122) | 0.089987 ± 0.000128651 (W 0.00220883) | - | 🔴 faer-fork 1.14× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n64/b1 [in_place]` | 0.098293 ± 0.00102245 (W 0.000438014) | 0.085009 ± 0.000444108 (W 0.00198109) | - | 🔴 faer-fork 1.16× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n96/b1` | 0.295049 ± 0.00160604 (W 0.00305482) | 0.263995 ± 0.000556019 (W 0.00214524) | - | 🔴 faer-fork 1.12× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n96/b1 [in_place]` | 0.234837 ± 0.00190197 (W 0.00199055) | 0.266717 ± 0.00110964 (W 0.00180594) | - | 🔵 faer-fork 1.14× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `householder_apply/n32/b1 [block(basis=32,target=32)]` | 0.010991 ± 7.13933e-05 (W 0.000137678) | 0.027931 ± 7.54343e-05 (W 0.000118226) | - | 🔵 faer-fork 2.54× faster than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n32/b1 [sequence(basis=32,target=32)]` | 0.010981 ± 9.16515e-05 (W 6.47163e-05) | 0.028112 ± 0.000113227 (W 8.60657e-05) | - | 🔵 faer-fork 2.56× faster than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n64/b1 [block(basis=64,target=64)]` | 0.03801 ± 0.000286987 (W 0.000261848) | 0.061325 ± 0.000423786 (W 0.000392823) | - | 🔵 faer-fork 1.61× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `householder_apply/n64/b1 [sequence(basis=64,target=64)]` | 0.03814 ± 0.000148561 (W 0.000397014) | 0.060843 ± 0.000202322 (W 0.000408146) | - | 🔵 faer-fork 1.60× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `householder_apply/n96/b1 [block(basis=96,target=96)]` | 0.086852 ± 0.000781224 (W 0.000386439) | 0.148827 ± 0.000683352 (W 0.000234203) | - | 🔵 faer-fork 1.71× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `householder_apply/n96/b1 [sequence(basis=96,target=96)]` | 0.086732 ± 0.00037299 (W 0.00149515) | 0.148246 ± 0.000385389 (W 0.000668285) | - | 🔵 faer-fork 1.71× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `lu/n32/b1` | 0.012443 ± 6.30106e-05 (W 5.96682e-05) | 0.011932 ± 0.000167033 (W 7.1624e-05) | 0.01604 ± 4.12351e-05 (W 5.42798e-05) | · | 🔵 faer-fork 1.29× faster than `lapack-mkl` | dispatch-dominated (row under 20 us) |
+| `lu/n32/b1 [in_place]` | 0.010439 ± 0.000123843 (W 3.75007e-05) | 0.010269 ± 0.000130577 (W 3.96384e-05) | - | · | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n64/b1` | 0.059589 ± 5.65892e-05 (W 0.000301357) | 0.052869 ± 0.000417498 (W 0.000141118) | 0.079657 ± 0.000687849 (W 0.000262388) | 🔴 faer-fork 1.13× slower than `faer-upstream` | 🔵 faer-fork 1.34× faster than `lapack-mkl` |  |
+| `lu/n64/b1 [in_place]` | 0.052708 ± 9.32434e-05 (W 0.0001354) | 0.04803 ± 0.000507327 (W 0.00169332) | - | 🔴 faer-fork 1.10× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `lu/n96/b1` | 0.196811 ± 0.00170637 (W 0.00161486) | 0.141564 ± 0.000701841 (W 0.0016463) | 0.202347 ± 0.0004561 (W 0.00292646) | 🔴 faer-fork 1.39× slower than `faer-upstream` | · |  |
+| `lu/n96/b1 [in_place]` | 0.132216 ± 0.00051445 (W 0.00047897) | 0.130633 ± 0.00011544 (W 0.00106114) | - | · | - | `*` one row has no measurement here |
+| `qr/n32/b1` | 0.061535 ± 0.000582481 (W 0.000488058) | 0.089737 ± 0.000589023 (W 0.000692536) | - | 🔵 faer-fork 1.46× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/n64/b1` | 0.20918 ± 0.00174962 (W 0.00302449) | 0.381981 ± 0.0020318 (W 0.00271578) | - | 🔵 faer-fork 1.83× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/n96/b1` | 0.44461 ± 0.00253549 (W 0.00406608) | 0.780586 ± 0.00246255 (W 0.00423166) | - | 🔵 faer-fork 1.76× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr_factor/n32/b1` | 0.030437 ± 0.000348712 (W 0.000150556) | 0.055434 ± 0.000821849 (W 0.00090182) | 0.025968 ± 0.000339795 (W 9.55468e-05) | 🔵 faer-fork 1.82× faster than `faer-upstream` | 🔴 faer-fork 1.17× slower than `lapack-mkl` |  |
+| `qr_factor/n64/b1` | 0.111447 ± 0.00051571 (W 0.000537785) | 0.250317 ± 0.00269108 (W 0.00291627) | 0.149618 ± 0.000432133 (W 0.00255644) | 🔵 faer-fork 2.25× faster than `faer-upstream` | 🔵 faer-fork 1.34× faster than `lapack-mkl` |  |
+| `qr_factor/n96/b1` | 0.226111 ± 0.00100165 (W 0.00222916) | 0.490482 ± 0.00271237 (W 0.00265168) | 0.466821 ± 0.00339502 (W 0.00287822) | 🔵 faer-fork 2.17× faster than `faer-upstream` | 🔵 faer-fork 2.06× faster than `lapack-mkl` |  |
+| `solve/n32/b1` | 0.013806 ± 7.50555e-05 (W 6.46862e-05) | 0.013034 ± 6.08276e-06 (W 6.98155e-05) | 0.01599 ± 9.84395e-05 (W 5.63028e-05) | 🔴 faer-fork 1.06× slower than `faer-upstream` | 🔵 faer-fork 1.16× faster than `lapack-mkl` | dispatch-dominated (row under 20 us) |
+| `solve/n32/b1 [in_place]` | 0.011721 ± 5.62168e-05 (W 5.22494e-05) | 0.01092 ± 0.000111132 (W 6.44608e-05) | - | 🔴 faer-fork 1.07× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n64/b1` | 0.062384 ± 0.000230613 (W 0.000390916) | 0.054622 ± 2.41109e-05 (W 7.38932e-05) | 0.077264 ± 0.000525782 (W 0.00174981) | 🔴 faer-fork 1.14× slower than `faer-upstream` | 🔵 faer-fork 1.24× faster than `lapack-mkl` |  |
+| `solve/n64/b1 [in_place]` | 0.056624 ± 0.000617359 (W 0.00033849) | 0.050925 ± 0.00020204 (W 0.00268565) | - | 🔴 faer-fork 1.11× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `solve/n96/b1` | 0.19604 ± 0.00229655 (W 0.00251683) | 0.144981 ± 0.000440198 (W 0.000312706) | 0.194397 ± 0.000794602 (W 0.0014612) | 🔴 faer-fork 1.35× slower than `faer-upstream` | · |  |
+| `solve/n96/b1 [in_place]` | 0.131522 ± 0.000676318 (W 0.000580005) | 0.133679 ± 0.000236036 (W 0.00153343) | - | · | - | `*` one row has no measurement here |
+| `svd_thin/n32/b1` | 0.213558 ± 0.00213667 (W 0.00132435) | 0.233244 ± 0.0123937 (W 0.00185408) | 0.254123 ± 0.00065523 (W 0.00287875) | 🔵 faer-fork 1.09× faster than `faer-upstream` | 🔵 faer-fork 1.19× faster than `lapack-mkl` | `!` between-start range over 5% |
+| `svd_thin/n32/b1 [in_place]` | 0.212641 ± 0.00124314 (W 0.00183897) | 0.232072 ± 0.00474992 (W 0.00198103) | - | 🔵 faer-fork 1.09× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/n64/b1` | 1.02533 ± 0.00114133 (W 0.00266339) | 1.18377 ± 0.00256455 (W 0.00152531) | 0.969555 ± 0.00326606 (W 0.00486548) | 🔵 faer-fork 1.15× faster than `faer-upstream` | 🔴 faer-fork 1.06× slower than `lapack-mkl` |  |
+| `svd_thin/n64/b1 [in_place]` | 1.02615 ± 0.00144131 (W 0.00246519) | 1.18691 ± 0.000774048 (W 0.00402166) | - | 🔵 faer-fork 1.16× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/n96/b1` | 2.4094 ± 0.00908349 (W 0.00581943) | 2.7654 ± 0.00427177 (W 0.00814659) | 2.31726 ± 0.0136467 (W 0.00467184) | 🔵 faer-fork 1.15× faster than `faer-upstream` | · |  |
+| `svd_thin/n96/b1 [in_place]` | 2.42653 ± 0.00678901 (W 0.00828073) | 2.76578 ± 0.00607857 (W 0.00910991) | - | 🔵 faer-fork 1.14× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n32/b1` | 0.085688 ± 0.000250728 (W 0.000189447) | 0.160049 ± 0.000478286 (W 0.00248315) | 0.097131 ± 0.00141077 (W 0.00241521) | 🔵 faer-fork 1.87× faster than `faer-upstream` | 🔵 faer-fork 1.13× faster than `lapack-mkl` |  |
+| `svd_values/n32/b1 [in_place]` | 0.08545 ± 9.65004e-05 (W 0.000142198) | 0.159133 ± 0.000738325 (W 0.00251921) | - | 🔵 faer-fork 1.86× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n64/b1` | 0.357506 ± 0.00238689 (W 0.00179153) | 0.62726 ± 0.00104865 (W 0.00397146) | 0.466208 ± 0.00197222 (W 0.00270373) | 🔵 faer-fork 1.75× faster than `faer-upstream` | 🔵 faer-fork 1.30× faster than `lapack-mkl` |  |
+| `svd_values/n64/b1 [in_place]` | 0.357027 ± 0.0010475 (W 0.00142715) | 0.623427 ± 0.00393747 (W 0.0027892) | - | 🔵 faer-fork 1.75× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n96/b1` | 0.828212 ± 0.00383036 (W 0.003038) | 1.48407 ± 0.00180783 (W 0.00277217) | 1.30664 ± 0.00570879 (W 0.00246667) | 🔵 faer-fork 1.79× faster than `faer-upstream` | 🔵 faer-fork 1.58× faster than `lapack-mkl` |  |
+| `svd_values/n96/b1 [in_place]` | 0.82595 ± 0.00240814 (W 0.0044856) | 1.48206 ± 0.00215654 (W 0.00499873) | - | 🔵 faer-fork 1.79× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `triangular_solve/n32/b1` | 0.001433 ± 2.64575e-05 (W 3.18795e-05) | 0.001252 ± 2e-05 (W 2.54951e-05) | - | 🔴 faer-fork 1.14× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `triangular_solve/n64/b1` | 0.003336 ± 1.52753e-05 (W 2.54794e-05) | 0.002905 ± 2.04206e-05 (W 1.6288e-05) | - | 🔴 faer-fork 1.15× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `triangular_solve/n96/b1` | 0.006001 ± 0.000111132 (W 3.56413e-05) | 0.00533 ± 1e-05 (W 2.91548e-05) | - | 🔴 faer-fork 1.13× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+
+Not applicable to this population's shapes and reported as skipped: `eig/32`, `eig/64`, `eig/96`, `full_piv_lu/32`, `full_piv_lu/64`, `full_piv_lu/96`, `householder_apply/32`, `householder_apply/64`, `householder_apply/96`, `qr/32`, `qr/64`, `qr/96`, `triangular_solve/32`, `triangular_solve/64`, `triangular_solve/96`, `upgrade_factor/32`, `upgrade_factor/64`, `upgrade_factor/96`.
+
+## linalg-mid, f64, c order, 1T (CPU 4)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `cholesky/n128/b1` | 0.070259 ± 0.00248002 (W 0.000529619) | 0.070361 ± 0.0022971 (W 0.000462213) | 0.110043 ± 0.000541933 (W 0.0013157) | · | 🔵 faer-fork 1.57× faster than `lapack-mkl` | `!` between-start range over 5% |
+| `cholesky/n128/b1 [in_place]` | 0.199903 ± 0.00116424 (W 0.00168491) | 0.295925 ± 0.00124218 (W 0.00203802) | - | 🔵 faer-fork 1.48× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `cholesky/n256/b1` | 0.392583 ± 0.00803495 (W 0.00341797) | 0.391481 ± 0.00255718 (W 0.00213312) | 0.610455 ± 0.00296019 (W 0.00711108) | · | 🔵 faer-fork 1.55× faster than `lapack-mkl` |  |
+| `cholesky/n256/b1 [in_place]` | 0.742823 ± 0.00312878 (W 0.00461593) | 0.819396 ± 0.00145466 (W 0.00247438) | - | 🔵 faer-fork 1.10× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `cholesky/n512/b1` | 2.52056 ± 0.0404214 (W 0.0108503) | 2.51724 ± 0.0111621 (W 0.0129068) | 3.83059 ± 0.0349862 (W 0.0174332) | · | 🔵 faer-fork 1.52× faster than `lapack-mkl` |  |
+| `cholesky/n512/b1 [in_place]` | 3.86198 ± 0.0171408 (W 0.00809552) | 3.8091 ± 0.00257865 (W 0.00695246) | - | · | - | `*` one row has no measurement here |
+| `eigh/n128/b1` | 2.31236 ± 0.000458586 (W 0.0048754) | 2.24664 ± 0.00579032 (W 0.00419055) | 1.83399 ± 0.00362684 (W 0.0048599) | · | 🔴 faer-fork 1.26× slower than `lapack-mkl` |  |
+| `eigh/n128/b1 [in_place]` | 2.31375 ± 0.0118443 (W 0.00470559) | 2.24123 ± 0.00278256 (W 0.00418127) | - | · | - | `*` one row has no measurement here |
+| `eigh/n256/b1` | 10.0396 ± 0.0482545 (W 0.0146359) | 9.74201 ± 0.03134 (W 0.00685395) | 9.97968 ± 0.0136314 (W 0.0140618) | · | · |  |
+| `eigh/n256/b1 [in_place]` | 10.0677 ± 0.0257348 (W 0.0550391) | 9.81333 ± 0.0505505 (W 0.0211047) | - | · | - | `*` one row has no measurement here |
+| `eigh/n512/b1` | 50.2258 ± 0.208094 (W 0.111421) | 48.5084 ± 0.212447 (W 0.0438409) | 60.8049 ± 0.104259 (W 0.151666) | · | 🔵 faer-fork 1.21× faster than `lapack-mkl` |  |
+| `eigh/n512/b1 [in_place]` | 49.7934 ± 0.0842252 (W 0.0422403) | 48.4127 ± 0.483731 (W 0.0588789) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1` | 0.313834 ± 0.00264946 (W 0.00264492) | 0.310852 ± 0.0027896 (W 0.003303) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1 [in_place]` | 0.338821 ± 0.00200261 (W 0.0026429) | 0.317753 ± 0.00199615 (W 0.00297305) | - | 🔴 faer-fork 1.07× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1` | 2.95021 ± 0.00907418 (W 0.0132589) | 3.00287 ± 0.017767 (W 0.00665326) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1 [in_place]` | 2.80736 ± 0.00836078 (W 0.00871222) | 3.13376 ± 0.0165625 (W 0.0038689) | - | 🔵 faer-fork 1.12× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1` | 22.1605 ± 0.111326 (W 0.0485537) | 22.7485 ± 0.164529 (W 0.0579842) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1 [in_place]` | 21.2946 ± 0.106952 (W 0.109042) | 24.6826 ± 0.101109 (W 0.124978) | - | 🔵 faer-fork 1.16× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [block(basis=128,target=128)]` | 0.260621 ± 0.00067985 (W 0.00213683) | 0.258272 ± 0.000248687 (W 0.00199667) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [sequence(basis=128,target=128)]` | 0.258913 ± 0.000596853 (W 0.00178385) | 0.258572 ± 0.000648155 (W 0.00179784) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n256/b1 [block(basis=256,target=256)]` | 1.90575 ± 0.00627243 (W 0.00422289) | 1.90935 ± 0.0202092 (W 0.00378029) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n256/b1 [sequence(basis=256,target=256)]` | 1.91539 ± 0.0184971 (W 0.00761787) | 1.90437 ± 0.00491653 (W 0.00475787) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n512/b1 [block(basis=512,target=512)]` | 15.9888 ± 0.0927918 (W 0.0347462) | 15.9211 ± 0.0175901 (W 0.0378905) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n512/b1 [sequence(basis=512,target=512)]` | 15.9717 ± 0.0231791 (W 0.0475405) | 15.9502 ± 0.00563817 (W 0.0354738) | - | · | - | `*` one row has no measurement here |
+| `lu/n128/b1` | 0.133659 ± 0.00171876 (W 0.000568489) | 0.135089 ± 0.00117886 (W 0.00111552) | 0.182416 ± 0.00100512 (W 0.00160633) | · | 🔵 faer-fork 1.36× faster than `lapack-mkl` |  |
+| `lu/n128/b1 [in_place]` | 0.160555 ± 0.000523513 (W 0.0016876) | 0.264763 ± 0.00268648 (W 0.00260828) | - | 🔵 faer-fork 1.65× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `lu/n256/b1` | 1.01599 ± 0.00366189 (W 0.00375267) | 1.076 ± 0.00359919 (W 0.00404397) | 0.946272 ± 0.00277633 (W 0.00451365) | 🔵 faer-fork 1.06× faster than `faer-upstream` | 🔴 faer-fork 1.07× slower than `lapack-mkl` |  |
+| `lu/n256/b1 [in_place]` | 0.888215 ± 0.00199484 (W 0.00439678) | 2.55058 ± 0.00516478 (W 0.00617989) | - | 🔵 faer-fork 2.87× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `lu/n512/b1` | 6.77546 ± 0.00605199 (W 0.0107288) | 7.3851 ± 0.0549778 (W 0.0235311) | 5.89233 ± 0.136251 (W 0.0306602) | 🔵 faer-fork 1.09× faster than `faer-upstream` | 🔴 faer-fork 1.15× slower than `lapack-mkl` |  |
+| `lu/n512/b1 [in_place]` | 5.98519 ± 0.0233275 (W 0.0215311) | 20.2656 ± 0.0970807 (W 0.0401452) | - | 🔵 faer-fork 3.39× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/n128/b1` | 0.557989 ± 0.00276935 (W 0.00206176) | 0.595748 ± 0.00128609 (W 0.00439262) | - | 🔵 faer-fork 1.07× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/n256/b1` | 3.16991 ± 0.00809697 (W 0.00748143) | 3.35067 ± 0.00742422 (W 0.00756964) | - | 🔵 faer-fork 1.06× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/n512/b1` | 20.4666 ± 0.175346 (W 0.070907) | 21.3225 ± 0.211622 (W 0.0422617) | - | · | - | `*` one row has no measurement here |
+| `qr_factor/n128/b1` | 0.305133 ± 0.00197391 (W 0.00215039) | 0.532772 ± 0.00668897 (W 0.00234675) | 0.366104 ± 0.00104621 (W 0.00239365) | 🔵 faer-fork 1.75× faster than `faer-upstream` | 🔵 faer-fork 1.20× faster than `lapack-mkl` |  |
+| `qr_factor/n256/b1` | 1.50999 ± 0.00234608 (W 0.00678813) | 2.8852 ± 0.00362078 (W 0.00632748) | 2.05678 ± 0.00594075 (W 0.00320223) | 🔵 faer-fork 1.91× faster than `faer-upstream` | 🔵 faer-fork 1.36× faster than `lapack-mkl` |  |
+| `qr_factor/n512/b1` | 8.55206 ± 0.051155 (W 0.0229714) | 17.5704 ± 0.0311145 (W 0.0280925) | 14.181 ± 0.0292637 (W 0.0328501) | 🔵 faer-fork 2.05× faster than `faer-upstream` | 🔵 faer-fork 1.66× faster than `lapack-mkl` |  |
+| `solve/n128/b1` | 0.131987 ± 0.00117758 (W 0.000339251) | 0.136224 ± 0.000863716 (W 0.00238951) | 0.178714 ± 0.000980936 (W 0.0021599) | · | 🔵 faer-fork 1.35× faster than `lapack-mkl` |  |
+| `solve/n128/b1 [in_place]` | 0.160459 ± 0.000591676 (W 0.0021297) | 0.188778 ± 0.00263916 (W 0.00430401) | - | 🔵 faer-fork 1.18× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `solve/n256/b1` | 0.757974 ± 0.00493187 (W 0.00295629) | 0.804448 ± 0.00316554 (W 0.00345892) | 0.950894 ± 0.00196034 (W 0.00244764) | 🔵 faer-fork 1.06× faster than `faer-upstream` | 🔵 faer-fork 1.25× faster than `lapack-mkl` |  |
+| `solve/n256/b1 [in_place]` | 0.848844 ± 0.00427655 (W 0.0032193) | 1.88818 ± 0.0166033 (W 0.0074998) | - | 🔵 faer-fork 2.22× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `solve/n512/b1` | 5.17066 ± 0.0277459 (W 0.0187272) | 5.80517 ± 0.0489519 (W 0.0149565) | 5.85916 ± 0.0476273 (W 0.0180378) | 🔵 faer-fork 1.12× faster than `faer-upstream` | 🔵 faer-fork 1.13× faster than `lapack-mkl` |  |
+| `solve/n512/b1 [in_place]` | 5.51923 ± 0.0313087 (W 0.0275813) | 13.7932 ± 0.0292783 (W 0.0323552) | - | 🔵 faer-fork 2.50× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/n128/b1` | 3.37474 ± 0.00500016 (W 0.0158496) | 3.67024 ± 0.0034916 (W 0.00360105) | 3.2811 ± 0.0118383 (W 0.00773747) | 🔵 faer-fork 1.09× faster than `faer-upstream` | · |  |
+| `svd_thin/n128/b1 [in_place]` | 3.36826 ± 0.0036262 (W 0.00288341) | 3.66775 ± 0.00699367 (W 0.00687506) | - | 🔵 faer-fork 1.09× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/n256/b1` | 16.8239 ± 0.00764616 (W 0.01855) | 18.3413 ± 0.0862976 (W 0.0102769) | 18.4505 ± 0.0524655 (W 0.0429033) | 🔵 faer-fork 1.09× faster than `faer-upstream` | 🔵 faer-fork 1.10× faster than `lapack-mkl` |  |
+| `svd_thin/n256/b1 [in_place]` | 16.7974 ± 0.0309922 (W 0.0206999) | 18.3852 ± 0.051987 (W 0.0309793) | - | 🔵 faer-fork 1.09× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/n512/b1` | 94.5488 ± 0.268977 (W 0.0808008) | 105.336 ± 0.654003 (W 0.131958) | 121.372 ± 1.04019 (W 0.475048) | 🔵 faer-fork 1.11× faster than `faer-upstream` | 🔵 faer-fork 1.28× faster than `lapack-mkl` |  |
+| `svd_thin/n512/b1 [in_place]` | 94.9718 ± 0.343655 (W 0.131802) | 105.423 ± 0.293679 (W 0.128682) | - | 🔵 faer-fork 1.11× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n128/b1` | 1.03621 ± 0.00242034 (W 0.0014348) | 2.67976 ± 0.00720619 (W 0.00633217) | 1.14907 ± 0.00238183 (W 0.00542393) | 🔵 faer-fork 2.59× faster than `faer-upstream` | 🔵 faer-fork 1.11× faster than `lapack-mkl` |  |
+| `svd_values/n128/b1 [in_place]` | 1.04 ± 0.00203051 (W 0.00206232) | 2.69311 ± 0.00618609 (W 0.00615252) | - | 🔵 faer-fork 2.59× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n256/b1` | 6.34184 ± 0.00772089 (W 0.00515138) | 12.3896 ± 0.025001 (W 0.0153443) | 6.82037 ± 0.0120316 (W 0.0132552) | 🔵 faer-fork 1.95× faster than `faer-upstream` | 🔵 faer-fork 1.08× faster than `lapack-mkl` |  |
+| `svd_values/n256/b1 [in_place]` | 6.3263 ± 0.00641546 (W 0.00864235) | 12.4239 ± 0.021334 (W 0.0229818) | - | 🔵 faer-fork 1.96× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n512/b1` | 41.2359 ± 0.128642 (W 0.0551716) | 66.4602 ± 0.214816 (W 0.0729417) | 48.0035 ± 0.372785 (W 0.138831) | 🔵 faer-fork 1.61× faster than `faer-upstream` | 🔵 faer-fork 1.16× faster than `lapack-mkl` |  |
+| `svd_values/n512/b1 [in_place]` | 41.1925 ± 0.172031 (W 0.0493918) | 66.0741 ± 0.204856 (W 0.0416709) | - | 🔵 faer-fork 1.60× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `triangular_solve/n128/b1` | 0.004308 ± 5.85947e-05 (W 5.74456e-05) | 0.004027 ± 3.27159e-05 (W 3.86044e-05) | - | 🔴 faer-fork 1.07× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `triangular_solve/n256/b1` | 0.012803 ± 0.000246024 (W 0.000123139) | 0.012513 ± 0.000225589 (W 0.000115888) | - | · | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `triangular_solve/n512/b1` | 0.04349 ± 0.000201785 (W 0.000336542) | 0.041987 ± 0.000121618 (W 0.000307446) | - | · | - | `*` one row has no measurement here |
+
+## linalg-mid, f64, c order, 4T (CPU 4-7)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `cholesky/n128/b1` | 0.064892 ± 0.00274761 (W 0.00166434) | 0.082162 ± 0.000872177 (W 0.00156263) | 0.111128 ± 0.00101287 (W 0.00167289) | 🔵 faer-fork 1.27× faster than `faer-upstream` | 🔵 faer-fork 1.71× faster than `lapack-mkl` | `!` between-start range over 5% |
+| `cholesky/n128/b1 [in_place]` | 0.191717 ± 0.00137541 (W 0.00211269) | 0.202208 ± 0.0528417 (W 0.0528884) | - | · | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `cholesky/n256/b1` | 0.284771 ± 0.00266875 (W 0.00200686) | 0.365922 ± 0.00346937 (W 0.00981729) | 0.379268 ± 0.00156055 (W 0.00605599) | 🔵 faer-fork 1.28× faster than `faer-upstream` | 🔵 faer-fork 1.33× faster than `lapack-mkl` |  |
+| `cholesky/n256/b1 [in_place]` | 0.636828 ± 0.00317249 (W 0.00379914) | 0.608274 ± 0.0799776 (W 0.0824131) | - | · | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `cholesky/n512/b1` | 1.3966 ± 0.00979109 (W 0.00476097) | 1.58065 ± 0.0239807 (W 0.0216906) | 1.80568 ± 0.00522713 (W 0.016599) | 🔵 faer-fork 1.13× faster than `faer-upstream` | 🔵 faer-fork 1.29× faster than `lapack-mkl` |  |
+| `cholesky/n512/b1 [in_place]` | 2.12744 ± 0.0039935 (W 0.00738052) | 2.14861 ± 0.105635 (W 0.155055) | - | · | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `eigh/n128/b1` | 2.18595 ± 0.00245386 (W 0.00220181) | 2.17197 ± 0.00450603 (W 0.00337806) | 1.0601 ± 0.00786088 (W 0.00334323) | · | 🔴 faer-fork 2.06× slower than `lapack-mkl` |  |
+| `eigh/n128/b1 [in_place]` | 2.1784 ± 0.00726138 (W 0.00519025) | 2.16247 ± 0.0088956 (W 0.00515038) | - | · | - | `*` one row has no measurement here |
+| `eigh/n256/b1` | 6.33032 ± 0.00851261 (W 0.00658141) | 6.79291 ± 0.0232867 (W 0.0138475) | 4.75347 ± 0.00885403 (W 0.010555) | 🔵 faer-fork 1.07× faster than `faer-upstream` | 🔴 faer-fork 1.33× slower than `lapack-mkl` |  |
+| `eigh/n256/b1 [in_place]` | 6.33337 ± 0.0153743 (W 0.00799443) | 6.67824 ± 0.00582662 (W 0.00876055) | - | 🔵 faer-fork 1.05× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `eigh/n512/b1` | 23.8061 ± 0.0693383 (W 0.0222742) | 24.8109 ± 0.0128249 (W 0.0226122) | 21.6444 ± 0.0236822 (W 0.0925777) | · | 🔴 faer-fork 1.10× slower than `lapack-mkl` |  |
+| `eigh/n512/b1 [in_place]` | 23.744 ± 0.0593962 (W 0.0292585) | 24.8185 ± 0.0454798 (W 0.0210152) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1` | 0.337856 ± 0.00180906 (W 0.00531358) | 0.312292 ± 0.000921534 (W 0.00180211) | - | 🔴 faer-fork 1.08× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1 [in_place]` | 0.329173 ± 0.00390006 (W 0.00513417) | 0.317418 ± 0.000962834 (W 0.00279708) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1` | 2.28175 ± 0.0161337 (W 0.00682285) | 2.74533 ± 0.0209378 (W 0.00658407) | - | 🔵 faer-fork 1.20× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1 [in_place]` | 1.96076 ± 0.0201884 (W 0.00853313) | 3.13932 ± 0.00299764 (W 0.00862168) | - | 🔵 faer-fork 1.60× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1` | 13.0869 ± 0.0607973 (W 0.0199563) | 15.3543 ± 0.0580003 (W 0.0222214) | - | 🔵 faer-fork 1.17× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1 [in_place]` | 11.39 ± 0.0157092 (W 0.0189149) | 17.7632 ± 0.030716 (W 0.0355848) | - | 🔵 faer-fork 1.56× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [block(basis=128,target=128)]` | 0.084027 ± 0.000799336 (W 0.000793382) | 0.081181 ± 0.000273332 (W 0.000576761) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [sequence(basis=128,target=128)]` | 0.082935 ± 0.000165681 (W 0.00141674) | 0.080639 ± 0.000490859 (W 0.000914423) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n256/b1 [block(basis=256,target=256)]` | 0.518658 ± 0.00058976 (W 0.00246014) | 0.516464 ± 0.00245813 (W 0.00306146) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n256/b1 [sequence(basis=256,target=256)]` | 0.518968 ± 0.00163451 (W 0.00236695) | 0.514514 ± 0.000505957 (W 0.00213367) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n512/b1 [block(basis=512,target=512)]` | 4.16793 ± 0.00266571 (W 0.0125855) | 4.08869 ± 0.021177 (W 0.00705095) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n512/b1 [sequence(basis=512,target=512)]` | 4.14014 ± 0.0231811 (W 0.0126737) | 4.08675 ± 0.00441195 (W 0.00738762) | - | · | - | `*` one row has no measurement here |
+| `lu/n128/b1` | 0.133587 ± 0.00326297 (W 0.00140773) | 0.151993 ± 0.000705654 (W 0.00239799) | 0.157763 ± 0.000848231 (W 0.00175151) | 🔵 faer-fork 1.14× faster than `faer-upstream` | 🔵 faer-fork 1.18× faster than `lapack-mkl` |  |
+| `lu/n128/b1 [in_place]` | 0.120745 ± 0.00177195 (W 0.000839809) | 0.277577 ± 0.00195061 (W 0.00410448) | - | 🔵 faer-fork 2.30× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `lu/n256/b1` | 0.836948 ± 0.000735001 (W 0.00359929) | 0.780957 ± 0.00417416 (W 0.00827122) | 0.339303 ± 0.00264156 (W 0.00310195) | 🔴 faer-fork 1.07× slower than `faer-upstream` | 🔴 faer-fork 2.47× slower than `lapack-mkl` |  |
+| `lu/n256/b1 [in_place]` | 0.541723 ± 0.00405877 (W 0.00500223) | 2.30341 ± 0.0100842 (W 0.0552184) | - | 🔵 faer-fork 4.25× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `lu/n512/b1` | 4.39271 ± 0.0314107 (W 0.0114083) | 4.06332 ± 0.0164845 (W 0.0589333) | 1.64992 ± 0.0148596 (W 0.00412864) | 🔴 faer-fork 1.08× slower than `faer-upstream` | 🔴 faer-fork 2.66× slower than `lapack-mkl` |  |
+| `lu/n512/b1 [in_place]` | 2.73362 ± 0.0163098 (W 0.0219902) | 13.8804 ± 0.633948 (W 0.209018) | - | 🔵 faer-fork 5.08× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr/n128/b1` | 0.416392 ± 0.00199629 (W 0.00264852) | 0.652499 ± 0.00151381 (W 0.00538028) | - | 🔵 faer-fork 1.57× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/n256/b1` | 1.56716 ± 0.00913702 (W 0.0069726) | 2.33963 ± 0.00676543 (W 0.010148) | - | 🔵 faer-fork 1.49× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/n512/b1` | 8.34499 ± 0.0487658 (W 0.0210707) | 9.76764 ± 0.339131 (W 0.0159463) | - | 🔵 faer-fork 1.17× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr_factor/n128/b1` | 0.219569 ± 0.00220703 (W 0.00203173) | 0.729949 ± 0.00379217 (W 0.00539844) | 0.193689 ± 0.0013397 (W 0.00281837) | 🔵 faer-fork 3.32× faster than `faer-upstream` | 🔴 faer-fork 1.13× slower than `lapack-mkl` |  |
+| `qr_factor/n256/b1` | 0.653436 ± 0.00207828 (W 0.00303025) | 3.11436 ± 0.0181054 (W 0.00970897) | 0.652105 ± 0.00176793 (W 0.00275594) | 🔵 faer-fork 4.77× faster than `faer-upstream` | · |  |
+| `qr_factor/n512/b1` | 3.24543 ± 0.0166479 (W 0.00763583) | 16.5927 ± 0.0845162 (W 0.0881091) | 3.77213 ± 0.0339106 (W 0.00977915) | 🔵 faer-fork 5.11× faster than `faer-upstream` | 🔵 faer-fork 1.16× faster than `lapack-mkl` |  |
+| `solve/n128/b1` | 0.173103 ± 0.000448237 (W 0.00092517) | 0.147114 ± 0.00102373 (W 0.00357722) | 0.15555 ± 0.000270448 (W 0.00171476) | 🔴 faer-fork 1.18× slower than `faer-upstream` | 🔴 faer-fork 1.11× slower than `lapack-mkl` |  |
+| `solve/n128/b1 [in_place]` | 0.121575 ± 0.00124103 (W 0.001109) | 0.214668 ± 0.00372825 (W 0.0035131) | - | 🔵 faer-fork 1.77× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `solve/n256/b1` | 0.570805 ± 0.00470537 (W 0.00287862) | 0.727938 ± 0.00848378 (W 0.00370147) | 0.330215 ± 0.00261959 (W 0.00271013) | 🔵 faer-fork 1.28× faster than `faer-upstream` | 🔴 faer-fork 1.73× slower than `lapack-mkl` |  |
+| `solve/n256/b1 [in_place]` | 0.486027 ± 0.00280202 (W 0.0027054) | 1.64513 ± 0.0165333 (W 0.0297515) | - | 🔵 faer-fork 3.38× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `solve/n512/b1` | 2.75551 ± 0.0195619 (W 0.0129324) | 3.73273 ± 0.00742573 (W 0.0893307) | 1.66127 ± 0.00923003 (W 0.00827899) | 🔵 faer-fork 1.35× faster than `faer-upstream` | 🔴 faer-fork 1.66× slower than `lapack-mkl` |  |
+| `solve/n512/b1 [in_place]` | 2.35498 ± 0.00447556 (W 0.00700188) | 9.7014 ± 0.0762502 (W 0.265598) | - | 🔵 faer-fork 4.12× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/n128/b1` | 2.48603 ± 0.00313 (W 0.00433403) | 2.80704 ± 0.00507813 (W 0.0101244) | 2.50523 ± 0.00929702 (W 0.0153967) | 🔵 faer-fork 1.13× faster than `faer-upstream` | · |  |
+| `svd_thin/n128/b1 [in_place]` | 2.47443 ± 0.00297956 (W 0.003288) | 2.80395 ± 0.00969868 (W 0.0147736) | - | 🔵 faer-fork 1.13× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/n256/b1` | 10.3225 ± 0.0115244 (W 0.0170296) | 13.1971 ± 0.00365277 (W 0.014496) | 12.7752 ± 0.0149011 (W 0.0350911) | 🔵 faer-fork 1.28× faster than `faer-upstream` | 🔵 faer-fork 1.24× faster than `lapack-mkl` |  |
+| `svd_thin/n256/b1 [in_place]` | 10.2832 ± 0.0193158 (W 0.0126465) | 13.1105 ± 0.0160141 (W 0.0301648) | - | 🔵 faer-fork 1.27× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/n512/b1` | 41.2705 ± 0.0501826 (W 0.0320011) | 55.6816 ± 0.581974 (W 0.592698) | 60.231 ± 0.0466392 (W 0.109187) | 🔵 faer-fork 1.35× faster than `faer-upstream` | 🔵 faer-fork 1.46× faster than `lapack-mkl` |  |
+| `svd_thin/n512/b1 [in_place]` | 40.9959 ± 0.0550392 (W 0.0415157) | 55.4883 ± 0.309674 (W 0.358134) | - | 🔵 faer-fork 1.35× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n128/b1` | 1.07657 ± 0.00388203 (W 0.00390856) | 2.1851 ± 0.00295914 (W 0.00354945) | 1.09225 ± 0.00116678 (W 0.00216282) | 🔵 faer-fork 2.03× faster than `faer-upstream` | · |  |
+| `svd_values/n128/b1 [in_place]` | 1.07881 ± 0.00240579 (W 0.00238533) | 2.18196 ± 0.0057032 (W 0.00617328) | - | 🔵 faer-fork 2.02× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n256/b1` | 5.11426 ± 0.0101695 (W 0.0109909) | 10.511 ± 0.0277376 (W 0.0210072) | 5.98721 ± 0.00180117 (W 0.00815982) | 🔵 faer-fork 2.06× faster than `faer-upstream` | 🔵 faer-fork 1.17× faster than `lapack-mkl` |  |
+| `svd_values/n256/b1 [in_place]` | 5.08929 ± 0.0107062 (W 0.0100997) | 10.4599 ± 0.0113009 (W 0.0234328) | - | 🔵 faer-fork 2.06× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n512/b1` | 22.7818 ± 0.103721 (W 0.0366597) | 42.0162 ± 0.0877475 (W 0.056768) | 25.4311 ± 0.0266543 (W 0.020867) | 🔵 faer-fork 1.84× faster than `faer-upstream` | 🔵 faer-fork 1.12× faster than `lapack-mkl` |  |
+| `svd_values/n512/b1 [in_place]` | 22.6669 ± 0.141292 (W 0.391588) | 41.8041 ± 0.0631977 (W 0.0670534) | - | 🔵 faer-fork 1.84× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `triangular_solve/n128/b1` | 0.005169 ± 4.39356e-05 (W 3.14213e-05) | 0.004057 ± 4.6694e-05 (W 4.90744e-05) | - | 🔴 faer-fork 1.27× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `triangular_solve/n256/b1` | 0.013065 ± 0.000122748 (W 8.60012e-05) | 0.012293 ± 0.000210832 (W 5.52014e-05) | - | 🔴 faer-fork 1.06× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `triangular_solve/n512/b1` | 0.031819 ± 0.000327034 (W 0.000214313) | 0.031429 ± 0.000229566 (W 0.000377346) | - | · | - | `*` one row has no measurement here |
+
+## linalg-mid, f64, c order, 8T (CPU 4-11)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `cholesky/n128/b1` | 0.066053 ± 0.000748346 (W 0.000693831) | 0.069229 ± 0.00300171 (W 0.00172661) | 0.110005 ± 0.00123837 (W 0.000421188) | · | 🔵 faer-fork 1.67× faster than `lapack-mkl` | `!` between-start range over 5% |
+| `cholesky/n128/b1 [in_place]` | 0.190174 ± 0.00160517 (W 0.00101101) | 0.111979 ± 0.000793355 (W 0.00175008) | - | 🔴 faer-fork 1.70× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `cholesky/n256/b1` | 0.265254 ± 0.00542378 (W 0.00263517) | 0.352067 ± 0.00307631 (W 0.0206961) | 0.335563 ± 0.00121405 (W 0.004611) | 🔵 faer-fork 1.33× faster than `faer-upstream` | 🔵 faer-fork 1.27× faster than `lapack-mkl` |  |
+| `cholesky/n256/b1 [in_place]` | 0.59517 ± 0.00553044 (W 0.00324358) | 0.569931 ± 0.00405303 (W 0.0234877) | - | · | - | `*` one row has no measurement here |
+| `cholesky/n512/b1` | 1.25295 ± 0.001436 (W 0.00418356) | 1.45269 ± 0.0254068 (W 0.0157196) | 1.32351 ± 0.0060626 (W 0.0138498) | 🔵 faer-fork 1.16× faster than `faer-upstream` | 🔵 faer-fork 1.06× faster than `lapack-mkl` |  |
+| `cholesky/n512/b1 [in_place]` | 1.90731 ± 0.0101512 (W 0.00427332) | 1.956 ± 0.00618207 (W 0.0531739) | - | · | - | `*` one row has no measurement here |
+| `eigh/n128/b1` | 2.18901 ± 0.0103294 (W 0.00337852) | 2.16829 ± 0.00187808 (W 0.00280553) | 1.00118 ± 0.00222553 (W 0.0030137) | · | 🔴 faer-fork 2.19× slower than `lapack-mkl` |  |
+| `eigh/n128/b1 [in_place]` | 2.18531 ± 0.0015401 (W 0.00450219) | 2.168 ± 0.00447241 (W 0.00398665) | - | · | - | `*` one row has no measurement here |
+| `eigh/n256/b1` | 6.17296 ± 0.0321433 (W 0.0128879) | 6.71658 ± 0.0399739 (W 0.0139358) | 3.9326 ± 0.0117949 (W 0.00884574) | 🔵 faer-fork 1.09× faster than `faer-upstream` | 🔴 faer-fork 1.57× slower than `lapack-mkl` |  |
+| `eigh/n256/b1 [in_place]` | 6.14787 ± 0.014224 (W 0.0112229) | 6.68318 ± 0.0128413 (W 0.030595) | - | 🔵 faer-fork 1.09× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `eigh/n512/b1` | 21.5495 ± 0.0544522 (W 0.0217942) | 23.524 ± 0.0890347 (W 0.0695159) | 14.8075 ± 0.0181649 (W 0.0339675) | 🔵 faer-fork 1.09× faster than `faer-upstream` | 🔴 faer-fork 1.46× slower than `lapack-mkl` |  |
+| `eigh/n512/b1 [in_place]` | 21.4212 ± 0.0374135 (W 0.018816) | 23.4522 ± 0.0399785 (W 0.0382955) | - | 🔵 faer-fork 1.09× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1` | 0.347938 ± 0.00125465 (W 0.00347352) | 0.312784 ± 0.00111867 (W 0.00311634) | - | 🔴 faer-fork 1.11× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1 [in_place]` | 0.332628 ± 0.00174614 (W 0.00330413) | 0.317301 ± 0.00159204 (W 0.00319826) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1` | 2.21495 ± 0.00432677 (W 0.0081362) | 2.77977 ± 0.0110032 (W 0.0115733) | - | 🔵 faer-fork 1.26× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1 [in_place]` | 1.87435 ± 0.00963645 (W 0.0122762) | 3.14338 ± 0.00971192 (W 0.0109972) | - | 🔵 faer-fork 1.68× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1` | 11.8685 ± 0.0256006 (W 0.0106719) | 14.3886 ± 0.0276548 (W 0.0175128) | - | 🔵 faer-fork 1.21× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1 [in_place]` | 10.1514 ± 0.0416589 (W 0.0235674) | 16.6817 ± 0.183077 (W 0.0159957) | - | 🔵 faer-fork 1.64× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [block(basis=128,target=128)]` | 0.058068 ± 0.000486694 (W 0.00106508) | 0.099715 ± 0.00197727 (W 0.00257537) | - | 🔵 faer-fork 1.72× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [sequence(basis=128,target=128)]` | 0.058268 ± 0.000743067 (W 0.000922552) | 0.098454 ± 0.0012137 (W 0.000931327) | - | 🔵 faer-fork 1.69× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `householder_apply/n256/b1 [block(basis=256,target=256)]` | 0.289308 ± 0.00175486 (W 0.0024046) | 0.400404 ± 0.0158035 (W 0.0154329) | - | 🔵 faer-fork 1.38× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `householder_apply/n256/b1 [sequence(basis=256,target=256)]` | 0.289297 ± 0.0019805 (W 0.00221372) | 0.405997 ± 0.00332465 (W 0.0140331) | - | 🔵 faer-fork 1.40× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `householder_apply/n512/b1 [block(basis=512,target=512)]` | 2.26745 ± 0.00346554 (W 0.0103279) | 2.79867 ± 0.352322 (W 0.335922) | - | 🔵 faer-fork 1.23× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `householder_apply/n512/b1 [sequence(basis=512,target=512)]` | 2.27112 ± 0.00695656 (W 0.0127893) | 2.79489 ± 0.044898 (W 0.296045) | - | 🔵 faer-fork 1.23× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `lu/n128/b1` | 0.175988 ± 0.0013091 (W 0.000541116) | 0.147474 ± 0.000663857 (W 0.00340012) | 0.15557 ± 0.000524566 (W 0.00171238) | 🔴 faer-fork 1.19× slower than `faer-upstream` | 🔴 faer-fork 1.13× slower than `lapack-mkl` |  |
+| `lu/n128/b1 [in_place]` | 0.113371 ± 0.00129179 (W 0.000837379) | 0.269353 ± 0.0018339 (W 0.00239091) | - | 🔵 faer-fork 2.38× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `lu/n256/b1` | 0.831749 ± 0.010271 (W 0.00450281) | 0.761921 ± 0.0193517 (W 0.0243627) | 0.308314 ± 0.00184532 (W 0.00195148) | 🔴 faer-fork 1.09× slower than `faer-upstream` | 🔴 faer-fork 2.70× slower than `lapack-mkl` |  |
+| `lu/n256/b1 [in_place]` | 0.488911 ± 0.00406027 (W 0.00262252) | 2.27842 ± 0.0128733 (W 0.0314418) | - | 🔵 faer-fork 4.66× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `lu/n512/b1` | 4.09667 ± 0.0225919 (W 0.00919429) | 3.8772 ± 0.0446759 (W 0.0335837) | 1.16146 ± 0.00442651 (W 0.00681392) | 🔴 faer-fork 1.06× slower than `faer-upstream` | 🔴 faer-fork 3.53× slower than `lapack-mkl` |  |
+| `lu/n512/b1 [in_place]` | 2.32352 ± 0.00829283 (W 0.0105775) | 11.8329 ± 0.022452 (W 0.131452) | - | 🔵 faer-fork 5.09× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/n128/b1` | 0.39834 ± 0.00202024 (W 0.00288531) | 0.770896 ± 0.00154169 (W 0.0041594) | - | 🔵 faer-fork 1.94× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/n256/b1` | 1.40265 ± 0.00338482 (W 0.00382762) | 2.25042 ± 0.0253328 (W 0.0129261) | - | 🔵 faer-fork 1.60× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/n512/b1` | 6.13569 ± 0.0302524 (W 0.0335592) | 8.52116 ± 1.14685 (W 0.0450351) | - | 🔵 faer-fork 1.39× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr_factor/n128/b1` | 0.20403 ± 0.00026665 (W 0.00144201) | 0.823374 ± 0.00124696 (W 0.00557798) | 0.151863 ± 0.00138968 (W 0.00218194) | 🔵 faer-fork 4.04× faster than `faer-upstream` | 🔴 faer-fork 1.34× slower than `lapack-mkl` |  |
+| `qr_factor/n256/b1` | 0.60274 ± 0.00192524 (W 0.00237231) | 3.33956 ± 0.0133224 (W 0.0173657) | 0.557897 ± 0.000282532 (W 0.0043345) | 🔵 faer-fork 5.54× faster than `faer-upstream` | 🔴 faer-fork 1.08× slower than `lapack-mkl` |  |
+| `qr_factor/n512/b1` | 1.84099 ± 0.0125865 (W 0.00678819) | 16.9546 ± 0.0359077 (W 0.0597162) | 2.22013 ± 0.00704834 (W 0.0101598) | 🔵 faer-fork 9.21× faster than `faer-upstream` | 🔵 faer-fork 1.21× faster than `lapack-mkl` |  |
+| `solve/n128/b1` | 0.175637 ± 0.000687101 (W 0.00195305) | 0.141874 ± 0.000419405 (W 0.00255725) | 0.153686 ± 0.000410951 (W 0.00254686) | 🔴 faer-fork 1.24× slower than `faer-upstream` | 🔴 faer-fork 1.14× slower than `lapack-mkl` |  |
+| `solve/n128/b1 [in_place]` | 0.116086 ± 0.000347304 (W 0.00041293) | 0.211264 ± 0.00345068 (W 0.00219306) | - | 🔵 faer-fork 1.82× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `solve/n256/b1` | 0.564699 ± 0.00277729 (W 0.00362868) | 0.69228 ± 0.00914392 (W 0.0213211) | 0.302865 ± 0.011991 (W 0.00585491) | 🔵 faer-fork 1.23× faster than `faer-upstream` | 🔴 faer-fork 1.86× slower than `lapack-mkl` | `!` between-start range over 5% |
+| `solve/n256/b1 [in_place]` | 0.45003 ± 0.00112173 (W 0.00357929) | 1.65919 ± 0.0209362 (W 0.0273498) | - | 🔵 faer-fork 3.69× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `solve/n512/b1` | 2.50363 ± 0.00588085 (W 0.00415711) | 3.49774 ± 0.0105391 (W 0.0758367) | 1.12181 ± 0.00152698 (W 0.00519148) | 🔵 faer-fork 1.40× faster than `faer-upstream` | 🔴 faer-fork 2.23× slower than `lapack-mkl` |  |
+| `solve/n512/b1 [in_place]` | 1.99704 ± 0.0167059 (W 0.0079202) | 9.04863 ± 0.0384436 (W 0.111926) | - | 🔵 faer-fork 4.53× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/n128/b1` | 2.49466 ± 0.0161717 (W 0.00523263) | 2.80398 ± 0.00303685 (W 0.00676259) | 2.41137 ± 0.00757802 (W 0.00542647) | 🔵 faer-fork 1.12× faster than `faer-upstream` | · |  |
+| `svd_thin/n128/b1 [in_place]` | 2.47743 ± 0.00955233 (W 0.00343512) | 2.80207 ± 0.0003584 (W 0.00502891) | - | 🔵 faer-fork 1.13× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/n256/b1` | 9.82475 ± 0.0126439 (W 0.00855093) | 13.1822 ± 0.0116008 (W 0.0456018) | 11.9776 ± 0.0764478 (W 0.021006) | 🔵 faer-fork 1.34× faster than `faer-upstream` | 🔵 faer-fork 1.22× faster than `lapack-mkl` |  |
+| `svd_thin/n256/b1 [in_place]` | 9.79331 ± 0.022077 (W 0.01079) | 13.1373 ± 0.00541929 (W 0.0201891) | - | 🔵 faer-fork 1.34× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/n512/b1` | 35.7279 ± 0.0307654 (W 0.0576886) | 52.4771 ± 0.0730477 (W 0.0708737) | 51.4049 ± 0.0954674 (W 0.128912) | 🔵 faer-fork 1.47× faster than `faer-upstream` | 🔵 faer-fork 1.44× faster than `lapack-mkl` |  |
+| `svd_thin/n512/b1 [in_place]` | 35.4989 ± 0.0435789 (W 0.0717822) | 52.3075 ± 0.0977819 (W 0.228066) | - | 🔵 faer-fork 1.47× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n128/b1` | 1.12203 ± 0.00515147 (W 0.00584487) | 2.167 ± 0.00174826 (W 0.00483122) | 1.08966 ± 0.00243107 (W 0.00360576) | 🔵 faer-fork 1.93× faster than `faer-upstream` | · |  |
+| `svd_values/n128/b1 [in_place]` | 1.1206 ± 0.00554735 (W 0.00175232) | 2.16955 ± 0.00795066 (W 0.00613035) | - | 🔵 faer-fork 1.94× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n256/b1` | 5.02867 ± 0.0281156 (W 0.0121326) | 10.4985 ± 0.0115706 (W 0.0161335) | 5.9021 ± 0.045028 (W 0.012035) | 🔵 faer-fork 2.09× faster than `faer-upstream` | 🔵 faer-fork 1.17× faster than `lapack-mkl` |  |
+| `svd_values/n256/b1 [in_place]` | 5.00336 ± 0.0214236 (W 0.0143023) | 10.5263 ± 0.0230339 (W 0.0194261) | - | 🔵 faer-fork 2.10× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n512/b1` | 20.711 ± 0.0167539 (W 0.0341592) | 40.1154 ± 0.110893 (W 0.0555908) | 22.425 ± 0.0854588 (W 0.0335968) | 🔵 faer-fork 1.94× faster than `faer-upstream` | 🔵 faer-fork 1.08× faster than `lapack-mkl` |  |
+| `svd_values/n512/b1 [in_place]` | 20.7126 ± 0.0709962 (W 0.0384712) | 40.2184 ± 0.0623959 (W 0.0430267) | - | 🔵 faer-fork 1.94× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `triangular_solve/n128/b1` | 0.00519 ± 2.0502e-05 (W 6.86171e-05) | 0.004088 ± 3.56417e-05 (W 5.27286e-05) | - | 🔴 faer-fork 1.27× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `triangular_solve/n256/b1` | 0.012934 ± 0.000105548 (W 9.62715e-05) | 0.012464 ± 0.000291252 (W 9.75259e-05) | - | · | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `triangular_solve/n512/b1` | 0.030036 ± 0.000118462 (W 0.00015912) | 0.030086 ± 0.000236432 (W 0.000329225) | - | · | - | `*` one row has no measurement here |
+
+## linalg-mid, f64, f order, 1T (CPU 4)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `cholesky/n128/b1` | 0.065171 ± 0.00224566 (W 0.000853439) | 0.060151 ± 0.00221006 (W 0.00120585) | 0.086991 ± 0.000505404 (W 0.000172778) | 🔴 faer-fork 1.08× slower than `faer-upstream` | 🔵 faer-fork 1.33× faster than `lapack-mkl` | `!` between-start range over 5% |
+| `cholesky/n128/b1 [in_place]` | 0.056175 ± 0.00181095 (W 0.00163839) | 0.054209 ± 0.00204902 (W 0.00011531) | - | · | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `cholesky/n256/b1` | 0.322952 ± 0.00554129 (W 0.00192011) | 0.324003 ± 0.00424162 (W 0.00287069) | 0.42385 ± 0.00435025 (W 0.0020845) | · | 🔵 faer-fork 1.31× faster than `lapack-mkl` |  |
+| `cholesky/n256/b1 [in_place]` | 0.300671 ± 0.0022405 (W 0.00230832) | 0.303536 ± 0.0044904 (W 0.00279817) | - | · | - | `*` one row has no measurement here |
+| `cholesky/n512/b1` | 2.06524 ± 0.0231096 (W 0.00932346) | 2.06259 ± 0.00596473 (W 0.00562801) | 3.2205 ± 0.0194439 (W 0.0422712) | · | 🔵 faer-fork 1.56× faster than `lapack-mkl` |  |
+| `cholesky/n512/b1 [in_place]` | 2.01953 ± 0.00696376 (W 0.00693701) | 1.97111 ± 0.0094911 (W 0.00352768) | - | · | - | `*` one row has no measurement here |
+| `eigh/n128/b1` | 2.31081 ± 0.005291 (W 0.00432006) | 2.2474 ± 0.0027248 (W 0.00469856) | 1.81276 ± 0.0072809 (W 0.00595479) | · | 🔴 faer-fork 1.27× slower than `lapack-mkl` |  |
+| `eigh/n128/b1 [in_place]` | 2.30367 ± 0.0047929 (W 0.00344325) | 2.23827 ± 0.00359822 (W 0.00509116) | - | · | - | `*` one row has no measurement here |
+| `eigh/n256/b1` | 9.99883 ± 0.00669387 (W 0.0150141) | 9.72473 ± 0.0352823 (W 0.0089819) | 9.78895 ± 0.0111512 (W 0.0200323) | · | · |  |
+| `eigh/n256/b1 [in_place]` | 9.94334 ± 0.0478921 (W 0.016385) | 9.73618 ± 0.0325572 (W 0.00844094) | - | · | - | `*` one row has no measurement here |
+| `eigh/n512/b1` | 49.4393 ± 0.0662211 (W 0.0466565) | 48.1604 ± 0.163633 (W 0.0960788) | 59.6697 ± 0.132089 (W 0.0706692) | · | 🔵 faer-fork 1.21× faster than `lapack-mkl` |  |
+| `eigh/n512/b1 [in_place]` | 49.2636 ± 0.349542 (W 0.0200235) | 48.057 ± 0.0274748 (W 0.0605962) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1` | 0.294031 ± 0.034989 (W 0.00321491) | 0.287385 ± 0.00126655 (W 0.00177187) | - | · | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `full_piv_lu/n128/b1 [in_place]` | 0.313114 ± 0.00119887 (W 0.00231786) | 0.310903 ± 0.00306267 (W 0.00172215) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1` | 2.863 ± 0.0113681 (W 0.0127736) | 2.85187 ± 0.00152943 (W 0.00999534) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1 [in_place]` | 2.8735 ± 0.0240201 (W 0.00900965) | 2.84029 ± 0.0114691 (W 0.00499427) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1` | 21.6532 ± 0.11058 (W 0.0727719) | 21.7159 ± 0.130586 (W 0.0342212) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1 [in_place]` | 22.3556 ± 0.086508 (W 0.0323224) | 22.2449 ± 0.0456769 (W 0.0217888) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [block(basis=128,target=128)]` | 0.256418 ± 0.0012279 (W 0.00156663) | 0.25449 ± 0.00135533 (W 0.0019593) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [sequence(basis=128,target=128)]` | 0.255787 ± 0.000240056 (W 0.0023112) | 0.254866 ± 0.000274955 (W 0.00262821) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n256/b1 [block(basis=256,target=256)]` | 1.87889 ± 0.00385247 (W 0.00255821) | 1.87925 ± 0.0119253 (W 0.0055896) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n256/b1 [sequence(basis=256,target=256)]` | 1.87701 ± 0.00345657 (W 0.00404348) | 1.8809 ± 0.0017193 (W 0.00412191) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n512/b1 [block(basis=512,target=512)]` | 15.8673 ± 0.0265022 (W 0.0236898) | 16.0253 ± 0.057364 (W 0.0683804) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n512/b1 [sequence(basis=512,target=512)]` | 15.8907 ± 0.0158056 (W 0.0267654) | 15.9635 ± 0.0952548 (W 0.0343186) | - | · | - | `*` one row has no measurement here |
+| `lu/n128/b1` | 0.114673 ± 0.00171115 (W 0.00153319) | 0.114784 ± 0.00070927 (W 0.00172162) | 0.141414 ± 0.000941807 (W 0.00046729) | · | 🔵 faer-fork 1.23× faster than `lapack-mkl` |  |
+| `lu/n128/b1 [in_place]` | 0.105146 ± 0.000372801 (W 0.00185101) | 0.105053 ± 0.000813598 (W 0.0015225) | - | · | - | `*` one row has no measurement here |
+| `lu/n256/b1` | 0.931696 ± 0.00673783 (W 0.0038933) | 0.940742 ± 0.00708074 (W 0.00240635) | 0.791617 ± 0.00226055 (W 0.00154652) | · | 🔴 faer-fork 1.18× slower than `lapack-mkl` |  |
+| `lu/n256/b1 [in_place]` | 0.686538 ± 0.00713549 (W 0.00300243) | 0.687309 ± 0.00277082 (W 0.00259678) | - | · | - | `*` one row has no measurement here |
+| `lu/n512/b1` | 6.29406 ± 0.0176087 (W 0.0172884) | 6.29842 ± 0.0568592 (W 0.0247204) | 5.06844 ± 0.00475768 (W 0.0115315) | · | 🔴 faer-fork 1.24× slower than `lapack-mkl` |  |
+| `lu/n512/b1 [in_place]` | 5.05171 ± 0.0211404 (W 0.0123896) | 5.04594 ± 0.0126702 (W 0.00738227) | - | · | - | `*` one row has no measurement here |
+| `qr/n128/b1` | 0.529045 ± 0.00180201 (W 0.00268465) | 0.568709 ± 0.000635682 (W 0.00362615) | - | 🔵 faer-fork 1.07× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/n256/b1` | 3.07615 ± 0.0059213 (W 0.00441934) | 3.19753 ± 0.0136498 (W 0.00470748) | - | · | - | `*` one row has no measurement here |
+| `qr/n512/b1` | 19.5806 ± 0.0389191 (W 0.0332806) | 20.0269 ± 0.128434 (W 0.0169086) | - | · | - | `*` one row has no measurement here |
+| `qr_factor/n128/b1` | 0.246799 ± 0.000667702 (W 0.00210155) | 0.28443 ± 0.000670607 (W 0.00146791) | 0.329928 ± 0.003376 (W 0.00190095) | 🔵 faer-fork 1.15× faster than `faer-upstream` | 🔵 faer-fork 1.34× faster than `lapack-mkl` |  |
+| `qr_factor/n256/b1` | 1.27513 ± 0.00392284 (W 0.00365171) | 1.39186 ± 0.00315961 (W 0.00396929) | 1.91257 ± 0.00586286 (W 0.00450988) | 🔵 faer-fork 1.09× faster than `faer-upstream` | 🔵 faer-fork 1.50× faster than `lapack-mkl` |  |
+| `qr_factor/n512/b1` | 7.70327 ± 0.0661375 (W 0.0088233) | 8.04636 ± 0.0301095 (W 0.0178166) | 13.3999 ± 0.0377215 (W 0.027701) | · | 🔵 faer-fork 1.74× faster than `lapack-mkl` |  |
+| `solve/n128/b1` | 0.111779 ± 0.00057818 (W 0.0013688) | 0.111829 ± 0.000824868 (W 0.00164062) | 0.13973 ± 0.000829311 (W 0.00194087) | · | 🔵 faer-fork 1.25× faster than `lapack-mkl` |  |
+| `solve/n128/b1 [in_place]` | 0.104284 ± 0.000689592 (W 0.000229664) | 0.100586 ± 0.000186897 (W 0.000215317) | - | · | - | `*` one row has no measurement here |
+| `solve/n256/b1` | 0.661589 ± 0.00154849 (W 0.00262786) | 0.661031 ± 0.00194344 (W 0.00369847) | 0.791256 ± 0.00223767 (W 0.00263476) | · | 🔵 faer-fork 1.20× faster than `lapack-mkl` |  |
+| `solve/n256/b1 [in_place]` | 0.607664 ± 0.00261178 (W 0.00294705) | 0.659345 ± 0.00309291 (W 0.00246266) | - | 🔵 faer-fork 1.09× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `solve/n512/b1` | 4.83716 ± 0.0472812 (W 0.00708928) | 4.78746 ± 0.00442995 (W 0.0157641) | 5.09129 ± 0.00804104 (W 0.0198628) | · | 🔵 faer-fork 1.05× faster than `lapack-mkl` |  |
+| `solve/n512/b1 [in_place]` | 4.58795 ± 0.0173006 (W 0.00784076) | 4.81206 ± 0.00657545 (W 0.00702899) | - | · | - | `*` one row has no measurement here |
+| `svd_thin/n128/b1` | 3.36994 ± 0.00833906 (W 0.006077) | 3.67284 ± 0.00277214 (W 0.00767723) | 3.21197 ± 0.00424585 (W 0.00431261) | 🔵 faer-fork 1.09× faster than `faer-upstream` | · |  |
+| `svd_thin/n128/b1 [in_place]` | 3.37089 ± 0.0056478 (W 0.00761207) | 3.67274 ± 0.00516958 (W 0.00524972) | - | 🔵 faer-fork 1.09× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/n256/b1` | 16.7296 ± 0.0340076 (W 0.0178361) | 18.2974 ± 0.0353861 (W 0.0363554) | 17.3622 ± 0.0136583 (W 0.0265225) | 🔵 faer-fork 1.09× faster than `faer-upstream` | · |  |
+| `svd_thin/n256/b1 [in_place]` | 16.7009 ± 0.031826 (W 0.0305767) | 18.3081 ± 0.0374704 (W 0.0267553) | - | 🔵 faer-fork 1.10× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/n512/b1` | 94.065 ± 0.102006 (W 0.075679) | 105.145 ± 0.374208 (W 0.146164) | 115.773 ± 1.53645 (W 0.179297) | 🔵 faer-fork 1.12× faster than `faer-upstream` | 🔵 faer-fork 1.23× faster than `lapack-mkl` |  |
+| `svd_thin/n512/b1 [in_place]` | 94.4224 ± 0.214806 (W 0.231706) | 104.294 ± 0.190732 (W 0.142929) | - | 🔵 faer-fork 1.10× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n128/b1` | 1.01752 ± 0.00522542 (W 0.00130142) | 2.61528 ± 0.0141387 (W 0.00670824) | 1.11898 ± 0.00909532 (W 0.00681544) | 🔵 faer-fork 2.57× faster than `faer-upstream` | 🔵 faer-fork 1.10× faster than `lapack-mkl` |  |
+| `svd_values/n128/b1 [in_place]` | 1.01716 ± 0.00148336 (W 0.00153956) | 2.61627 ± 0.00751117 (W 0.00438045) | - | 🔵 faer-fork 2.57× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n256/b1` | 6.19381 ± 0.0283486 (W 0.00848879) | 12.2567 ± 0.0198069 (W 0.0318873) | 6.7023 ± 0.06727 (W 0.0131566) | 🔵 faer-fork 1.98× faster than `faer-upstream` | 🔵 faer-fork 1.08× faster than `lapack-mkl` |  |
+| `svd_values/n256/b1 [in_place]` | 6.19372 ± 0.0107181 (W 0.0123707) | 12.2234 ± 0.0194351 (W 0.0294576) | - | 🔵 faer-fork 1.97× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n512/b1` | 40.1119 ± 0.177951 (W 0.0374254) | 65.3535 ± 0.451217 (W 0.393995) | 47.8128 ± 0.414742 (W 0.0493092) | 🔵 faer-fork 1.63× faster than `faer-upstream` | 🔵 faer-fork 1.19× faster than `lapack-mkl` |  |
+| `svd_values/n512/b1 [in_place]` | 40.1174 ± 0.0817847 (W 0.050815) | 65.1822 ± 0.163729 (W 0.0712874) | - | 🔵 faer-fork 1.62× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `triangular_solve/n128/b1` | 0.004679 ± 2.5697e-05 (W 5.9138e-05) | 0.004428 ± 1.52753e-05 (W 2.63097e-05) | - | 🔴 faer-fork 1.06× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `triangular_solve/n256/b1` | 0.014377 ± 0.000160053 (W 9.85901e-05) | 0.013936 ± 0.000266884 (W 5.39741e-05) | - | · | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `triangular_solve/n512/b1` | 0.047208 ± 0.000413562 (W 0.000362444) | 0.04801 ± 0.0006695 (W 0.000222574) | - | · | - | `*` one row has no measurement here |
+
+## linalg-mid, f64, f order, 4T (CPU 4-7)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `cholesky/n128/b1` | 0.060132 ± 0.00463178 (W 0.000713153) | 0.075329 ± 0.00339705 (W 0.00245262) | 0.089898 ± 0.0005275 (W 0.000595731) | 🔵 faer-fork 1.25× faster than `faer-upstream` | 🔵 faer-fork 1.50× faster than `lapack-mkl` | `!` between-start range over 5% |
+| `cholesky/n128/b1 [in_place]` | 0.053149 ± 0.00332091 (W 0.000469384) | 0.066563 ± 0.00252355 (W 0.00226677) | - | 🔵 faer-fork 1.25× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `cholesky/n256/b1` | 0.220801 ± 0.00535418 (W 0.00204263) | 0.302204 ± 0.000348006 (W 0.00654681) | 0.246126 ± 0.00359071 (W 0.0104048) | 🔵 faer-fork 1.37× faster than `faer-upstream` | 🔵 faer-fork 1.11× faster than `lapack-mkl` |  |
+| `cholesky/n256/b1 [in_place]` | 0.190915 ± 0.00258403 (W 0.00179165) | 0.256318 ± 0.00205314 (W 0.0132273) | - | 🔵 faer-fork 1.34× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `cholesky/n512/b1` | 0.944652 ± 0.00411083 (W 0.00254014) | 1.10955 ± 0.00373043 (W 0.0471276) | 1.37193 ± 0.0231748 (W 0.0191095) | 🔵 faer-fork 1.17× faster than `faer-upstream` | 🔵 faer-fork 1.45× faster than `lapack-mkl` |  |
+| `cholesky/n512/b1 [in_place]` | 0.82571 ± 0.00507148 (W 0.00301439) | 0.945754 ± 0.0428394 (W 0.0379574) | - | 🔵 faer-fork 1.15× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `eigh/n128/b1` | 2.18781 ± 0.00361143 (W 0.00631897) | 2.17076 ± 0.00481848 (W 0.00403929) | 1.04391 ± 0.000493055 (W 0.00368483) | · | 🔴 faer-fork 2.10× slower than `lapack-mkl` |  |
+| `eigh/n128/b1 [in_place]` | 2.17733 ± 0.00433403 (W 0.00465054) | 2.15417 ± 0.0104528 (W 0.00637921) | - | · | - | `*` one row has no measurement here |
+| `eigh/n256/b1` | 6.29521 ± 0.00376795 (W 0.0159962) | 6.72261 ± 0.00215696 (W 0.00921845) | 4.63976 ± 0.0140622 (W 0.00754636) | 🔵 faer-fork 1.07× faster than `faer-upstream` | 🔴 faer-fork 1.36× slower than `lapack-mkl` |  |
+| `eigh/n256/b1 [in_place]` | 6.29432 ± 0.0118673 (W 0.00924919) | 6.6266 ± 0.0139606 (W 0.00950069) | - | 🔵 faer-fork 1.05× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `eigh/n512/b1` | 23.4322 ± 0.025517 (W 0.0182253) | 24.4464 ± 0.0664283 (W 0.0266131) | 21.053 ± 0.0818556 (W 0.0622316) | · | 🔴 faer-fork 1.11× slower than `lapack-mkl` |  |
+| `eigh/n512/b1 [in_place]` | 23.4007 ± 0.0343858 (W 0.0227054) | 24.4274 ± 0.0484885 (W 0.0177388) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1` | 0.314653 ± 0.00111477 (W 0.00394807) | 0.289849 ± 0.00168501 (W 0.00219641) | - | 🔴 faer-fork 1.09× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1 [in_place]` | 0.321125 ± 0.00539733 (W 0.00356631) | 0.308902 ± 0.00178877 (W 0.00244049) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1` | 2.19556 ± 0.014101 (W 0.0118065) | 2.59946 ± 0.00685423 (W 0.00896116) | - | 🔵 faer-fork 1.18× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1 [in_place]` | 1.96206 ± 0.00393124 (W 0.00751674) | 2.83949 ± 0.00900983 (W 0.00999449) | - | 🔵 faer-fork 1.45× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1` | 12.5913 ± 0.0513776 (W 0.0248918) | 14.328 ± 0.0408391 (W 0.0139211) | - | 🔵 faer-fork 1.14× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1 [in_place]` | 11.657 ± 0.0232495 (W 0.0161663) | 15.1446 ± 0.0356961 (W 0.0116305) | - | 🔵 faer-fork 1.30× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [block(basis=128,target=128)]` | 0.083896 ± 0.000899046 (W 0.00165427) | 0.082113 ± 0.000614819 (W 0.00164199) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [sequence(basis=128,target=128)]` | 0.084197 ± 0.000355514 (W 0.00047677) | 0.081672 ± 0.000236961 (W 0.00044896) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n256/b1 [block(basis=256,target=256)]` | 0.523104 ± 0.00276374 (W 0.00260777) | 0.522293 ± 0.00161619 (W 0.00244499) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n256/b1 [sequence(basis=256,target=256)]` | 0.52502 ± 0.000822755 (W 0.00235251) | 0.526016 ± 0.00245782 (W 0.00331066) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n512/b1 [block(basis=512,target=512)]` | 4.17618 ± 0.00815187 (W 0.00879887) | 4.17952 ± 0.0286992 (W 0.0142139) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n512/b1 [sequence(basis=512,target=512)]` | 4.17103 ± 0.0021879 (W 0.00762248) | 4.18948 ± 0.0122287 (W 0.00925922) | - | · | - | `*` one row has no measurement here |
+| `lu/n128/b1` | 0.112259 ± 0.00165263 (W 0.00197451) | 0.131996 ± 0.00247589 (W 0.00430383) | 0.141884 ± 0.000618046 (W 0.000295865) | 🔵 faer-fork 1.18× faster than `faer-upstream` | 🔵 faer-fork 1.26× faster than `lapack-mkl` |  |
+| `lu/n128/b1 [in_place]` | 0.099245 ± 0.00275057 (W 0.00216634) | 0.116857 ± 0.00472636 (W 0.00480884) | - | 🔵 faer-fork 1.18× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `lu/n256/b1` | 0.755289 ± 0.00271896 (W 0.00755111) | 0.647636 ± 0.0026948 (W 0.00768794) | 0.301431 ± 0.00238419 (W 0.00241782) | 🔴 faer-fork 1.17× slower than `faer-upstream` | 🔴 faer-fork 2.51× slower than `lapack-mkl` |  |
+| `lu/n256/b1 [in_place]` | 0.487893 ± 0.00159602 (W 0.0052464) | 0.622192 ± 0.0121101 (W 0.00989694) | - | 🔵 faer-fork 1.28× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `lu/n512/b1` | 3.88338 ± 0.0164849 (W 0.0101172) | 3.09779 ± 0.04883 (W 0.0792869) | 1.51048 ± 0.00431092 (W 0.00866731) | 🔴 faer-fork 1.25× slower than `faer-upstream` | 🔴 faer-fork 2.57× slower than `lapack-mkl` |  |
+| `lu/n512/b1 [in_place]` | 2.57479 ± 0.00152696 (W 0.00704468) | 2.97624 ± 0.0218543 (W 0.069021) | - | 🔵 faer-fork 1.16× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/n128/b1` | 0.393242 ± 0.00233838 (W 0.00353368) | 0.626148 ± 0.00221062 (W 0.00388172) | - | 🔵 faer-fork 1.59× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/n256/b1` | 1.45151 ± 0.00937198 (W 0.0101246) | 2.19633 ± 0.000514821 (W 0.00666108) | - | 🔵 faer-fork 1.51× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/n512/b1` | 7.76153 ± 0.00719403 (W 0.0232894) | 8.68141 ± 0.0335085 (W 0.0221041) | - | 🔵 faer-fork 1.12× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr_factor/n128/b1` | 0.198408 ± 0.00112931 (W 0.00200062) | 0.432936 ± 0.00274457 (W 0.00382952) | 0.178854 ± 0.000723218 (W 0.00278273) | 🔵 faer-fork 2.18× faster than `faer-upstream` | 🔴 faer-fork 1.11× slower than `lapack-mkl` |  |
+| `qr_factor/n256/b1` | 0.580321 ± 0.00308332 (W 0.00215953) | 1.33937 ± 0.00781982 (W 0.00582495) | 0.607504 ± 0.00115855 (W 0.00247273) | 🔵 faer-fork 2.31× faster than `faer-upstream` | · |  |
+| `qr_factor/n512/b1` | 2.95054 ± 0.0100753 (W 0.00824785) | 4.47594 ± 0.0127821 (W 0.0147126) | 3.60361 ± 0.00479638 (W 0.00798329) | 🔵 faer-fork 1.52× faster than `faer-upstream` | 🔵 faer-fork 1.22× faster than `lapack-mkl` |  |
+| `solve/n128/b1` | 0.155208 ± 0.00121265 (W 0.00224206) | 0.126385 ± 0.000812055 (W 0.00264591) | 0.140302 ± 0.000276348 (W 0.00141478) | 🔴 faer-fork 1.23× slower than `faer-upstream` | 🔴 faer-fork 1.11× slower than `lapack-mkl` |  |
+| `solve/n128/b1 [in_place]` | 0.10285 ± 0.000368955 (W 0.000573421) | 0.109983 ± 0.0024724 (W 0.00421407) | - | 🔵 faer-fork 1.07× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `solve/n256/b1` | 0.478932 ± 0.00304613 (W 0.00323546) | 0.582675 ± 0.00236134 (W 0.0109502) | 0.281175 ± 0.00154123 (W 0.00355708) | 🔵 faer-fork 1.22× faster than `faer-upstream` | 🔴 faer-fork 1.70× slower than `lapack-mkl` |  |
+| `solve/n256/b1 [in_place]` | 0.414318 ± 0.0032817 (W 0.00281033) | 0.527067 ± 0.00681709 (W 0.0126878) | - | 🔵 faer-fork 1.27× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `solve/n512/b1` | 2.37531 ± 0.00594186 (W 0.00637195) | 2.76932 ± 0.0490319 (W 0.0953179) | 1.47438 ± 0.0120289 (W 0.00465325) | 🔵 faer-fork 1.17× faster than `faer-upstream` | 🔴 faer-fork 1.61× slower than `lapack-mkl` |  |
+| `solve/n512/b1 [in_place]` | 2.09557 ± 0.0118529 (W 0.00651269) | 2.58662 ± 0.0682625 (W 0.0776663) | - | 🔵 faer-fork 1.23× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/n128/b1` | 2.45171 ± 0.00768127 (W 0.00339405) | 2.79401 ± 0.00803221 (W 0.0173636) | 2.50555 ± 0.00450871 (W 0.00688086) | 🔵 faer-fork 1.14× faster than `faer-upstream` | · |  |
+| `svd_thin/n128/b1 [in_place]` | 2.44125 ± 0.00766958 (W 0.0046546) | 2.7677 ± 0.0147993 (W 0.0157875) | - | 🔵 faer-fork 1.13× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/n256/b1` | 10.1815 ± 0.0438665 (W 0.00965925) | 13.1042 ± 0.00904975 (W 0.0286762) | 12.0969 ± 0.0419154 (W 0.018373) | 🔵 faer-fork 1.29× faster than `faer-upstream` | 🔵 faer-fork 1.19× faster than `lapack-mkl` |  |
+| `svd_thin/n256/b1 [in_place]` | 10.1622 ± 0.019822 (W 0.0206511) | 13.0008 ± 0.0108784 (W 0.0101806) | - | 🔵 faer-fork 1.28× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/n512/b1` | 40.4598 ± 0.0971334 (W 0.0585051) | 54.9152 ± 0.262779 (W 0.607524) | 58.425 ± 1.08049 (W 0.0867725) | 🔵 faer-fork 1.36× faster than `faer-upstream` | 🔵 faer-fork 1.44× faster than `lapack-mkl` |  |
+| `svd_thin/n512/b1 [in_place]` | 40.2399 ± 0.071044 (W 0.0252619) | 54.5368 ± 0.10839 (W 0.0440209) | - | 🔵 faer-fork 1.36× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n128/b1` | 1.05693 ± 0.00149769 (W 0.00199773) | 2.11476 ± 0.00142042 (W 0.00226109) | 1.10068 ± 0.00101495 (W 0.00182888) | 🔵 faer-fork 2.00× faster than `faer-upstream` | · |  |
+| `svd_values/n128/b1 [in_place]` | 1.05845 ± 0.00372078 (W 0.00260535) | 2.11487 ± 0.0110277 (W 0.00815836) | - | 🔵 faer-fork 2.00× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n256/b1` | 4.98569 ± 0.00878157 (W 0.00698) | 10.3404 ± 0.00968956 (W 0.0154958) | 6.02764 ± 0.00953364 (W 0.00698812) | 🔵 faer-fork 2.07× faster than `faer-upstream` | 🔵 faer-fork 1.21× faster than `lapack-mkl` |  |
+| `svd_values/n256/b1 [in_place]` | 4.95182 ± 0.0188307 (W 0.0114095) | 10.293 ± 0.02275 (W 0.0136868) | - | 🔵 faer-fork 2.08× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n512/b1` | 21.7922 ± 0.0592811 (W 0.032199) | 40.9734 ± 0.0520537 (W 0.0336212) | 25.681 ± 0.0726007 (W 0.0344341) | 🔵 faer-fork 1.88× faster than `faer-upstream` | 🔵 faer-fork 1.18× faster than `lapack-mkl` |  |
+| `svd_values/n512/b1 [in_place]` | 21.6602 ± 0.0466013 (W 0.0410809) | 40.7904 ± 0.0577772 (W 0.0420347) | - | 🔵 faer-fork 1.88× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `triangular_solve/n128/b1` | 0.00548 ± 4.58258e-05 (W 5.86114e-05) | 0.004469 ± 4.0501e-05 (W 2.76803e-05) | - | 🔴 faer-fork 1.23× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `triangular_solve/n256/b1` | 0.015749 ± 0.000178214 (W 0.000272261) | 0.013626 ± 0.000251854 (W 6.94982e-05) | - | 🔴 faer-fork 1.16× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `triangular_solve/n512/b1` | 0.040254 ± 0.000243538 (W 0.000400758) | 0.038071 ± 0.000438145 (W 0.000269036) | - | 🔴 faer-fork 1.06× slower than `faer-upstream` | - | `*` one row has no measurement here |
+
+## linalg-mid, f64, f order, 8T (CPU 4-11)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `cholesky/n128/b1` | 0.059601 ± 0.000506008 (W 0.000255253) | 0.067576 ± 0.000589158 (W 0.000654048) | 0.087223 ± 0.000353794 (W 0.00189958) | 🔵 faer-fork 1.13× faster than `faer-upstream` | 🔵 faer-fork 1.46× faster than `lapack-mkl` |  |
+| `cholesky/n128/b1 [in_place]` | 0.052377 ± 0.00179918 (W 0.000360356) | 0.059451 ± 0.000185716 (W 0.000381124) | - | 🔵 faer-fork 1.14× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `cholesky/n256/b1` | 0.213438 ± 0.000556873 (W 0.00138307) | 0.28982 ± 0.00309427 (W 0.0209738) | 0.244845 ± 0.00108473 (W 0.00368729) | 🔵 faer-fork 1.36× faster than `faer-upstream` | 🔵 faer-fork 1.15× faster than `lapack-mkl` |  |
+| `cholesky/n256/b1 [in_place]` | 0.18199 ± 0.00289151 (W 0.00200825) | 0.257269 ± 0.00476106 (W 0.0246361) | - | 🔵 faer-fork 1.41× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `cholesky/n512/b1` | 0.801926 ± 0.00892877 (W 0.00382097) | 1.00706 ± 0.00789146 (W 0.0384357) | 0.970674 ± 0.0117839 (W 0.0245977) | 🔵 faer-fork 1.26× faster than `faer-upstream` | 🔵 faer-fork 1.21× faster than `lapack-mkl` |  |
+| `cholesky/n512/b1 [in_place]` | 0.679718 ± 0.00545721 (W 0.00379436) | 0.87205 ± 0.00626227 (W 0.0263612) | - | 🔵 faer-fork 1.28× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `eigh/n128/b1` | 2.18519 ± 0.00439911 (W 0.00342815) | 2.16447 ± 0.0123813 (W 0.00187435) | 0.978034 ± 0.000932541 (W 0.00183376) | · | 🔴 faer-fork 2.23× slower than `lapack-mkl` |  |
+| `eigh/n128/b1 [in_place]` | 2.17746 ± 0.00281656 (W 0.00500961) | 2.17472 ± 0.00784077 (W 0.00311654) | - | · | - | `*` one row has no measurement here |
+| `eigh/n256/b1` | 6.12573 ± 0.0129069 (W 0.00941404) | 6.70477 ± 0.0118819 (W 0.0249558) | 3.85974 ± 0.0085838 (W 0.0115008) | 🔵 faer-fork 1.09× faster than `faer-upstream` | 🔴 faer-fork 1.59× slower than `lapack-mkl` |  |
+| `eigh/n256/b1 [in_place]` | 6.09545 ± 0.00915765 (W 0.00901019) | 6.62936 ± 0.0127711 (W 0.0298117) | - | 🔵 faer-fork 1.09× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `eigh/n512/b1` | 21.0848 ± 0.0415092 (W 0.0233499) | 23.1894 ± 0.132444 (W 0.0484376) | 14.3416 ± 0.0347372 (W 0.0371698) | 🔵 faer-fork 1.10× faster than `faer-upstream` | 🔴 faer-fork 1.47× slower than `lapack-mkl` |  |
+| `eigh/n512/b1 [in_place]` | 21.0231 ± 0.018663 (W 0.0379012) | 23.1141 ± 0.0557709 (W 0.0617428) | - | 🔵 faer-fork 1.10× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1` | 0.33773 ± 0.00288262 (W 0.00366855) | 0.28952 ± 0.00170827 (W 0.00241748) | - | 🔴 faer-fork 1.17× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1 [in_place]` | 0.327368 ± 0.0022549 (W 0.00249288) | 0.306241 ± 0.00114123 (W 0.00215848) | - | 🔴 faer-fork 1.07× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1` | 2.12864 ± 0.00582793 (W 0.00864936) | 2.61602 ± 0.0055339 (W 0.0079241) | - | 🔵 faer-fork 1.23× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1 [in_place]` | 1.8691 ± 0.00706097 (W 0.00814454) | 2.8377 ± 0.0060619 (W 0.00670241) | - | 🔵 faer-fork 1.52× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1` | 11.417 ± 0.0162439 (W 0.0173384) | 13.3218 ± 0.0671678 (W 0.0194498) | - | 🔵 faer-fork 1.17× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1 [in_place]` | 10.1806 ± 0.0390415 (W 0.0207929) | 14.0629 ± 0.0428643 (W 0.0300219) | - | 🔵 faer-fork 1.38× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [block(basis=128,target=128)]` | 0.056966 ± 0.00113795 (W 0.00116413) | 0.099556 ± 0.000821276 (W 0.000918547) | - | 🔵 faer-fork 1.75× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [sequence(basis=128,target=128)]` | 0.057478 ± 0.000408199 (W 0.000695869) | 0.100256 ± 0.00131352 (W 0.00213956) | - | 🔵 faer-fork 1.74× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `householder_apply/n256/b1 [block(basis=256,target=256)]` | 0.293887 ± 0.00210409 (W 0.0015693) | 0.40205 ± 0.00894706 (W 0.0175286) | - | 🔵 faer-fork 1.37× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `householder_apply/n256/b1 [sequence(basis=256,target=256)]` | 0.294319 ± 0.00209259 (W 0.00231882) | 0.410292 ± 0.00279508 (W 0.0141669) | - | 🔵 faer-fork 1.39× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `householder_apply/n512/b1 [block(basis=512,target=512)]` | 2.28651 ± 0.00747657 (W 0.0102551) | 2.32774 ± 0.3802 (W 0.0217571) | - | · | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `householder_apply/n512/b1 [sequence(basis=512,target=512)]` | 2.2997 ± 0.00559199 (W 0.00706992) | 2.96468 ± 0.0312874 (W 0.289601) | - | 🔵 faer-fork 1.29× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `lu/n128/b1` | 0.157234 ± 0.00141548 (W 0.000551764) | 0.127367 ± 0.000616709 (W 0.00182273) | 0.142374 ± 0.000719779 (W 0.00208964) | 🔴 faer-fork 1.23× slower than `faer-upstream` | 🔴 faer-fork 1.10× slower than `lapack-mkl` |  |
+| `lu/n128/b1 [in_place]` | 0.103714 ± 0.0019005 (W 0.00204117) | 0.113091 ± 0.000145878 (W 0.00134824) | - | 🔵 faer-fork 1.09× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `lu/n256/b1` | 0.745208 ± 0.0067653 (W 0.00285603) | 0.633632 ± 0.0170401 (W 0.0244752) | 0.288896 ± 0.00158216 (W 0.00211478) | 🔴 faer-fork 1.18× slower than `faer-upstream` | 🔴 faer-fork 2.58× slower than `lapack-mkl` | `!` between-start range over 5% |
+| `lu/n256/b1 [in_place]` | 0.477276 ± 0.00166117 (W 0.00279696) | 0.640921 ± 0.0184978 (W 0.0254492) | - | 🔵 faer-fork 1.34× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `lu/n512/b1` | 3.62452 ± 0.012204 (W 0.00612335) | 2.88266 ± 0.0374211 (W 0.0432506) | 1.12148 ± 0.00586125 (W 0.00458489) | 🔴 faer-fork 1.26× slower than `faer-upstream` | 🔴 faer-fork 3.23× slower than `lapack-mkl` |  |
+| `lu/n512/b1 [in_place]` | 2.30795 ± 0.00670895 (W 0.00739897) | 2.75443 ± 0.0438018 (W 0.0310919) | - | 🔵 faer-fork 1.19× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/n128/b1` | 0.377214 ± 0.00337524 (W 0.00279551) | 0.748486 ± 0.00429034 (W 0.00185629) | - | 🔵 faer-fork 1.98× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/n256/b1` | 1.28903 ± 0.00216215 (W 0.00641797) | 2.12336 ± 0.0784239 (W 0.020118) | - | 🔵 faer-fork 1.65× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr/n512/b1` | 5.54293 ± 0.0472279 (W 0.0208866) | 7.47318 ± 0.35034 (W 0.62779) | - | 🔵 faer-fork 1.35× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr_factor/n128/b1` | 0.191657 ± 0.0012272 (W 0.00161322) | 0.53063 ± 0.00582193 (W 0.00291507) | 0.141595 ± 0.00132449 (W 0.00209876) | 🔵 faer-fork 2.77× faster than `faer-upstream` | 🔴 faer-fork 1.35× slower than `lapack-mkl` |  |
+| `qr_factor/n256/b1` | 0.564701 ± 0.00123632 (W 0.00251317) | 1.59868 ± 0.00860802 (W 0.00855576) | 0.527522 ± 0.00371201 (W 0.0045605) | 🔵 faer-fork 2.83× faster than `faer-upstream` | 🔴 faer-fork 1.07× slower than `lapack-mkl` |  |
+| `qr_factor/n512/b1` | 1.76745 ± 0.00589333 (W 0.00626639) | 4.80344 ± 0.0287913 (W 0.0329665) | 2.15731 ± 0.00501698 (W 0.0053168) | 🔵 faer-fork 2.72× faster than `faer-upstream` | 🔵 faer-fork 1.22× faster than `lapack-mkl` |  |
+| `solve/n128/b1` | 0.155068 ± 0.000341176 (W 0.000615597) | 0.119141 ± 0.000613264 (W 0.00170876) | 0.140411 ± 0.000200301 (W 0.000312947) | 🔴 faer-fork 1.30× slower than `faer-upstream` | 🔴 faer-fork 1.10× slower than `lapack-mkl` |  |
+| `solve/n128/b1 [in_place]` | 0.102921 ± 0.000902531 (W 0.000244326) | 0.105406 ± 0.000238132 (W 0.00151651) | - | · | - | `*` one row has no measurement here |
+| `solve/n256/b1` | 0.475125 ± 0.00128717 (W 0.00269996) | 0.556877 ± 0.0112597 (W 0.0195166) | 0.264912 ± 0.000726878 (W 0.00397715) | 🔵 faer-fork 1.17× faster than `faer-upstream` | 🔴 faer-fork 1.79× slower than `lapack-mkl` |  |
+| `solve/n256/b1 [in_place]` | 0.411027 ± 0.000754372 (W 0.00276141) | 0.575278 ± 0.0267213 (W 0.023836) | - | 🔵 faer-fork 1.40× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `solve/n512/b1` | 2.12414 ± 0.0182138 (W 0.0056007) | 2.58944 ± 0.0412341 (W 0.0512662) | 1.02459 ± 0.0110581 (W 0.00598572) | 🔵 faer-fork 1.22× faster than `faer-upstream` | 🔴 faer-fork 2.07× slower than `lapack-mkl` |  |
+| `solve/n512/b1 [in_place]` | 1.90077 ± 0.00474713 (W 0.00804526) | 2.39944 ± 0.0204493 (W 0.0384911) | - | 🔵 faer-fork 1.26× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/n128/b1` | 2.45474 ± 0.0138054 (W 0.00618686) | 2.77553 ± 0.0101134 (W 0.0093176) | 2.42683 ± 0.063487 (W 0.00509501) | 🔵 faer-fork 1.13× faster than `faer-upstream` | · |  |
+| `svd_thin/n128/b1 [in_place]` | 2.44448 ± 0.00986002 (W 0.00604646) | 2.77606 ± 0.00208124 (W 0.00468519) | - | 🔵 faer-fork 1.14× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/n256/b1` | 9.71125 ± 0.0411504 (W 0.0115572) | 13.011 ± 0.0544724 (W 0.0143544) | 11.1751 ± 0.0537075 (W 0.0204123) | 🔵 faer-fork 1.34× faster than `faer-upstream` | 🔵 faer-fork 1.15× faster than `lapack-mkl` |  |
+| `svd_thin/n256/b1 [in_place]` | 9.70271 ± 0.031789 (W 0.0177946) | 13.0451 ± 0.0134808 (W 0.0136975) | - | 🔵 faer-fork 1.34× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/n512/b1` | 34.6713 ± 0.0289189 (W 0.0526345) | 51.504 ± 0.11898 (W 0.16537) | 48.9838 ± 0.0750534 (W 0.238511) | 🔵 faer-fork 1.49× faster than `faer-upstream` | 🔵 faer-fork 1.41× faster than `lapack-mkl` |  |
+| `svd_thin/n512/b1 [in_place]` | 34.5771 ± 0.0590888 (W 0.0437692) | 51.3161 ± 0.0930271 (W 0.113221) | - | 🔵 faer-fork 1.48× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n128/b1` | 1.10892 ± 0.0045059 (W 0.00398177) | 2.09684 ± 0.00131697 (W 0.00306734) | 1.10618 ± 0.00207816 (W 0.0028949) | 🔵 faer-fork 1.89× faster than `faer-upstream` | · |  |
+| `svd_values/n128/b1 [in_place]` | 1.10724 ± 0.00622829 (W 0.0028809) | 2.10421 ± 0.00302072 (W 0.00491694) | - | 🔵 faer-fork 1.90× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n256/b1` | 4.91468 ± 0.00866704 (W 0.00943858) | 10.324 ± 0.0261202 (W 0.0114833) | 5.965 ± 0.0109294 (W 0.0115152) | 🔵 faer-fork 2.10× faster than `faer-upstream` | 🔵 faer-fork 1.21× faster than `lapack-mkl` |  |
+| `svd_values/n256/b1 [in_place]` | 4.90151 ± 0.0100811 (W 0.0135484) | 10.3115 ± 0.0363444 (W 0.0181382) | - | 🔵 faer-fork 2.10× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n512/b1` | 19.7194 ± 0.0157314 (W 0.0287736) | 39.2194 ± 0.0705448 (W 0.0504892) | 22.3845 ± 0.118095 (W 0.025048) | 🔵 faer-fork 1.99× faster than `faer-upstream` | 🔵 faer-fork 1.14× faster than `lapack-mkl` |  |
+| `svd_values/n512/b1 [in_place]` | 19.6995 ± 0.106506 (W 0.0239244) | 39.1717 ± 0.0791843 (W 0.0398582) | - | 🔵 faer-fork 1.99× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `triangular_solve/n128/b1` | 0.00555 ± 4.50925e-05 (W 6.2732e-05) | 0.004528 ± 6.08276e-06 (W 5.6083e-05) | - | 🔴 faer-fork 1.23× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `triangular_solve/n256/b1` | 0.01577 ± 6.67108e-05 (W 0.000197729) | 0.013916 ± 6.08276e-05 (W 5.78896e-05) | - | 🔴 faer-fork 1.13× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `triangular_solve/n512/b1` | 0.037891 ± 0.000217869 (W 0.000336237) | 0.035626 ± 0.000278275 (W 0.000492225) | - | 🔴 faer-fork 1.06× slower than `faer-upstream` | - | `*` one row has no measurement here |
+
+## linalg-mid, c64, c order, 1T (CPU 4)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `cholesky/n128/b1` | 0.18822 ± 0.000293678 (W 0.00196283) | 0.186337 ± 0.000960869 (W 0.0014171) | 0.461069 ± 0.00185088 (W 0.00428275) | · | 🔵 faer-fork 2.45× faster than `lapack-mkl` |  |
+| `cholesky/n128/b1 [in_place]` | 0.567988 ± 0.00289761 (W 0.00247363) | 0.815097 ± 0.00163113 (W 0.00393753) | - | 🔵 faer-fork 1.44× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `cholesky/n256/b1` | 1.22736 ± 0.00681135 (W 0.00266503) | 1.21607 ± 0.00862418 (W 0.00170546) | 1.77432 ± 0.0126663 (W 0.00686351) | · | 🔵 faer-fork 1.45× faster than `lapack-mkl` |  |
+| `cholesky/n256/b1 [in_place]` | 2.19063 ± 0.00230957 (W 0.00491425) | 2.42315 ± 0.00211205 (W 0.00380484) | - | 🔵 faer-fork 1.11× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `cholesky/n512/b1` | 7.90528 ± 0.00160053 (W 0.0191018) | 7.86129 ± 0.00804428 (W 0.012866) | 11.0009 ± 0.0108798 (W 0.0220501) | · | 🔵 faer-fork 1.39× faster than `lapack-mkl` |  |
+| `cholesky/n512/b1 [in_place]` | 9.87257 ± 0.00248958 (W 0.0167377) | 10.0634 ± 0.0133996 (W 0.0112079) | - | · | - | `*` one row has no measurement here |
+| `eigh/n128/b1` | 3.30909 ± 0.0096654 (W 0.00362672) | 3.24499 ± 0.00168116 (W 0.0037038) | 4.48103 ± 0.00366901 (W 0.0149416) | · | 🔵 faer-fork 1.35× faster than `lapack-mkl` |  |
+| `eigh/n128/b1 [in_place]` | 3.30199 ± 0.00305404 (W 0.00256474) | 3.24541 ± 0.0110158 (W 0.00335077) | - | · | - | `*` one row has no measurement here |
+| `eigh/n256/b1` | 17.5443 ± 0.0222742 (W 0.00873437) | 17.3371 ± 0.040159 (W 0.0189829) | 26.2126 ± 0.0375717 (W 0.0273035) | · | 🔵 faer-fork 1.49× faster than `lapack-mkl` |  |
+| `eigh/n256/b1 [in_place]` | 17.5302 ± 0.0413516 (W 0.0140267) | 17.2752 ± 0.0555232 (W 0.0136259) | - | · | - | `*` one row has no measurement here |
+| `eigh/n512/b1` | 106.068 ± 0.126515 (W 0.086653) | 104.805 ± 0.0877722 (W 0.258617) | 169.808 ± 0.284212 (W 0.297719) | · | 🔵 faer-fork 1.60× faster than `lapack-mkl` |  |
+| `eigh/n512/b1 [in_place]` | 106.054 ± 0.0819804 (W 0.0888614) | 104.579 ± 0.260217 (W 0.0318435) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1` | 0.88457 ± 0.0139563 (W 0.00514249) | 0.875116 ± 0.00182374 (W 0.00551337) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1 [in_place]` | 0.865649 ± 0.0384852 (W 0.00614591) | 0.81136 ± 0.0102773 (W 0.00642291) | - | 🔴 faer-fork 1.07× slower than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `full_piv_lu/n256/b1` | 6.49094 ± 0.0119008 (W 0.011399) | 6.5752 ± 0.103572 (W 0.0249439) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1 [in_place]` | 5.97365 ± 0.00114259 (W 0.0204932) | 6.40311 ± 0.0198648 (W 0.00991173) | - | 🔵 faer-fork 1.07× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1` | 43.8687 ± 0.0581977 (W 0.0314492) | 43.747 ± 0.0275278 (W 0.112434) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1 [in_place]` | 40.7323 ± 0.144597 (W 0.132851) | 44.949 ± 0.0412721 (W 0.0385009) | - | 🔵 faer-fork 1.10× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [block(basis=128,target=128)]` | 1.04983 ± 0.00239575 (W 0.001839) | 1.04425 ± 0.0057697 (W 0.011887) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [sequence(basis=128,target=128)]` | 1.04923 ± 0.00223352 (W 0.000916909) | 1.05223 ± 0.00557588 (W 0.00334476) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n256/b1 [block(basis=256,target=256)]` | 7.53736 ± 0.031973 (W 0.00723451) | 7.51833 ± 0.0019447 (W 0.0120425) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n256/b1 [sequence(basis=256,target=256)]` | 7.53858 ± 0.00279891 (W 0.0195249) | 7.52813 ± 0.00770584 (W 0.00512261) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n512/b1 [block(basis=512,target=512)]` | 56.9039 ± 0.0681541 (W 0.0655402) | 56.8171 ± 0.0295804 (W 0.0774909) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n512/b1 [sequence(basis=512,target=512)]` | 56.8801 ± 0.0693265 (W 0.13971) | 57.0139 ± 0.0997215 (W 0.191153) | - | · | - | `*` one row has no measurement here |
+| `lu/n128/b1` | 0.444871 ± 0.00010949 (W 0.00283565) | 0.44414 ± 0.00175961 (W 0.00366129) | 0.469296 ± 0.00107829 (W 0.00278329) | · | 🔵 faer-fork 1.05× faster than `lapack-mkl` |  |
+| `lu/n128/b1 [in_place]` | 0.359974 ± 0.00256077 (W 0.00233883) | 0.614134 ± 0.00361072 (W 0.00482411) | - | 🔵 faer-fork 1.71× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `lu/n256/b1` | 2.7738 ± 0.00224932 (W 0.00632109) | 2.81724 ± 0.00442744 (W 0.00304924) | 3.14348 ± 0.00422132 (W 0.00346238) | · | 🔵 faer-fork 1.13× faster than `lapack-mkl` |  |
+| `lu/n256/b1 [in_place]` | 2.2895 ± 0.00295421 (W 0.00535645) | 5.49239 ± 0.0230049 (W 0.0257103) | - | 🔵 faer-fork 2.40× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `lu/n512/b1` | 18.1042 ± 0.0835793 (W 0.0388494) | 18.0815 ± 0.0178094 (W 0.0383299) | 20.1974 ± 0.0392154 (W 0.0490261) | · | 🔵 faer-fork 1.12× faster than `lapack-mkl` |  |
+| `lu/n512/b1 [in_place]` | 15.6238 ± 0.046815 (W 0.0752856) | 29.9159 ± 0.117067 (W 0.0401751) | - | 🔵 faer-fork 1.91× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/n128/b1` | 1.70848 ± 0.00748854 (W 0.00350024) | 1.75688 ± 0.00466565 (W 0.0040514) | - | · | - | `*` one row has no measurement here |
+| `qr/n256/b1` | 11.0038 ± 0.0208727 (W 0.0207755) | 11.2589 ± 0.00583527 (W 0.0274109) | - | · | - | `*` one row has no measurement here |
+| `qr/n512/b1` | 74.0188 ± 0.181318 (W 0.0516602) | 74.5306 ± 0.151514 (W 0.104145) | - | · | - | `*` one row has no measurement here |
+| `qr_factor/n128/b1` | 0.77912 ± 0.00754375 (W 0.00261063) | 1.06736 ± 0.00344389 (W 0.00280097) | 0.940157 ± 0.0020722 (W 0.00368169) | 🔵 faer-fork 1.37× faster than `faer-upstream` | 🔵 faer-fork 1.21× faster than `lapack-mkl` |  |
+| `qr_factor/n256/b1` | 4.65357 ± 0.00213369 (W 0.00656728) | 6.46728 ± 0.0105779 (W 0.0101446) | 5.66478 ± 0.0422237 (W 0.0189399) | 🔵 faer-fork 1.39× faster than `faer-upstream` | 🔵 faer-fork 1.22× faster than `lapack-mkl` |  |
+| `qr_factor/n512/b1` | 30.1698 ± 0.115408 (W 0.0481937) | 37.8218 ± 0.0382451 (W 0.156375) | 39.1061 ± 0.0919345 (W 0.38719) | 🔵 faer-fork 1.25× faster than `faer-upstream` | 🔵 faer-fork 1.30× faster than `lapack-mkl` |  |
+| `solve/n128/b1` | 0.445008 ± 0.0011331 (W 0.00319041) | 0.444641 ± 0.00445775 (W 0.0028557) | 0.460016 ± 0.00172916 (W 0.0034793) | · | · |  |
+| `solve/n128/b1 [in_place]` | 0.358058 ± 0.00250015 (W 0.00258911) | 0.445359 ± 0.00270033 (W 0.00271799) | - | 🔵 faer-fork 1.24× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `solve/n256/b1` | 2.09747 ± 0.00560103 (W 0.0031656) | 2.16907 ± 0.00260952 (W 0.00493266) | 2.68091 ± 0.00684266 (W 0.00649657) | · | 🔵 faer-fork 1.28× faster than `lapack-mkl` |  |
+| `solve/n256/b1 [in_place]` | 2.18256 ± 0.0117328 (W 0.0029671) | 4.25503 ± 0.00278394 (W 0.0116024) | - | 🔵 faer-fork 1.95× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `solve/n512/b1` | 14.7164 ± 0.0664548 (W 0.0208682) | 14.9336 ± 0.0556879 (W 0.02648) | 17.9388 ± 0.0146813 (W 0.0254334) | · | 🔵 faer-fork 1.22× faster than `lapack-mkl` |  |
+| `solve/n512/b1 [in_place]` | 15.3154 ± 0.0257021 (W 0.0240415) | 23.8772 ± 0.0468887 (W 0.0546173) | - | 🔵 faer-fork 1.56× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/n128/b1` | 5.28232 ± 0.0119673 (W 0.00643607) | 5.71785 ± 0.00120061 (W 0.0144981) | 7.26392 ± 0.0234175 (W 0.0107464) | 🔵 faer-fork 1.08× faster than `faer-upstream` | 🔵 faer-fork 1.38× faster than `lapack-mkl` |  |
+| `svd_thin/n128/b1 [in_place]` | 5.26518 ± 0.00943837 (W 0.00352609) | 5.69524 ± 0.0108096 (W 0.0136872) | - | 🔵 faer-fork 1.08× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/n256/b1` | 31.9701 ± 0.0658143 (W 0.0442186) | 33.9828 ± 0.288938 (W 0.0477091) | 44.6731 ± 0.315328 (W 0.187695) | 🔵 faer-fork 1.06× faster than `faer-upstream` | 🔵 faer-fork 1.40× faster than `lapack-mkl` |  |
+| `svd_thin/n256/b1 [in_place]` | 31.7893 ± 0.0742635 (W 0.0371801) | 33.9101 ± 0.0404174 (W 0.0429528) | - | 🔵 faer-fork 1.07× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/n512/b1` | 202.713 ± 0.125775 (W 0.598841) | 209.786 ± 0.67192 (W 0.60218) | 277.977 ± 2.06245 (W 2.11815) | · | 🔵 faer-fork 1.37× faster than `lapack-mkl` |  |
+| `svd_thin/n512/b1 [in_place]` | 202.619 ± 0.45217 (W 0.505234) | 208.118 ± 0.519197 (W 0.649958) | - | · | - | `*` one row has no measurement here |
+| `svd_values/n128/b1` | 1.75562 ± 0.00638974 (W 0.00269711) | 3.44768 ± 0.00869743 (W 0.00781419) | 2.68373 ± 0.00732112 (W 0.00679831) | 🔵 faer-fork 1.96× faster than `faer-upstream` | 🔵 faer-fork 1.53× faster than `lapack-mkl` |  |
+| `svd_values/n128/b1 [in_place]` | 1.75242 ± 0.00109654 (W 0.00358422) | 3.46314 ± 0.0125042 (W 0.00725238) | - | 🔵 faer-fork 1.98× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n256/b1` | 12.6474 ± 0.0655503 (W 0.0281209) | 19.1559 ± 0.0559297 (W 0.046587) | 17.8285 ± 0.130876 (W 0.0243251) | 🔵 faer-fork 1.51× faster than `faer-upstream` | 🔵 faer-fork 1.41× faster than `lapack-mkl` |  |
+| `svd_values/n256/b1 [in_place]` | 12.6512 ± 0.0831725 (W 0.0308998) | 19.1726 ± 0.0630464 (W 0.0279003) | - | 🔵 faer-fork 1.52× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n512/b1` | 88.6298 ± 0.212774 (W 0.639036) | 109.793 ± 0.268596 (W 0.353868) | 121.139 ± 0.634349 (W 0.307257) | 🔵 faer-fork 1.24× faster than `faer-upstream` | 🔵 faer-fork 1.37× faster than `lapack-mkl` |  |
+| `svd_values/n512/b1 [in_place]` | 89.0265 ± 0.539234 (W 0.491177) | 109.85 ± 0.367575 (W 0.214953) | - | 🔵 faer-fork 1.23× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `triangular_solve/n128/b1` | 0.007924 ± 3.06649e-05 (W 5.63915e-05) | 0.007615 ± 2.09841e-05 (W 4.32435e-05) | - | · | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `triangular_solve/n256/b1` | 0.024275 ± 0.000128946 (W 8.13283e-05) | 0.023655 ± 0.000147615 (W 9.56938e-05) | - | · | - | `*` one row has no measurement here |
+| `triangular_solve/n512/b1` | 0.089146 ± 0.000755525 (W 0.00181674) | 0.086761 ± 0.00125726 (W 0.00111931) | - | · | - | `*` one row has no measurement here |
+
+## linalg-mid, c64, c order, 4T (CPU 4-7)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `cholesky/n128/b1` | 0.158354 ± 0.00170877 (W 0.00267006) | 0.181298 ± 0.000897868 (W 0.00228697) | 0.461589 ± 0.00118141 (W 0.00272621) | 🔵 faer-fork 1.14× faster than `faer-upstream` | 🔵 faer-fork 2.91× faster than `lapack-mkl` |  |
+| `cholesky/n128/b1 [in_place]` | 0.531611 ± 0.00306416 (W 0.00188651) | 0.564487 ± 0.136517 (W 0.130592) | - | · | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `cholesky/n256/b1` | 0.739277 ± 0.00175675 (W 0.00336289) | 0.810723 ± 0.0082806 (W 0.00638528) | 0.726779 ± 0.0125099 (W 0.014934) | 🔵 faer-fork 1.10× faster than `faer-upstream` | · |  |
+| `cholesky/n256/b1 [in_place]` | 1.63776 ± 0.00646174 (W 0.00669217) | 1.96873 ± 0.00292797 (W 0.106349) | - | 🔵 faer-fork 1.20× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `cholesky/n512/b1` | 3.15205 ± 0.0150694 (W 0.0138829) | 3.40129 ± 0.00750534 (W 0.119506) | 3.35012 ± 0.0124523 (W 0.013774) | 🔵 faer-fork 1.08× faster than `faer-upstream` | 🔵 faer-fork 1.06× faster than `lapack-mkl` |  |
+| `cholesky/n512/b1 [in_place]` | 4.85001 ± 0.00365863 (W 0.0106949) | 5.27077 ± 0.0908106 (W 0.149022) | - | 🔵 faer-fork 1.09× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `eigh/n128/b1` | 2.56288 ± 0.00274673 (W 0.00408666) | 2.80302 ± 0.0149391 (W 0.00913884) | 2.09385 ± 0.00640369 (W 0.00454359) | 🔵 faer-fork 1.09× faster than `faer-upstream` | 🔴 faer-fork 1.22× slower than `lapack-mkl` |  |
+| `eigh/n128/b1 [in_place]` | 2.56173 ± 0.00284338 (W 0.00524188) | 2.78441 ± 0.00260556 (W 0.00860155) | - | 🔵 faer-fork 1.09× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `eigh/n256/b1` | 8.67696 ± 0.0188823 (W 0.0109513) | 11.4047 ± 0.00836029 (W 0.0235798) | 10.5072 ± 0.0115378 (W 0.0257264) | 🔵 faer-fork 1.31× faster than `faer-upstream` | 🔵 faer-fork 1.21× faster than `lapack-mkl` |  |
+| `eigh/n256/b1 [in_place]` | 8.60044 ± 0.0517689 (W 0.0207196) | 11.3059 ± 0.00515781 (W 0.0218855) | - | 🔵 faer-fork 1.31× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `eigh/n512/b1` | 39.6126 ± 0.0468691 (W 0.0401664) | 45.0424 ± 0.0845237 (W 0.0665224) | 55.7103 ± 0.031273 (W 0.034865) | 🔵 faer-fork 1.14× faster than `faer-upstream` | 🔵 faer-fork 1.41× faster than `lapack-mkl` |  |
+| `eigh/n512/b1 [in_place]` | 39.396 ± 0.0164223 (W 0.0691092) | 45.0084 ± 0.0677414 (W 0.0412028) | - | 🔵 faer-fork 1.14× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1` | 0.725544 ± 0.00699602 (W 0.00504996) | 0.77312 ± 0.00651915 (W 0.00812013) | - | 🔵 faer-fork 1.07× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1 [in_place]` | 0.592886 ± 0.00845011 (W 0.00469825) | 0.811155 ± 0.00424025 (W 0.0122961) | - | 🔵 faer-fork 1.37× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1` | 4.10333 ± 0.00257689 (W 0.0106407) | 6.03882 ± 0.015471 (W 0.0214617) | - | 🔵 faer-fork 1.47× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1 [in_place]` | 3.3481 ± 0.0115354 (W 0.0111304) | 6.43857 ± 0.0158287 (W 0.0150745) | - | 🔵 faer-fork 1.92× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1` | 20.7387 ± 0.0757856 (W 0.0267354) | 25.5034 ± 0.0238494 (W 0.0400121) | - | 🔵 faer-fork 1.23× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1 [in_place]` | 16.6834 ± 0.0649881 (W 0.0298958) | 28.2274 ± 0.176113 (W 0.0397298) | - | 🔵 faer-fork 1.69× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [block(basis=128,target=128)]` | 0.280501 ± 0.00220819 (W 0.00155072) | 0.283469 ± 0.00111054 (W 0.00210376) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [sequence(basis=128,target=128)]` | 0.285392 ± 0.000585297 (W 0.00154027) | 0.282364 ± 0.00051092 (W 0.00153396) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n256/b1 [block(basis=256,target=256)]` | 1.94959 ± 0.0139807 (W 0.00240272) | 1.94556 ± 0.00737169 (W 0.00549569) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n256/b1 [sequence(basis=256,target=256)]` | 1.94747 ± 0.00366077 (W 0.00436607) | 1.93799 ± 0.0052422 (W 0.00362883) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n512/b1 [block(basis=512,target=512)]` | 14.6751 ± 0.00765946 (W 0.0198851) | 14.7198 ± 0.0234845 (W 0.0216961) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n512/b1 [sequence(basis=512,target=512)]` | 14.6774 ± 0.0270798 (W 0.013915) | 14.7039 ± 0.036911 (W 0.0171279) | - | · | - | `*` one row has no measurement here |
+| `lu/n128/b1` | 0.406494 ± 0.00422294 (W 0.0036265) | 0.315575 ± 0.00290585 (W 0.00185848) | 0.446784 ± 0.0024258 (W 0.00298) | 🔴 faer-fork 1.29× slower than `faer-upstream` | 🔵 faer-fork 1.10× faster than `lapack-mkl` |  |
+| `lu/n128/b1 [in_place]` | 0.277457 ± 0.00159098 (W 0.00251734) | 0.58963 ± 0.00136635 (W 0.00390068) | - | 🔵 faer-fork 2.13× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `lu/n256/b1` | 1.95035 ± 0.00780933 (W 0.00622553) | 1.59921 ± 0.014107 (W 0.0132208) | 0.924004 ± 0.000684045 (W 0.00258112) | 🔴 faer-fork 1.22× slower than `faer-upstream` | 🔴 faer-fork 2.11× slower than `lapack-mkl` |  |
+| `lu/n256/b1 [in_place]` | 1.25982 ± 0.00190308 (W 0.00585608) | 4.23894 ± 0.119365 (W 0.110483) | - | 🔵 faer-fork 3.36× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `lu/n512/b1` | 9.89664 ± 0.0670653 (W 0.0465515) | 7.37532 ± 0.121489 (W 0.0858932) | 5.71419 ± 0.0383935 (W 0.00882292) | 🔴 faer-fork 1.34× slower than `faer-upstream` | 🔴 faer-fork 1.73× slower than `lapack-mkl` |  |
+| `lu/n512/b1 [in_place]` | 5.77016 ± 0.00521061 (W 0.00661167) | 16.4996 ± 0.299765 (W 0.489303) | - | 🔵 faer-fork 2.86× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/n128/b1` | 0.92935 ± 0.000833009 (W 0.00655026) | 1.20816 ± 0.00207241 (W 0.00392756) | - | 🔵 faer-fork 1.30× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/n256/b1` | 4.23027 ± 0.020993 (W 0.0522242) | 5.30751 ± 0.00541654 (W 0.0116798) | - | 🔵 faer-fork 1.25× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/n512/b1` | 25.712 ± 0.110397 (W 0.0264895) | 27.4623 ± 0.0381966 (W 0.07503) | - | 🔵 faer-fork 1.07× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr_factor/n128/b1` | 0.445471 ± 0.00158262 (W 0.00227081) | 1.0131 ± 0.0031561 (W 0.0051675) | 0.460719 ± 0.00133161 (W 0.00232057) | 🔵 faer-fork 2.27× faster than `faer-upstream` | · |  |
+| `qr_factor/n256/b1` | 1.6573 ± 0.00485716 (W 0.00195796) | 4.82118 ± 0.0162794 (W 0.0127006) | 1.59681 ± 0.00165403 (W 0.00400444) | 🔵 faer-fork 2.91× faster than `faer-upstream` | · |  |
+| `qr_factor/n512/b1` | 9.54121 ± 0.0190499 (W 0.0204346) | 21.4075 ± 0.0945358 (W 0.0730011) | 11.0725 ± 0.0667194 (W 0.0137414) | 🔵 faer-fork 2.24× faster than `faer-upstream` | 🔵 faer-fork 1.16× faster than `lapack-mkl` |  |
+| `solve/n128/b1` | 0.404761 ± 0.00157188 (W 0.00426243) | 0.308532 ± 0.00265639 (W 0.00286582) | 0.43379 ± 0.000869221 (W 0.00357002) | 🔴 faer-fork 1.31× slower than `faer-upstream` | 🔵 faer-fork 1.07× faster than `lapack-mkl` |  |
+| `solve/n128/b1 [in_place]` | 0.267538 ± 0.000439131 (W 0.00138762) | 0.419613 ± 0.0029445 (W 0.00371359) | - | 🔵 faer-fork 1.57× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `solve/n256/b1` | 1.26254 ± 0.00479001 (W 0.00443186) | 1.47809 ± 0.00707157 (W 0.0126255) | 0.814266 ± 0.00205351 (W 0.00285542) | 🔵 faer-fork 1.17× faster than `faer-upstream` | 🔴 faer-fork 1.55× slower than `lapack-mkl` |  |
+| `solve/n256/b1 [in_place]` | 1.12025 ± 0.003483 (W 0.0064876) | 3.30782 ± 0.00950399 (W 0.0467506) | - | 🔵 faer-fork 2.95× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `solve/n512/b1` | 6.44897 ± 0.0200298 (W 0.0188579) | 7.30951 ± 0.112132 (W 0.0726996) | 5.20717 ± 0.0133179 (W 0.013703) | 🔵 faer-fork 1.13× faster than `faer-upstream` | 🔴 faer-fork 1.24× slower than `lapack-mkl` |  |
+| `solve/n512/b1 [in_place]` | 5.60032 ± 0.0375709 (W 0.0205043) | 12.7472 ± 0.172091 (W 0.364233) | - | 🔵 faer-fork 2.28× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/n128/b1` | 3.19922 ± 0.0125803 (W 0.00996324) | 4.05754 ± 0.018113 (W 0.0179367) | 4.33616 ± 0.00909086 (W 0.0100633) | 🔵 faer-fork 1.27× faster than `faer-upstream` | 🔵 faer-fork 1.36× faster than `lapack-mkl` |  |
+| `svd_thin/n128/b1 [in_place]` | 3.18128 ± 0.00157764 (W 0.00673297) | 4.03571 ± 0.00769226 (W 0.016189) | - | 🔵 faer-fork 1.27× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/n256/b1` | 15.325 ± 0.0926618 (W 0.0306774) | 21.5815 ± 0.0771714 (W 0.101389) | 22.5512 ± 0.0659385 (W 0.0571782) | 🔵 faer-fork 1.41× faster than `faer-upstream` | 🔵 faer-fork 1.47× faster than `lapack-mkl` |  |
+| `svd_thin/n256/b1 [in_place]` | 15.1937 ± 0.0505847 (W 0.0255813) | 21.345 ± 0.0169499 (W 0.0247179) | - | 🔵 faer-fork 1.40× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/n512/b1` | 73.8563 ± 0.165773 (W 0.115057) | 89.3458 ± 0.172687 (W 1.05947) | 120.136 ± 0.308821 (W 0.421144) | 🔵 faer-fork 1.21× faster than `faer-upstream` | 🔵 faer-fork 1.63× faster than `lapack-mkl` |  |
+| `svd_thin/n512/b1 [in_place]` | 73.2879 ± 0.125375 (W 0.155016) | 87.0953 ± 0.107355 (W 0.144118) | - | 🔵 faer-fork 1.19× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n128/b1` | 1.42287 ± 0.00345908 (W 0.00267801) | 2.97898 ± 0.0134978 (W 0.0057309) | 1.95463 ± 0.00938867 (W 0.00859514) | 🔵 faer-fork 2.09× faster than `faer-upstream` | 🔵 faer-fork 1.37× faster than `lapack-mkl` |  |
+| `svd_values/n128/b1 [in_place]` | 1.41607 ± 0.00310578 (W 0.0055159) | 2.97334 ± 0.00780191 (W 0.0106092) | - | 🔵 faer-fork 2.10× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n256/b1` | 7.54303 ± 0.0946033 (W 0.0194018) | 16.4426 ± 0.063345 (W 0.0332293) | 10.8676 ± 0.0499517 (W 0.0171381) | 🔵 faer-fork 2.18× faster than `faer-upstream` | 🔵 faer-fork 1.44× faster than `lapack-mkl` |  |
+| `svd_values/n256/b1 [in_place]` | 7.45057 ± 0.00663419 (W 0.0179971) | 16.3162 ± 0.114825 (W 0.0295026) | - | 🔵 faer-fork 2.19× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n512/b1` | 38.9727 ± 0.0719678 (W 0.134952) | 57.8217 ± 0.15643 (W 0.0789577) | 55.4315 ± 0.261761 (W 0.102894) | 🔵 faer-fork 1.48× faster than `faer-upstream` | 🔵 faer-fork 1.42× faster than `lapack-mkl` |  |
+| `svd_values/n512/b1 [in_place]` | 38.8071 ± 0.0699105 (W 0.0650516) | 57.6039 ± 0.0949482 (W 0.0417676) | - | 🔵 faer-fork 1.48× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `triangular_solve/n128/b1` | 0.009227 ± 8.79223e-05 (W 3.10532e-05) | 0.007574 ± 4.93288e-05 (W 4.86826e-05) | - | 🔴 faer-fork 1.22× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `triangular_solve/n256/b1` | 0.021791 ± 0.000112398 (W 0.000182982) | 0.023584 ± 2.08167e-05 (W 5.41295e-05) | - | 🔵 faer-fork 1.08× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `triangular_solve/n512/b1` | 0.056285 ± 0.000185491 (W 0.00032059) | 0.063247 ± 0.000286235 (W 0.000698614) | - | 🔵 faer-fork 1.12× faster than `faer-upstream` | - | `*` one row has no measurement here |
+
+## linalg-mid, c64, c order, 8T (CPU 4-11)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `cholesky/n128/b1` | 0.151893 ± 0.000379189 (W 0.00233532) | 0.168594 ± 0.00140422 (W 0.00207444) | 0.465676 ± 0.00381791 (W 0.00330865) | 🔵 faer-fork 1.11× faster than `faer-upstream` | 🔵 faer-fork 3.07× faster than `lapack-mkl` |  |
+| `cholesky/n128/b1 [in_place]` | 0.522183 ± 0.000231996 (W 0.00261372) | 0.557047 ± 0.137883 (W 0.201673) | - | · | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `cholesky/n256/b1` | 0.691319 ± 0.00293272 (W 0.00285088) | 0.789808 ± 0.00477254 (W 0.0228031) | 0.592934 ± 0.00180817 (W 0.00503384) | 🔵 faer-fork 1.14× faster than `faer-upstream` | 🔴 faer-fork 1.17× slower than `lapack-mkl` |  |
+| `cholesky/n256/b1 [in_place]` | 1.57313 ± 0.00559514 (W 0.00511273) | 1.27825 ± 0.130734 (W 0.109073) | - | 🔴 faer-fork 1.23× slower than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `cholesky/n512/b1` | 2.57426 ± 0.0122732 (W 0.0184093) | 2.73952 ± 0.0568925 (W 0.0506874) | 1.9521 ± 0.019595 (W 0.00947403) | 🔵 faer-fork 1.06× faster than `faer-upstream` | 🔴 faer-fork 1.32× slower than `lapack-mkl` |  |
+| `cholesky/n512/b1 [in_place]` | 4.21723 ± 0.0114132 (W 0.00862127) | 3.73311 ± 0.244077 (W 0.281004) | - | 🔴 faer-fork 1.13× slower than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `eigh/n128/b1` | 2.48925 ± 0.00563106 (W 0.00563266) | 2.811 ± 0.00324611 (W 0.00465076) | 1.74684 ± 0.016269 (W 0.00923153) | 🔵 faer-fork 1.13× faster than `faer-upstream` | 🔴 faer-fork 1.43× slower than `lapack-mkl` |  |
+| `eigh/n128/b1 [in_place]` | 2.48037 ± 0.00365084 (W 0.0113222) | 2.7958 ± 0.00282344 (W 0.00545718) | - | 🔵 faer-fork 1.13× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `eigh/n256/b1` | 7.74219 ± 0.0207635 (W 0.0100842) | 11.1553 ± 0.0405558 (W 0.0348551) | 8.36929 ± 0.014806 (W 0.0245593) | 🔵 faer-fork 1.44× faster than `faer-upstream` | 🔵 faer-fork 1.08× faster than `lapack-mkl` |  |
+| `eigh/n256/b1 [in_place]` | 7.70936 ± 0.0412263 (W 0.00994469) | 11.1015 ± 0.0473434 (W 0.0272923) | - | 🔵 faer-fork 1.44× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `eigh/n512/b1` | 30.8575 ± 0.0593638 (W 0.228596) | 39.1695 ± 0.0626531 (W 0.220034) | 38.945 ± 0.0725667 (W 0.168804) | 🔵 faer-fork 1.27× faster than `faer-upstream` | 🔵 faer-fork 1.26× faster than `lapack-mkl` |  |
+| `eigh/n512/b1 [in_place]` | 30.6124 ± 0.0824403 (W 0.0254504) | 38.9605 ± 0.0567431 (W 0.212328) | - | 🔵 faer-fork 1.27× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1` | 0.710544 ± 0.00839833 (W 0.00643045) | 0.769826 ± 0.000513673 (W 0.00436557) | - | 🔵 faer-fork 1.08× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1 [in_place]` | 0.576592 ± 0.0024877 (W 0.00342768) | 0.798375 ± 0.000909255 (W 0.00337334) | - | 🔵 faer-fork 1.38× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1` | 3.78434 ± 0.00845271 (W 0.0112347) | 5.98435 ± 0.00713608 (W 0.013181) | - | 🔵 faer-fork 1.58× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1 [in_place]` | 2.9983 ± 0.0291013 (W 0.0119596) | 6.43718 ± 0.0399075 (W 0.01539) | - | 🔵 faer-fork 2.15× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1` | 17.1273 ± 0.0490049 (W 0.0367479) | 23.1468 ± 0.0489033 (W 0.0717197) | - | 🔵 faer-fork 1.35× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1 [in_place]` | 12.9115 ± 0.0491429 (W 0.027132) | 25.7636 ± 0.174071 (W 0.0477613) | - | 🔵 faer-fork 2.00× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [block(basis=128,target=128)]` | 0.177741 ± 0.00189891 (W 0.00155083) | 0.273809 ± 0.00179889 (W 0.00287529) | - | 🔵 faer-fork 1.54× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [sequence(basis=128,target=128)]` | 0.179921 ± 0.00133827 (W 0.001581) | 0.275322 ± 0.0023737 (W 0.00205997) | - | 🔵 faer-fork 1.53× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `householder_apply/n256/b1 [block(basis=256,target=256)]` | 1.01403 ± 0.00528217 (W 0.00270269) | 1.31396 ± 0.00361942 (W 0.0837213) | - | 🔵 faer-fork 1.30× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `householder_apply/n256/b1 [sequence(basis=256,target=256)]` | 1.02686 ± 0.00379763 (W 0.00564341) | 1.31238 ± 0.0902634 (W 0.0826518) | - | 🔵 faer-fork 1.28× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `householder_apply/n512/b1 [block(basis=512,target=512)]` | 7.91677 ± 0.00778561 (W 0.0755746) | 7.73079 ± 0.0358831 (W 1.48379) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n512/b1 [sequence(basis=512,target=512)]` | 7.93184 ± 0.0493503 (W 0.10726) | 10.0708 ± 1.35495 (W 1.41139) | - | 🔵 faer-fork 1.27× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `lu/n128/b1` | 0.405386 ± 0.00374796 (W 0.0033254) | 0.300779 ± 0.00201616 (W 0.00274719) | 0.452611 ± 0.00145495 (W 0.00373486) | 🔴 faer-fork 1.35× slower than `faer-upstream` | 🔵 faer-fork 1.12× faster than `lapack-mkl` |  |
+| `lu/n128/b1 [in_place]` | 0.26347 ± 0.000373258 (W 0.00183318) | 0.578247 ± 0.00173021 (W 0.00199542) | - | 🔵 faer-fork 2.19× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `lu/n256/b1` | 1.84144 ± 0.00778717 (W 0.00707414) | 1.48807 ± 0.00835991 (W 0.0110645) | 0.59682 ± 0.00323573 (W 0.0042857) | 🔴 faer-fork 1.24× slower than `faer-upstream` | 🔴 faer-fork 3.09× slower than `lapack-mkl` |  |
+| `lu/n256/b1 [in_place]` | 1.07037 ± 0.0026463 (W 0.00211516) | 4.16871 ± 0.024543 (W 0.0388429) | - | 🔵 faer-fork 3.89× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `lu/n512/b1` | 8.5919 ± 0.0479278 (W 0.0325709) | 5.97979 ± 0.0159126 (W 0.0139614) | 3.17522 ± 0.0119248 (W 0.0104247) | 🔴 faer-fork 1.44× slower than `faer-upstream` | 🔴 faer-fork 2.71× slower than `lapack-mkl` |  |
+| `lu/n512/b1 [in_place]` | 4.16445 ± 0.0121993 (W 0.00669241) | 13.6249 ± 0.115161 (W 0.193261) | - | 🔵 faer-fork 3.27× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/n128/b1` | 0.800601 ± 0.00168085 (W 0.00216839) | 1.32373 ± 0.00681867 (W 0.0048525) | - | 🔵 faer-fork 1.65× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/n256/b1` | 3.3004 ± 0.0165238 (W 0.00745388) | 4.37127 ± 0.370852 (W 0.0340378) | - | 🔵 faer-fork 1.32× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr/n512/b1` | 16.6174 ± 0.0975885 (W 0.0190072) | 19.0182 ± 0.585258 (W 0.229917) | - | 🔵 faer-fork 1.14× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr_factor/n128/b1` | 0.384958 ± 0.00130489 (W 0.00193058) | 1.09175 ± 0.00167743 (W 0.00607096) | 0.322302 ± 0.00213077 (W 0.00237973) | 🔵 faer-fork 2.84× faster than `faer-upstream` | 🔴 faer-fork 1.19× slower than `lapack-mkl` |  |
+| `qr_factor/n256/b1` | 1.30293 ± 0.00320136 (W 0.00534943) | 4.95968 ± 0.00747311 (W 0.0205674) | 1.61776 ± 0.00304856 (W 0.00226518) | 🔵 faer-fork 3.81× faster than `faer-upstream` | 🔵 faer-fork 1.24× faster than `lapack-mkl` |  |
+| `qr_factor/n512/b1` | 5.029 ± 0.0128815 (W 0.0119888) | 20.2061 ± 0.113738 (W 0.0707755) | 5.60058 ± 0.00999694 (W 0.00667713) | 🔵 faer-fork 4.02× faster than `faer-upstream` | 🔵 faer-fork 1.11× faster than `lapack-mkl` |  |
+| `solve/n128/b1` | 0.404835 ± 0.00389196 (W 0.00322484) | 0.294879 ± 0.00102674 (W 0.00214662) | 0.437703 ± 0.00482051 (W 0.00284608) | 🔴 faer-fork 1.37× slower than `faer-upstream` | 🔵 faer-fork 1.08× faster than `lapack-mkl` |  |
+| `solve/n128/b1 [in_place]` | 0.260726 ± 0.000196574 (W 0.00228353) | 0.404793 ± 0.00122553 (W 0.00354986) | - | 🔵 faer-fork 1.55× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `solve/n256/b1` | 1.15442 ± 0.00364015 (W 0.00221442) | 1.37381 ± 0.0348002 (W 0.0109704) | 0.581293 ± 0.00428764 (W 0.00783461) | 🔵 faer-fork 1.19× faster than `faer-upstream` | 🔴 faer-fork 1.99× slower than `lapack-mkl` |  |
+| `solve/n256/b1 [in_place]` | 0.980012 ± 0.00219435 (W 0.00185538) | 3.18134 ± 0.0062331 (W 0.0223607) | - | 🔵 faer-fork 3.25× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `solve/n512/b1` | 5.12643 ± 0.0412498 (W 0.014723) | 5.83014 ± 0.0175457 (W 0.0311977) | 3.05407 ± 0.0135282 (W 0.0180066) | 🔵 faer-fork 1.14× faster than `faer-upstream` | 🔴 faer-fork 1.68× slower than `lapack-mkl` |  |
+| `solve/n512/b1 [in_place]` | 3.98825 ± 0.00409667 (W 0.00707676) | 11.1166 ± 0.112273 (W 0.109634) | - | 🔵 faer-fork 2.79× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/n128/b1` | 3.02475 ± 0.00786268 (W 0.00278259) | 4.08709 ± 0.00569963 (W 0.0113871) | 3.87624 ± 0.00612769 (W 0.00921033) | 🔵 faer-fork 1.35× faster than `faer-upstream` | 🔵 faer-fork 1.28× faster than `lapack-mkl` |  |
+| `svd_thin/n128/b1 [in_place]` | 3.00611 ± 0.00380293 (W 0.00459476) | 4.074 ± 0.0144888 (W 0.0116009) | - | 🔵 faer-fork 1.36× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/n256/b1` | 13.3637 ± 0.0492867 (W 0.0222387) | 21.0356 ± 0.0471216 (W 0.0630103) | 18.6138 ± 0.147627 (W 0.0452312) | 🔵 faer-fork 1.57× faster than `faer-upstream` | 🔵 faer-fork 1.39× faster than `lapack-mkl` |  |
+| `svd_thin/n256/b1 [in_place]` | 13.261 ± 0.00756296 (W 0.0235139) | 21.2046 ± 0.149279 (W 0.0675159) | - | 🔵 faer-fork 1.60× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/n512/b1` | 54.7042 ± 0.298721 (W 0.0831318) | 74.381 ± 0.321143 (W 0.367372) | 88.2767 ± 0.293227 (W 0.339499) | 🔵 faer-fork 1.36× faster than `faer-upstream` | 🔵 faer-fork 1.61× faster than `lapack-mkl` |  |
+| `svd_thin/n512/b1 [in_place]` | 54.4259 ± 0.0788261 (W 0.0533057) | 74.2675 ± 0.366646 (W 0.206362) | - | 🔵 faer-fork 1.36× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n128/b1` | 1.44501 ± 0.00401899 (W 0.00383206) | 2.97207 ± 0.00475041 (W 0.423889) | 1.84265 ± 0.00338095 (W 0.0031932) | 🔵 faer-fork 2.06× faster than `faer-upstream` | 🔵 faer-fork 1.28× faster than `lapack-mkl` |  |
+| `svd_values/n128/b1 [in_place]` | 1.43542 ± 0.00696666 (W 0.0044434) | 2.96388 ± 0.00326571 (W 0.00629272) | - | 🔵 faer-fork 2.06× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n256/b1` | 7.01466 ± 0.029544 (W 0.0118736) | 16.201 ± 0.096977 (W 0.0370816) | 9.42129 ± 0.0198462 (W 0.0159179) | 🔵 faer-fork 2.31× faster than `faer-upstream` | 🔵 faer-fork 1.34× faster than `lapack-mkl` |  |
+| `svd_values/n256/b1 [in_place]` | 6.99766 ± 0.0298657 (W 0.0178724) | 16.3938 ± 0.0661777 (W 0.0160534) | - | 🔵 faer-fork 2.34× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n512/b1` | 31.1749 ± 0.0589231 (W 0.0595729) | 51.4056 ± 0.111431 (W 0.0466079) | 42.2591 ± 0.0784646 (W 0.0812007) | 🔵 faer-fork 1.65× faster than `faer-upstream` | 🔵 faer-fork 1.36× faster than `lapack-mkl` |  |
+| `svd_values/n512/b1 [in_place]` | 31.1515 ± 0.0598486 (W 0.0947258) | 51.2772 ± 0.163782 (W 0.065859) | - | 🔵 faer-fork 1.65× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `triangular_solve/n128/b1` | 0.009027 ± 7.03586e-05 (W 4.23592e-05) | 0.007554 ± 1.52753e-05 (W 4.77514e-05) | - | 🔴 faer-fork 1.19× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `triangular_solve/n256/b1` | 0.02128 ± 7.00024e-05 (W 8.07465e-05) | 0.023544 ± 0.000378775 (W 0.000105708) | - | 🔵 faer-fork 1.11× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `triangular_solve/n512/b1` | 0.051305 ± 0.000465665 (W 0.000390641) | 0.059531 ± 0.000668013 (W 0.00201747) | - | 🔵 faer-fork 1.16× faster than `faer-upstream` | - | `*` one row has no measurement here |
+
+## linalg-mid, c64, f order, 1T (CPU 4)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `cholesky/n128/b1` | 0.176496 ± 0.000541163 (W 0.00181284) | 0.174121 ± 0.000348002 (W 0.00131134) | 0.39493 ± 0.0012746 (W 0.00243524) | · | 🔵 faer-fork 2.24× faster than `lapack-mkl` |  |
+| `cholesky/n128/b1 [in_place]` | 0.167743 ± 0.000148803 (W 0.00179433) | 0.166551 ± 0.000345069 (W 0.00140426) | - | · | - | `*` one row has no measurement here |
+| `cholesky/n256/b1` | 1.13329 ± 0.00201533 (W 0.00270165) | 1.12452 ± 0.00412228 (W 0.00346781) | 1.75513 ± 0.0148948 (W 0.00632369) | · | 🔵 faer-fork 1.55× faster than `lapack-mkl` |  |
+| `cholesky/n256/b1 [in_place]` | 1.10753 ± 0.00133166 (W 0.00275246) | 1.08749 ± 0.0018841 (W 0.00155958) | - | · | - | `*` one row has no measurement here |
+| `cholesky/n512/b1` | 7.53039 ± 0.0951088 (W 0.00554581) | 7.48778 ± 0.00307917 (W 0.00780622) | 12.1678 ± 0.34268 (W 0.0185022) | · | 🔵 faer-fork 1.62× faster than `lapack-mkl` |  |
+| `cholesky/n512/b1 [in_place]` | 7.38273 ± 0.0922559 (W 0.013932) | 7.28299 ± 0.00891866 (W 0.0162356) | - | · | - | `*` one row has no measurement here |
+| `eigh/n128/b1` | 3.30249 ± 0.0036802 (W 0.00341779) | 3.23538 ± 0.00797842 (W 0.00461152) | 4.42806 ± 0.00895651 (W 0.0125496) | · | 🔵 faer-fork 1.34× faster than `lapack-mkl` |  |
+| `eigh/n128/b1 [in_place]` | 3.29556 ± 0.00949938 (W 0.00430366) | 3.23691 ± 0.00503156 (W 0.00443195) | - | · | - | `*` one row has no measurement here |
+| `eigh/n256/b1` | 17.4678 ± 0.0301492 (W 0.0173955) | 17.2178 ± 0.0906051 (W 0.0226455) | 26.5363 ± 0.137734 (W 0.0359685) | · | 🔵 faer-fork 1.52× faster than `lapack-mkl` |  |
+| `eigh/n256/b1 [in_place]` | 17.4505 ± 0.0187466 (W 0.0480563) | 17.2643 ± 0.0291547 (W 0.0158558) | - | · | - | `*` one row has no measurement here |
+| `eigh/n512/b1` | 105.7 ± 0.152061 (W 0.112828) | 104.368 ± 0.117632 (W 0.40818) | 168.562 ± 0.145478 (W 0.230138) | · | 🔵 faer-fork 1.59× faster than `lapack-mkl` |  |
+| `eigh/n512/b1 [in_place]` | 105.77 ± 0.134129 (W 0.0952147) | 104.316 ± 0.189746 (W 0.079319) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1` | 0.869349 ± 0.0107924 (W 0.00639973) | 0.849422 ± 0.00208199 (W 0.0054456) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1 [in_place]` | 0.785062 ± 0.00558658 (W 0.00492744) | 0.758946 ± 0.00312201 (W 0.00409746) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1` | 6.30392 ± 0.0205865 (W 0.0122759) | 6.30502 ± 0.013599 (W 0.0136746) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1 [in_place]` | 5.91812 ± 0.179034 (W 0.011269) | 5.90801 ± 0.0281042 (W 0.0126803) | - | · | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `full_piv_lu/n512/b1` | 42.763 ± 0.0359948 (W 0.0974864) | 42.6443 ± 0.110129 (W 0.122727) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1 [in_place]` | 42.8639 ± 0.100989 (W 0.0354449) | 42.8908 ± 0.0256513 (W 0.0689789) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [block(basis=128,target=128)]` | 1.04022 ± 0.00041344 (W 0.00131357) | 1.0395 ± 0.00728175 (W 0.000837712) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [sequence(basis=128,target=128)]` | 1.04068 ± 0.000671637 (W 0.000732433) | 1.03687 ± 0.00224324 (W 0.000625566) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n256/b1 [block(basis=256,target=256)]` | 7.46271 ± 0.00302745 (W 0.0138175) | 7.44721 ± 0.0209474 (W 0.0109623) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n256/b1 [sequence(basis=256,target=256)]` | 7.46284 ± 0.00798354 (W 0.00549717) | 7.45522 ± 0.00751363 (W 0.00415208) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n512/b1 [block(basis=512,target=512)]` | 56.554 ± 0.110061 (W 0.0556472) | 56.626 ± 0.0389595 (W 0.0976877) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n512/b1 [sequence(basis=512,target=512)]` | 56.6461 ± 0.178145 (W 0.267475) | 56.6496 ± 0.102476 (W 0.400679) | - | · | - | `*` one row has no measurement here |
+| `lu/n128/b1` | 0.416968 ± 0.00175879 (W 0.00248571) | 0.41157 ± 0.00200297 (W 0.00257489) | 0.430923 ± 0.00195979 (W 0.00321574) | · | · |  |
+| `lu/n128/b1 [in_place]` | 0.289799 ± 0.00032962 (W 0.00222793) | 0.28975 ± 9.43946e-05 (W 0.00251541) | - | · | - | `*` one row has no measurement here |
+| `lu/n256/b1` | 2.61972 ± 0.00410848 (W 0.00839282) | 2.6031 ± 0.00608931 (W 0.00479331) | 3.06511 ± 0.00919873 (W 0.00767673) | · | 🔵 faer-fork 1.17× faster than `lapack-mkl` |  |
+| `lu/n256/b1 [in_place]` | 2.00857 ± 0.00275552 (W 0.00541124) | 2.00392 ± 0.00128275 (W 0.00709496) | - | · | - | `*` one row has no measurement here |
+| `lu/n512/b1` | 17.0269 ± 0.0405144 (W 0.0110848) | 16.9921 ± 0.00800635 (W 0.0193263) | 19.39 ± 0.00895249 (W 0.382511) | · | 🔵 faer-fork 1.14× faster than `lapack-mkl` |  |
+| `lu/n512/b1 [in_place]` | 13.6811 ± 0.0311555 (W 0.0147834) | 13.6615 ± 0.019235 (W 0.0257846) | - | · | - | `*` one row has no measurement here |
+| `qr/n128/b1` | 1.67951 ± 0.00530503 (W 0.00252036) | 1.71708 ± 0.00226835 (W 0.005548) | - | · | - | `*` one row has no measurement here |
+| `qr/n256/b1` | 10.829 ± 0.0138747 (W 0.00803774) | 10.9523 ± 0.016164 (W 0.0110919) | - | · | - | `*` one row has no measurement here |
+| `qr/n512/b1` | 73.0433 ± 0.184063 (W 0.0812211) | 73.4796 ± 0.115192 (W 0.0686097) | - | · | - | `*` one row has no measurement here |
+| `qr_factor/n128/b1` | 0.709862 ± 0.00534426 (W 0.00275904) | 0.756599 ± 0.00427853 (W 0.00283207) | 0.897004 ± 0.00202869 (W 0.0041388) | 🔵 faer-fork 1.07× faster than `faer-upstream` | 🔵 faer-fork 1.26× faster than `lapack-mkl` |  |
+| `qr_factor/n256/b1` | 4.36582 ± 0.00166382 (W 0.00436847) | 4.53821 ± 0.0130009 (W 0.00443569) | 5.52107 ± 0.0192809 (W 0.00638898) | · | 🔵 faer-fork 1.26× faster than `lapack-mkl` |  |
+| `qr_factor/n512/b1` | 28.3435 ± 0.108199 (W 0.0191284) | 28.9419 ± 0.0386494 (W 0.0264785) | 37.8738 ± 0.0715588 (W 0.0980072) | · | 🔵 faer-fork 1.34× faster than `lapack-mkl` |  |
+| `solve/n128/b1` | 0.416095 ± 0.00262988 (W 0.00390399) | 0.408324 ± 0.00286942 (W 0.00252303) | 0.415214 ± 0.000904731 (W 0.00225207) | · | · |  |
+| `solve/n128/b1 [in_place]` | 0.282437 ± 0.000420426 (W 0.0018423) | 0.282036 ± 0.000278665 (W 0.00194518) | - | · | - | `*` one row has no measurement here |
+| `solve/n256/b1` | 1.98498 ± 0.00247143 (W 0.00476957) | 1.96079 ± 0.0028538 (W 0.00275833) | 2.51474 ± 0.00107993 (W 0.00777022) | · | 🔵 faer-fork 1.27× faster than `lapack-mkl` |  |
+| `solve/n256/b1 [in_place]` | 1.88457 ± 0.00116345 (W 0.00461874) | 1.94772 ± 0.00372715 (W 0.00342195) | - | · | - | `*` one row has no measurement here |
+| `solve/n512/b1` | 13.9998 ± 0.0155958 (W 0.0403383) | 13.928 ± 0.023274 (W 0.0273998) | 16.7376 ± 0.00791677 (W 0.0256566) | · | 🔵 faer-fork 1.20× faster than `lapack-mkl` |  |
+| `solve/n512/b1 [in_place]` | 13.2839 ± 0.00321842 (W 0.0280049) | 13.5672 ± 0.0345584 (W 0.0132232) | - | · | - | `*` one row has no measurement here |
+| `svd_thin/n128/b1` | 5.24047 ± 0.00580149 (W 0.00423089) | 5.68538 ± 0.00785238 (W 0.0050368) | 6.85245 ± 0.00165161 (W 0.0140832) | 🔵 faer-fork 1.08× faster than `faer-upstream` | 🔵 faer-fork 1.31× faster than `lapack-mkl` |  |
+| `svd_thin/n128/b1 [in_place]` | 5.22855 ± 0.0160086 (W 0.00676436) | 5.65947 ± 0.00726823 (W 0.00688503) | - | 🔵 faer-fork 1.08× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/n256/b1` | 31.5181 ± 0.0865851 (W 0.043819) | 33.6093 ± 0.103216 (W 0.131547) | 44.9996 ± 0.190906 (W 0.136861) | 🔵 faer-fork 1.07× faster than `faer-upstream` | 🔵 faer-fork 1.43× faster than `lapack-mkl` |  |
+| `svd_thin/n256/b1 [in_place]` | 31.5169 ± 0.0670519 (W 0.0423056) | 33.5422 ± 0.0512568 (W 0.0513567) | - | 🔵 faer-fork 1.06× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/n512/b1` | 201.588 ± 0.689648 (W 0.559282) | 208.174 ± 0.74771 (W 0.510405) | 308.62 ± 1.73845 (W 1.41425) | · | 🔵 faer-fork 1.53× faster than `lapack-mkl` |  |
+| `svd_thin/n512/b1 [in_place]` | 201.964 ± 0.268527 (W 0.500575) | 207.358 ± 0.87129 (W 0.44139) | - | · | - | `*` one row has no measurement here |
+| `svd_values/n128/b1` | 1.72823 ± 0.00200271 (W 0.0042649) | 3.43885 ± 0.00485609 (W 0.0111406) | 2.65901 ± 0.00786354 (W 0.00312882) | 🔵 faer-fork 1.99× faster than `faer-upstream` | 🔵 faer-fork 1.54× faster than `lapack-mkl` |  |
+| `svd_values/n128/b1 [in_place]` | 1.72144 ± 0.00268576 (W 0.00331547) | 3.43763 ± 0.0051896 (W 0.00426238) | - | 🔵 faer-fork 2.00× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n256/b1` | 12.3935 ± 0.0744744 (W 0.0301884) | 18.8136 ± 0.0110696 (W 0.0228292) | 19.9741 ± 0.137422 (W 0.194506) | 🔵 faer-fork 1.52× faster than `faer-upstream` | 🔵 faer-fork 1.61× faster than `lapack-mkl` |  |
+| `svd_values/n256/b1 [in_place]` | 12.3642 ± 0.0372017 (W 0.0323285) | 18.8967 ± 0.0401188 (W 0.0294222) | - | 🔵 faer-fork 1.53× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n512/b1` | 87.5719 ± 0.120715 (W 0.764997) | 108.935 ± 0.484427 (W 0.667164) | 154.967 ± 0.41698 (W 0.151172) | 🔵 faer-fork 1.24× faster than `faer-upstream` | 🔵 faer-fork 1.77× faster than `lapack-mkl` |  |
+| `svd_values/n512/b1 [in_place]` | 87.6758 ± 0.391135 (W 0.533166) | 108.206 ± 0.223771 (W 0.308382) | - | 🔵 faer-fork 1.23× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `triangular_solve/n128/b1` | 0.008155 ± 7.53459e-05 (W 5.68331e-05) | 0.008356 ± 2.5697e-05 (W 3.27613e-05) | - | · | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `triangular_solve/n256/b1` | 0.023815 ± 0.000259288 (W 0.000160721) | 0.024766 ± 0.000249969 (W 8.72926e-05) | - | · | - | `*` one row has no measurement here |
+| `triangular_solve/n512/b1` | 0.089757 ± 0.000374767 (W 0.00156843) | 0.089076 ± 0.00102344 (W 0.00189252) | - | · | - | `*` one row has no measurement here |
+
+## linalg-mid, c64, f order, 4T (CPU 4-7)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `cholesky/n128/b1` | 0.145692 ± 0.000982575 (W 0.00154235) | 0.169405 ± 0.00145958 (W 0.00211163) | 0.400453 ± 0.00287196 (W 0.00358861) | 🔵 faer-fork 1.16× faster than `faer-upstream` | 🔵 faer-fork 2.75× faster than `lapack-mkl` |  |
+| `cholesky/n128/b1 [in_place]` | 0.133899 ± 0.00182941 (W 0.00261761) | 0.152534 ± 0.00183458 (W 0.0019925) | - | 🔵 faer-fork 1.14× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `cholesky/n256/b1` | 0.654499 ± 0.00372919 (W 0.00177815) | 0.71419 ± 0.00357722 (W 0.00708335) | 0.564503 ± 0.00337931 (W 0.00568119) | 🔵 faer-fork 1.09× faster than `faer-upstream` | 🔴 faer-fork 1.16× slower than `lapack-mkl` |  |
+| `cholesky/n256/b1 [in_place]` | 0.595441 ± 0.00318836 (W 0.00351841) | 0.636377 ± 0.0030443 (W 0.00520269) | - | 🔵 faer-fork 1.07× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `cholesky/n512/b1` | 2.83668 ± 0.0148566 (W 0.00888385) | 3.15042 ± 0.0235609 (W 0.0939263) | 3.20682 ± 0.00580083 (W 0.0143293) | 🔵 faer-fork 1.11× faster than `faer-upstream` | 🔵 faer-fork 1.13× faster than `lapack-mkl` |  |
+| `cholesky/n512/b1 [in_place]` | 2.5401 ± 0.00526733 (W 0.0079209) | 2.68349 ± 0.0940394 (W 0.12582) | - | 🔵 faer-fork 1.06× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `eigh/n128/b1` | 2.55401 ± 0.00448629 (W 0.0032533) | 2.79746 ± 0.0103492 (W 0.00424573) | 2.05236 ± 0.00703816 (W 0.00616846) | 🔵 faer-fork 1.10× faster than `faer-upstream` | 🔴 faer-fork 1.24× slower than `lapack-mkl` |  |
+| `eigh/n128/b1 [in_place]` | 2.54727 ± 0.0054136 (W 0.00651787) | 2.77383 ± 0.00235017 (W 0.00525424) | - | 🔵 faer-fork 1.09× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `eigh/n256/b1` | 8.60365 ± 0.0240498 (W 0.0137041) | 11.2853 ± 0.0115488 (W 0.0187625) | 10.3527 ± 0.0167076 (W 0.0256321) | 🔵 faer-fork 1.31× faster than `faer-upstream` | 🔵 faer-fork 1.20× faster than `lapack-mkl` |  |
+| `eigh/n256/b1 [in_place]` | 8.54763 ± 0.0060531 (W 0.0149722) | 11.2228 ± 0.017947 (W 0.0192289) | - | 🔵 faer-fork 1.31× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `eigh/n512/b1` | 39.208 ± 0.0752345 (W 0.060665) | 44.7536 ± 0.087485 (W 0.0664807) | 55.0092 ± 0.060675 (W 0.0760394) | 🔵 faer-fork 1.14× faster than `faer-upstream` | 🔵 faer-fork 1.40× faster than `lapack-mkl` |  |
+| `eigh/n512/b1 [in_place]` | 39.0398 ± 0.0468228 (W 0.0138037) | 44.5612 ± 0.0565341 (W 0.0273802) | - | 🔵 faer-fork 1.14× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1` | 0.695648 ± 0.00528807 (W 0.00444541) | 0.74118 ± 0.00370187 (W 0.00575) | - | 🔵 faer-fork 1.07× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1 [in_place]` | 0.582881 ± 0.00817469 (W 0.00476925) | 0.755136 ± 0.00256786 (W 0.00396981) | - | 🔵 faer-fork 1.30× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1` | 3.90129 ± 0.0163456 (W 0.0119902) | 5.81588 ± 0.0516987 (W 0.141396) | - | 🔵 faer-fork 1.49× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1 [in_place]` | 3.29461 ± 0.00641554 (W 0.0115306) | 5.88476 ± 0.0323627 (W 0.00541743) | - | 🔵 faer-fork 1.79× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1` | 19.6586 ± 0.11838 (W 0.0380373) | 24.583 ± 0.0561286 (W 0.0418226) | - | 🔵 faer-fork 1.25× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1 [in_place]` | 17.0908 ± 0.150236 (W 0.0483566) | 25.9255 ± 0.0590276 (W 0.0616662) | - | 🔵 faer-fork 1.52× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [block(basis=128,target=128)]` | 0.282917 ± 0.000933317 (W 0.00194097) | 0.282737 ± 0.000887325 (W 0.00170117) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [sequence(basis=128,target=128)]` | 0.285811 ± 0.0020868 (W 0.00190149) | 0.280732 ± 0.00161878 (W 0.00172376) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n256/b1 [block(basis=256,target=256)]` | 1.945 ± 0.00309828 (W 0.00677231) | 1.95449 ± 0.00360041 (W 0.00547685) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n256/b1 [sequence(basis=256,target=256)]` | 1.94402 ± 0.0024116 (W 0.00560325) | 1.95238 ± 0.0072011 (W 0.0037472) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n512/b1 [block(basis=512,target=512)]` | 14.719 ± 0.00800873 (W 0.0116497) | 14.782 ± 0.0333402 (W 0.0327204) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/n512/b1 [sequence(basis=512,target=512)]` | 14.7283 ± 0.0224148 (W 0.0248486) | 14.7855 ± 0.0480229 (W 0.0566935) | - | · | - | `*` one row has no measurement here |
+| `lu/n128/b1` | 0.38038 ± 0.00296459 (W 0.00239299) | 0.285653 ± 0.00145748 (W 0.00359078) | 0.435578 ± 0.00168088 (W 0.00316575) | 🔴 faer-fork 1.33× slower than `faer-upstream` | 🔵 faer-fork 1.15× faster than `lapack-mkl` |  |
+| `lu/n128/b1 [in_place]` | 0.250063 ± 0.00307421 (W 0.00298117) | 0.262557 ± 0.00203024 (W 0.00276547) | - | · | - | `*` one row has no measurement here |
+| `lu/n256/b1` | 1.79795 ± 0.00705323 (W 0.0100426) | 1.3937 ± 0.0160723 (W 0.014985) | 0.903923 ± 0.00293618 (W 0.00602343) | 🔴 faer-fork 1.29× slower than `faer-upstream` | 🔴 faer-fork 1.99× slower than `lapack-mkl` |  |
+| `lu/n256/b1 [in_place]` | 1.15287 ± 0.00457122 (W 0.00521029) | 1.31985 ± 0.00743136 (W 0.01384) | - | 🔵 faer-fork 1.14× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `lu/n512/b1` | 9.02154 ± 0.238907 (W 0.123284) | 6.52828 ± 0.0569569 (W 0.0521067) | 5.78466 ± 0.0124582 (W 0.0169984) | 🔴 faer-fork 1.38× slower than `faer-upstream` | 🔴 faer-fork 1.56× slower than `lapack-mkl` | `!` between-start range over 5% |
+| `lu/n512/b1 [in_place]` | 5.44519 ± 0.0157925 (W 0.00901803) | 6.08351 ± 0.0790675 (W 0.121329) | - | 🔵 faer-fork 1.12× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/n128/b1` | 0.903245 ± 0.00219189 (W 0.00510633) | 1.17616 ± 0.00301889 (W 0.0037141) | - | 🔵 faer-fork 1.30× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/n256/b1` | 4.08478 ± 0.0213028 (W 0.052168) | 5.06846 ± 0.027849 (W 0.00943617) | - | 🔵 faer-fork 1.24× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/n512/b1` | 24.6288 ± 0.0738318 (W 0.0357633) | 26.4879 ± 0.0370627 (W 0.0443312) | - | 🔵 faer-fork 1.08× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr_factor/n128/b1` | 0.411263 ± 0.00198991 (W 0.00300855) | 0.663436 ± 0.000801514 (W 0.00365686) | 0.442902 ± 0.000463637 (W 0.00186738) | 🔵 faer-fork 1.61× faster than `faer-upstream` | 🔵 faer-fork 1.08× faster than `lapack-mkl` |  |
+| `qr_factor/n256/b1` | 1.56007 ± 0.00200296 (W 0.00343762) | 2.59137 ± 0.0038056 (W 0.00549053) | 1.57489 ± 0.00377333 (W 0.00552964) | 🔵 faer-fork 1.66× faster than `faer-upstream` | · |  |
+| `qr_factor/n512/b1` | 9.02347 ± 0.0196666 (W 0.00758123) | 10.9809 ± 0.0314219 (W 0.0249284) | 11.1196 ± 0.0196307 (W 0.0178249) | 🔵 faer-fork 1.22× faster than `faer-upstream` | 🔵 faer-fork 1.23× faster than `lapack-mkl` |  |
+| `solve/n128/b1` | 0.373585 ± 0.00253416 (W 0.00459779) | 0.278016 ± 0.00315273 (W 0.00357377) | 0.416012 ± 0.00177885 (W 0.00287015) | 🔴 faer-fork 1.34× slower than `faer-upstream` | 🔵 faer-fork 1.11× faster than `lapack-mkl` |  |
+| `solve/n128/b1 [in_place]` | 0.239046 ± 0.000688026 (W 0.0020968) | 0.251006 ± 0.00144699 (W 0.00309816) | - | · | - | `*` one row has no measurement here |
+| `solve/n256/b1` | 1.16206 ± 0.00316193 (W 0.00354297) | 1.27649 ± 0.0182685 (W 0.0103997) | 0.762953 ± 0.00087036 (W 0.00329992) | 🔵 faer-fork 1.10× faster than `faer-upstream` | 🔴 faer-fork 1.52× slower than `lapack-mkl` |  |
+| `solve/n256/b1 [in_place]` | 1.02131 ± 0.00105363 (W 0.00419931) | 1.15836 ± 0.0110999 (W 0.0160254) | - | 🔵 faer-fork 1.13× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `solve/n512/b1` | 5.7394 ± 0.0162328 (W 0.0075845) | 6.27374 ± 0.0508234 (W 0.0842349) | 5.13673 ± 0.00722953 (W 0.00867393) | 🔵 faer-fork 1.09× faster than `faer-upstream` | 🔴 faer-fork 1.12× slower than `lapack-mkl` |  |
+| `solve/n512/b1 [in_place]` | 5.13063 ± 0.0110903 (W 0.00721593) | 5.71012 ± 0.0897261 (W 0.095547) | - | 🔵 faer-fork 1.11× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/n128/b1` | 3.1808 ± 0.00566237 (W 0.00549089) | 4.0357 ± 0.00437629 (W 0.0123703) | 3.96502 ± 0.00829798 (W 0.00791613) | 🔵 faer-fork 1.27× faster than `faer-upstream` | 🔵 faer-fork 1.25× faster than `lapack-mkl` |  |
+| `svd_thin/n128/b1 [in_place]` | 3.17233 ± 0.00330011 (W 0.00683659) | 4.01849 ± 0.00588913 (W 0.0146152) | - | 🔵 faer-fork 1.27× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/n256/b1` | 15.005 ± 0.0209136 (W 0.025421) | 21.4564 ± 0.118572 (W 0.0793155) | 21.7635 ± 0.0838923 (W 0.0360374) | 🔵 faer-fork 1.43× faster than `faer-upstream` | 🔵 faer-fork 1.45× faster than `lapack-mkl` |  |
+| `svd_thin/n256/b1 [in_place]` | 14.9041 ± 0.00851288 (W 0.0197398) | 21.2681 ± 0.132299 (W 0.031126) | - | 🔵 faer-fork 1.43× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/n512/b1` | 73.1381 ± 0.176108 (W 0.110294) | 88.2963 ± 0.0718994 (W 1.02288) | 120.633 ± 1.09328 (W 0.0982535) | 🔵 faer-fork 1.21× faster than `faer-upstream` | 🔵 faer-fork 1.65× faster than `lapack-mkl` |  |
+| `svd_thin/n512/b1 [in_place]` | 72.2876 ± 0.18949 (W 0.132461) | 86.1941 ± 0.0750024 (W 0.347007) | - | 🔵 faer-fork 1.19× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n128/b1` | 1.40238 ± 0.00615857 (W 0.00314139) | 2.94927 ± 0.013237 (W 0.00645751) | 1.95651 ± 0.0106344 (W 0.005924) | 🔵 faer-fork 2.10× faster than `faer-upstream` | 🔵 faer-fork 1.40× faster than `lapack-mkl` |  |
+| `svd_values/n128/b1 [in_place]` | 1.3884 ± 0.0022632 (W 0.00424726) | 2.93343 ± 0.0107691 (W 0.00815962) | - | 🔵 faer-fork 2.11× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n256/b1` | 7.33066 ± 0.0177626 (W 0.0158373) | 15.9777 ± 0.126815 (W 0.0143451) | 11.8625 ± 0.242537 (W 0.0343397) | 🔵 faer-fork 2.18× faster than `faer-upstream` | 🔵 faer-fork 1.62× faster than `lapack-mkl` |  |
+| `svd_values/n256/b1 [in_place]` | 7.28051 ± 0.0422464 (W 0.0161049) | 15.9213 ± 0.0345029 (W 0.0633338) | - | 🔵 faer-fork 2.19× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n512/b1` | 38.1314 ± 0.446844 (W 0.0654674) | 56.9312 ± 0.0238395 (W 0.0841467) | 64.2687 ± 0.184321 (W 0.374363) | 🔵 faer-fork 1.49× faster than `faer-upstream` | 🔵 faer-fork 1.69× faster than `lapack-mkl` |  |
+| `svd_values/n512/b1 [in_place]` | 37.6877 ± 0.221394 (W 0.042743) | 56.698 ± 0.148529 (W 0.0330362) | - | 🔵 faer-fork 1.50× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `triangular_solve/n128/b1` | 0.009057 ± 5.34821e-05 (W 4.44972e-05) | 0.008145 ± 8.96289e-05 (W 4.42967e-05) | - | 🔴 faer-fork 1.11× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `triangular_solve/n256/b1` | 0.022913 ± 0.000150334 (W 6.34917e-05) | 0.024655 ± 8.6379e-05 (W 7.05287e-05) | - | 🔵 faer-fork 1.08× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `triangular_solve/n512/b1` | 0.05929 ± 0.000591451 (W 0.000384146) | 0.066113 ± 0.000815544 (W 0.00144955) | - | 🔵 faer-fork 1.12× faster than `faer-upstream` | - | `*` one row has no measurement here |
+
+## linalg-mid, c64, f order, 8T (CPU 4-11)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `cholesky/n128/b1` | 0.137937 ± 0.000414452 (W 0.000984169) | 0.157043 ± 0.00117724 (W 0.00132998) | 0.397801 ± 0.000699612 (W 0.00258341) | 🔵 faer-fork 1.14× faster than `faer-upstream` | 🔵 faer-fork 2.88× faster than `lapack-mkl` |  |
+| `cholesky/n128/b1 [in_place]` | 0.128449 ± 0.000264513 (W 0.00125686) | 0.142807 ± 0.00037143 (W 0.00112678) | - | 🔵 faer-fork 1.11× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `cholesky/n256/b1` | 0.588628 ± 0.00367001 (W 0.00446911) | 0.687588 ± 0.0159823 (W 0.0164966) | 0.409954 ± 0.0021582 (W 0.00509381) | 🔵 faer-fork 1.17× faster than `faer-upstream` | 🔴 faer-fork 1.44× slower than `lapack-mkl` |  |
+| `cholesky/n256/b1 [in_place]` | 0.531308 ± 0.00239699 (W 0.00295466) | 0.635553 ± 0.00254137 (W 0.00781081) | - | 🔵 faer-fork 1.20× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `cholesky/n512/b1` | 2.22563 ± 0.00376466 (W 0.00607755) | 2.371 ± 0.00527939 (W 0.0686257) | 1.734 ± 0.0148405 (W 0.0122958) | 🔵 faer-fork 1.07× faster than `faer-upstream` | 🔴 faer-fork 1.28× slower than `lapack-mkl` |  |
+| `cholesky/n512/b1 [in_place]` | 1.89929 ± 0.000900954 (W 0.00331552) | 2.06647 ± 0.00465046 (W 0.0490864) | - | 🔵 faer-fork 1.09× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `eigh/n128/b1` | 2.46888 ± 0.00425009 (W 0.00613421) | 2.81125 ± 0.0128321 (W 0.00904732) | 1.71249 ± 0.104664 (W 0.0074573) | 🔵 faer-fork 1.14× faster than `faer-upstream` | 🔴 faer-fork 1.44× slower than `lapack-mkl` | `!` between-start range over 5% |
+| `eigh/n128/b1 [in_place]` | 2.46674 ± 0.00988097 (W 0.00279524) | 2.79325 ± 0.00398008 (W 0.0072428) | - | 🔵 faer-fork 1.13× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `eigh/n256/b1` | 7.62284 ± 0.0114348 (W 0.00579967) | 11.0627 ± 0.0108949 (W 0.0420812) | 8.23346 ± 0.0188378 (W 0.0469998) | 🔵 faer-fork 1.45× faster than `faer-upstream` | 🔵 faer-fork 1.08× faster than `lapack-mkl` |  |
+| `eigh/n256/b1 [in_place]` | 7.60565 ± 0.00622507 (W 0.0128948) | 10.9858 ± 0.0621879 (W 0.0442857) | - | 🔵 faer-fork 1.44× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `eigh/n512/b1` | 30.4938 ± 0.0150137 (W 0.052067) | 39.0152 ± 0.191212 (W 0.350869) | 38.4391 ± 0.044349 (W 0.166047) | 🔵 faer-fork 1.28× faster than `faer-upstream` | 🔵 faer-fork 1.26× faster than `lapack-mkl` |  |
+| `eigh/n512/b1 [in_place]` | 30.2652 ± 0.0337901 (W 0.0411326) | 38.6267 ± 0.0935861 (W 0.32076) | - | 🔵 faer-fork 1.28× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1` | 0.68606 ± 0.0057909 (W 0.00481058) | 0.737926 ± 0.00480861 (W 0.00712715) | - | 🔵 faer-fork 1.08× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1 [in_place]` | 0.565585 ± 0.00341935 (W 0.00292647) | 0.75135 ± 0.00570208 (W 0.00530051) | - | 🔵 faer-fork 1.33× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1` | 3.60964 ± 0.0248622 (W 0.0066526) | 5.72167 ± 0.0391113 (W 0.0138864) | - | 🔵 faer-fork 1.59× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1 [in_place]` | 2.92168 ± 0.00928002 (W 0.00982267) | 5.88632 ± 0.0212852 (W 0.0117846) | - | 🔵 faer-fork 2.01× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1` | 16.1389 ± 0.0733203 (W 0.0326) | 22.1729 ± 0.0129225 (W 0.0358486) | - | 🔵 faer-fork 1.37× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1 [in_place]` | 13.0497 ± 0.0204709 (W 0.0273664) | 23.3117 ± 0.0685708 (W 0.023684) | - | 🔵 faer-fork 1.79× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [block(basis=128,target=128)]` | 0.183337 ± 0.00209542 (W 0.00182619) | 0.272839 ± 0.000200253 (W 0.00171498) | - | 🔵 faer-fork 1.49× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [sequence(basis=128,target=128)]` | 0.181123 ± 0.000531864 (W 0.00172844) | 0.271955 ± 0.000675154 (W 0.00252853) | - | 🔵 faer-fork 1.50× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `householder_apply/n256/b1 [block(basis=256,target=256)]` | 1.02382 ± 0.00621573 (W 0.00281434) | 1.32217 ± 0.0967137 (W 0.098046) | - | 🔵 faer-fork 1.29× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `householder_apply/n256/b1 [sequence(basis=256,target=256)]` | 1.03283 ± 0.00166615 (W 0.0041625) | 1.1624 ± 0.0874492 (W 0.0972152) | - | 🔵 faer-fork 1.13× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `householder_apply/n512/b1 [block(basis=512,target=512)]` | 8.12378 ± 0.0359267 (W 0.0849851) | 10.1033 ± 1.29436 (W 1.48431) | - | 🔵 faer-fork 1.24× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `householder_apply/n512/b1 [sequence(basis=512,target=512)]` | 8.14163 ± 0.011746 (W 0.0545546) | 7.91382 ± 1.30012 (W 1.44461) | - | · | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `lu/n128/b1` | 0.377251 ± 0.00203927 (W 0.00242173) | 0.271785 ± 0.00132398 (W 0.00154135) | 0.432323 ± 0.000610584 (W 0.00217637) | 🔴 faer-fork 1.39× slower than `faer-upstream` | 🔵 faer-fork 1.15× faster than `lapack-mkl` |  |
+| `lu/n128/b1 [in_place]` | 0.245477 ± 0.000427707 (W 0.00116562) | 0.25215 ± 0.000426965 (W 0.00142557) | - | · | - | `*` one row has no measurement here |
+| `lu/n256/b1` | 1.68627 ± 0.00867198 (W 0.00323596) | 1.29191 ± 0.00929949 (W 0.00945909) | 0.565635 ± 0.00361841 (W 0.00547734) | 🔴 faer-fork 1.31× slower than `faer-upstream` | 🔴 faer-fork 2.98× slower than `lapack-mkl` |  |
+| `lu/n256/b1 [in_place]` | 1.04792 ± 0.00419429 (W 0.00357536) | 1.22894 ± 0.00839404 (W 0.00775499) | - | 🔵 faer-fork 1.17× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `lu/n512/b1` | 7.49496 ± 0.042437 (W 0.0149438) | 5.11455 ± 0.0339142 (W 0.0225443) | 3.26187 ± 0.0064436 (W 0.0114445) | 🔴 faer-fork 1.47× slower than `faer-upstream` | 🔴 faer-fork 2.30× slower than `lapack-mkl` |  |
+| `lu/n512/b1 [in_place]` | 4.09763 ± 0.00604417 (W 0.00326986) | 4.61653 ± 0.0248237 (W 0.0347758) | - | 🔵 faer-fork 1.13× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/n128/b1` | 0.771607 ± 0.00147352 (W 0.0031172) | 1.29119 ± 0.00508302 (W 0.00439413) | - | 🔵 faer-fork 1.67× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/n256/b1` | 3.13684 ± 0.01025 (W 0.0118126) | 4.44278 ± 0.325916 (W 0.369638) | - | 🔵 faer-fork 1.42× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr/n512/b1` | 15.6148 ± 0.0989496 (W 0.0238684) | 18.1116 ± 2.89409 (W 0.307996) | - | · | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr_factor/n128/b1` | 0.363609 ± 0.0165598 (W 0.00184307) | 0.753814 ± 0.006334 (W 0.00287656) | 0.305639 ± 0.00100198 (W 0.00240207) | 🔵 faer-fork 2.07× faster than `faer-upstream` | 🔴 faer-fork 1.19× slower than `lapack-mkl` | `!` between-start range over 5% |
+| `qr_factor/n256/b1` | 1.26456 ± 0.00115142 (W 0.00240899) | 2.73352 ± 0.0136099 (W 0.0200498) | 1.58772 ± 0.00310271 (W 0.00454772) | 🔵 faer-fork 2.16× faster than `faer-upstream` | 🔵 faer-fork 1.26× faster than `lapack-mkl` |  |
+| `qr_factor/n512/b1` | 4.82627 ± 0.00451456 (W 0.00523022) | 9.96173 ± 0.0745841 (W 0.0630118) | 5.62592 ± 0.00521852 (W 0.00913732) | 🔵 faer-fork 2.06× faster than `faer-upstream` | 🔵 faer-fork 1.17× faster than `lapack-mkl` |  |
+| `solve/n128/b1` | 0.372432 ± 0.00111657 (W 0.00403384) | 0.26368 ± 0.000876259 (W 0.00294433) | 0.411546 ± 0.00352445 (W 0.00353011) | 🔴 faer-fork 1.41× slower than `faer-upstream` | 🔵 faer-fork 1.11× faster than `lapack-mkl` |  |
+| `solve/n128/b1 [in_place]` | 0.239907 ± 0.000541233 (W 0.00132847) | 0.241821 ± 0.000340569 (W 0.00156134) | - | · | - | `*` one row has no measurement here |
+| `solve/n256/b1` | 1.05334 ± 0.00475278 (W 0.00295415) | 1.17111 ± 0.0102756 (W 0.0153927) | 0.534474 ± 0.00504068 (W 0.00327425) | 🔵 faer-fork 1.11× faster than `faer-upstream` | 🔴 faer-fork 1.97× slower than `lapack-mkl` |  |
+| `solve/n256/b1 [in_place]` | 0.966918 ± 0.0101072 (W 0.00582098) | 1.11971 ± 0.00436668 (W 0.012891) | - | 🔵 faer-fork 1.16× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `solve/n512/b1` | 4.3779 ± 0.0172115 (W 0.0124047) | 4.88931 ± 0.00796198 (W 0.0236459) | 2.8471 ± 0.00604697 (W 0.01064) | 🔵 faer-fork 1.12× faster than `faer-upstream` | 🔴 faer-fork 1.54× slower than `lapack-mkl` |  |
+| `solve/n512/b1 [in_place]` | 3.92815 ± 0.0212997 (W 0.00690029) | 4.44149 ± 0.0209029 (W 0.0211052) | - | 🔵 faer-fork 1.13× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/n128/b1` | 3.00482 ± 0.0154156 (W 0.00513496) | 4.07105 ± 0.0144863 (W 0.0171343) | 3.47376 ± 0.005081 (W 0.00725158) | 🔵 faer-fork 1.35× faster than `faer-upstream` | 🔵 faer-fork 1.16× faster than `lapack-mkl` |  |
+| `svd_thin/n128/b1 [in_place]` | 2.99704 ± 0.00977449 (W 0.00594787) | 4.05028 ± 0.000406457 (W 0.0117349) | - | 🔵 faer-fork 1.35× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/n256/b1` | 13.0479 ± 0.0122792 (W 0.0408728) | 20.9125 ± 0.0867043 (W 0.0826853) | 17.0448 ± 0.0557828 (W 0.0221326) | 🔵 faer-fork 1.60× faster than `faer-upstream` | 🔵 faer-fork 1.31× faster than `lapack-mkl` |  |
+| `svd_thin/n256/b1 [in_place]` | 12.9459 ± 0.0182434 (W 0.0108462) | 20.7986 ± 0.0475804 (W 0.0669922) | - | 🔵 faer-fork 1.61× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/n512/b1` | 53.8559 ± 0.116298 (W 0.235154) | 73.8376 ± 0.16081 (W 0.445123) | 83.3039 ± 0.191155 (W 0.170913) | 🔵 faer-fork 1.37× faster than `faer-upstream` | 🔵 faer-fork 1.55× faster than `lapack-mkl` |  |
+| `svd_thin/n512/b1 [in_place]` | 53.5662 ± 0.224537 (W 0.328442) | 73.308 ± 0.197626 (W 0.477641) | - | 🔵 faer-fork 1.37× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n128/b1` | 1.41992 ± 0.00575459 (W 0.00428983) | 2.93953 ± 0.00419103 (W 0.00847835) | 1.86532 ± 0.0038303 (W 0.00564894) | 🔵 faer-fork 2.07× faster than `faer-upstream` | 🔵 faer-fork 1.31× faster than `lapack-mkl` |  |
+| `svd_values/n128/b1 [in_place]` | 1.41307 ± 0.00223457 (W 0.00337725) | 2.9284 ± 0.00356558 (W 0.0058662) | - | 🔵 faer-fork 2.07× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n256/b1` | 6.84805 ± 0.013202 (W 0.0139601) | 16.1895 ± 0.122318 (W 0.0233505) | 9.78192 ± 0.167031 (W 0.0494809) | 🔵 faer-fork 2.36× faster than `faer-upstream` | 🔵 faer-fork 1.43× faster than `lapack-mkl` |  |
+| `svd_values/n256/b1 [in_place]` | 6.81909 ± 0.0142139 (W 0.0079101) | 15.8743 ± 0.0682355 (W 0.0320242) | - | 🔵 faer-fork 2.33× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/n512/b1` | 30.2985 ± 0.463824 (W 0.0407493) | 50.5912 ± 0.120536 (W 0.0817418) | 44.643 ± 0.105954 (W 0.0604764) | 🔵 faer-fork 1.67× faster than `faer-upstream` | 🔵 faer-fork 1.47× faster than `lapack-mkl` |  |
+| `svd_values/n512/b1 [in_place]` | 30.0498 ± 0.0220196 (W 0.0604274) | 50.4405 ± 0.235301 (W 0.106512) | - | 🔵 faer-fork 1.68× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `triangular_solve/n128/b1` | 0.009097 ± 0.000100732 (W 5.09902e-05) | 0.007955 ± 0.000100167 (W 5.44445e-05) | - | 🔴 faer-fork 1.14× slower than `faer-upstream` | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `triangular_solve/n256/b1` | 0.022913 ± 2.91605e-05 (W 9.19576e-05) | 0.024797 ± 0.000317296 (W 0.000179734) | - | 🔵 faer-fork 1.08× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `triangular_solve/n512/b1` | 0.058579 ± 0.000437139 (W 0.000422363) | 0.06437 ± 0.000162235 (W 0.00155482) | - | 🔵 faer-fork 1.10× faster than `faer-upstream` | - | `*` one row has no measurement here |
+
+Not applicable to this population's shapes and reported as skipped: `eig/128`, `eig/256`, `eig/512`, `full_piv_lu/128`, `full_piv_lu/256`, `full_piv_lu/512`, `householder_apply/128`, `householder_apply/256`, `householder_apply/512`, `qr/128`, `qr/256`, `qr/512`, `triangular_solve/128`, `triangular_solve/256`, `triangular_solve/512`, `upgrade_factor/128`, `upgrade_factor/256`, `upgrade_factor/512`.
+
+## linalg-tall, f64, c order, 1T (CPU 4)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `full_piv_lu/1024x64/b1` | 0.820777 ± 0.00284363 (W 0.00876026) | 0.831752 ± 0.00968012 (W 0.00340465) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/1024x64/b1 [in_place]` | 0.95171 ± 0.00191359 (W 0.00196058) | 1.21725 ± 0.000854823 (W 0.00575564) | - | 🔵 faer-fork 1.28× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1` | 49.096 ± 0.373471 (W 0.111033) | 53.922 ± 0.301147 (W 0.579556) | - | 🔵 faer-fork 1.10× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1 [in_place]` | 53.0304 ± 0.27837 (W 0.213239) | 100.478 ± 0.947833 (W 0.507143) | - | 🔵 faer-fork 1.89× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `householder_apply/1024x64/b1 [block(basis=64,target=64)]` | 0.55565 ± 0.00284061 (W 0.00221083) | 0.555764 ± 0.00216907 (W 0.00252376) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/1024x64/b1 [sequence(basis=64,target=64)]` | 0.557404 ± 0.00333381 (W 0.00238195) | 0.558266 ± 0.00751961 (W 0.00272908) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/4096x256/b1 [block(basis=256,target=256)]` | 35.1116 ± 0.0513598 (W 0.0412508) | 35.1511 ± 0.163815 (W 0.0983814) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/4096x256/b1 [sequence(basis=256,target=256)]` | 35.1905 ± 0.0588431 (W 0.0917003) | 35.0987 ± 0.151973 (W 0.101677) | - | · | - | `*` one row has no measurement here |
+| `lu/1024x64/b1` | 0.471166 ± 0.00287904 (W 0.00342684) | 0.470518 ± 0.00181074 (W 0.00533383) | 0.401116 ± 0.00142875 (W 0.00287047) | · | 🔴 faer-fork 1.17× slower than `lapack-mkl` |  |
+| `lu/1024x64/b1 [in_place]` | 0.604715 ± 0.00152753 (W 0.00346826) | 0.851042 ± 0.00550554 (W 0.00210795) | - | 🔵 faer-fork 1.41× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `lu/4096x256/b1` | 15.3676 ± 0.0206528 (W 0.0480789) | 19.0443 ± 0.0493362 (W 0.0349973) | 17.1523 ± 0.102998 (W 0.0945013) | 🔵 faer-fork 1.24× faster than `faer-upstream` | 🔵 faer-fork 1.12× faster than `lapack-mkl` |  |
+| `lu/4096x256/b1 [in_place]` | 18.8992 ± 0.0467674 (W 0.0995385) | 39.7631 ± 0.0918338 (W 0.0585832) | - | 🔵 faer-fork 2.10× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/1024x64/b1` | 1.69727 ± 0.00564453 (W 0.00370252) | 1.8071 ± 0.00674626 (W 0.00331395) | - | 🔵 faer-fork 1.06× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/4096x256/b1` | 72.2084 ± 0.292353 (W 0.595827) | 76.0834 ± 0.0839347 (W 0.353822) | - | 🔵 faer-fork 1.05× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr_factor/1024x64/b1` | 0.892892 ± 0.00119501 (W 0.00236462) | 1.8796 ± 0.00187218 (W 0.00482732) | 0.914762 ± 0.00340923 (W 0.00244177) | 🔵 faer-fork 2.11× faster than `faer-upstream` | · |  |
+| `qr_factor/4096x256/b1` | 30.9936 ± 0.0751896 (W 0.186406) | 78.0952 ± 0.0693417 (W 0.0965675) | 35.1607 ± 0.130083 (W 0.13519) | 🔵 faer-fork 2.52× faster than `faer-upstream` | 🔵 faer-fork 1.13× faster than `lapack-mkl` |  |
+| `svd_thin/1024x64/b1` | 2.31157 ± 0.00487066 (W 0.00226068) | 2.52258 ± 0.00327988 (W 0.00317826) | 3.31518 ± 0.0170183 (W 0.00860535) | 🔵 faer-fork 1.09× faster than `faer-upstream` | 🔵 faer-fork 1.43× faster than `lapack-mkl` |  |
+| `svd_thin/1024x64/b1 [in_place]` | 2.302 ± 0.00494911 (W 0.00328571) | 2.51309 ± 0.00453512 (W 0.00310873) | - | 🔵 faer-fork 1.09× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/4096x256/b1` | 86.3813 ± 0.0239518 (W 0.411792) | 89.2366 ± 0.131431 (W 0.1588) | 126.33 ± 0.266822 (W 0.376987) | · | 🔵 faer-fork 1.46× faster than `lapack-mkl` |  |
+| `svd_thin/4096x256/b1 [in_place]` | 86.0256 ± 0.106629 (W 0.104215) | 88.7695 ± 0.081394 (W 0.552044) | - | · | - | `*` one row has no measurement here |
+| `svd_values/1024x64/b1` | 1.04705 ± 0.00284148 (W 0.00288735) | 1.49815 ± 0.00423917 (W 0.00516664) | 1.37071 ± 0.00294146 (W 0.00316894) | 🔵 faer-fork 1.43× faster than `faer-upstream` | 🔵 faer-fork 1.31× faster than `lapack-mkl` |  |
+| `svd_values/1024x64/b1 [in_place]` | 1.04837 ± 0.00180763 (W 0.00387562) | 1.50191 ± 0.00302503 (W 0.00303824) | - | 🔵 faer-fork 1.43× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/4096x256/b1` | 38.5482 ± 0.0470749 (W 0.30202) | 44.9192 ± 0.167069 (W 0.0252508) | 46.0006 ± 0.202235 (W 0.108091) | 🔵 faer-fork 1.17× faster than `faer-upstream` | 🔵 faer-fork 1.19× faster than `lapack-mkl` |  |
+| `svd_values/4096x256/b1 [in_place]` | 38.5242 ± 0.0747236 (W 0.0643722) | 44.9623 ± 0.0495907 (W 0.0379334) | - | 🔵 faer-fork 1.17× faster than `faer-upstream` | - | `*` one row has no measurement here |
+
+## linalg-tall, f64, c order, 4T (CPU 4-7)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `full_piv_lu/1024x64/b1` | 0.600509 ± 0.00432613 (W 0.00433326) | 0.827448 ± 0.0099886 (W 0.00242122) | - | 🔵 faer-fork 1.38× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/1024x64/b1 [in_place]` | 0.580521 ± 0.00404592 (W 0.00818085) | 1.21143 ± 0.00390674 (W 0.00393769) | - | 🔵 faer-fork 2.09× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1` | 17.1039 ± 0.0743601 (W 0.0528677) | 21.6188 ± 0.734515 (W 0.828446) | - | 🔵 faer-fork 1.26× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `full_piv_lu/4096x256/b1 [in_place]` | 16.3181 ± 0.0373219 (W 0.0977014) | 48.1919 ± 0.256927 (W 0.210347) | - | 🔵 faer-fork 2.95× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `householder_apply/1024x64/b1 [block(basis=64,target=64)]` | 0.167925 ± 0.00194245 (W 0.00128034) | 0.160152 ± 0.00372502 (W 0.0012794) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/1024x64/b1 [sequence(basis=64,target=64)]` | 0.166541 ± 0.00157349 (W 0.00230999) | 0.158825 ± 0.00115131 (W 0.00160854) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/4096x256/b1 [block(basis=256,target=256)]` | 9.47975 ± 0.0190392 (W 0.0386) | 9.33493 ± 0.00796232 (W 0.0262037) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/4096x256/b1 [sequence(basis=256,target=256)]` | 9.51008 ± 0.0101417 (W 0.0415086) | 9.34795 ± 0.0236881 (W 0.0225613) | - | · | - | `*` one row has no measurement here |
+| `lu/1024x64/b1` | 0.437733 ± 0.00393715 (W 0.00260475) | 0.43083 ± 0.00320738 (W 0.00251923) | 0.291904 ± 0.00297045 (W 0.00164183) | · | 🔴 faer-fork 1.50× slower than `lapack-mkl` |  |
+| `lu/1024x64/b1 [in_place]` | 0.414292 ± 0.00116982 (W 0.0032275) | 0.878966 ± 0.0196006 (W 0.0104544) | - | 🔵 faer-fork 2.12× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `lu/4096x256/b1` | 9.17971 ± 0.0245865 (W 0.0535351) | 12.7233 ± 0.0272071 (W 0.0184755) | 12.5723 ± 0.0411453 (W 0.0395968) | 🔵 faer-fork 1.39× faster than `faer-upstream` | 🔵 faer-fork 1.37× faster than `lapack-mkl` |  |
+| `lu/4096x256/b1 [in_place]` | 8.50288 ± 0.0303791 (W 0.0441828) | 33.5173 ± 0.180371 (W 0.0974715) | - | 🔵 faer-fork 3.94× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/1024x64/b1` | 1.10732 ± 0.00743744 (W 0.00368268) | 1.46008 ± 0.00582915 (W 0.0292704) | - | 🔵 faer-fork 1.32× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/4096x256/b1` | 31.0928 ± 0.116744 (W 0.0776364) | 36.572 ± 3.01916 (W 0.523814) | - | 🔵 faer-fork 1.18× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr_factor/1024x64/b1` | 0.597916 ± 0.000869971 (W 0.002339) | 2.93798 ± 0.0508008 (W 0.0863078) | 0.450958 ± 0.00414904 (W 0.00553329) | 🔵 faer-fork 4.91× faster than `faer-upstream` | 🔴 faer-fork 1.33× slower than `lapack-mkl` |  |
+| `qr_factor/4096x256/b1` | 13.095 ± 0.0752601 (W 0.0371635) | 74.3022 ± 0.438229 (W 0.241979) | 12.5041 ± 0.02576 (W 0.0995912) | 🔵 faer-fork 5.67× faster than `faer-upstream` | · |  |
+| `svd_thin/1024x64/b1` | 1.75111 ± 0.00363363 (W 0.00562914) | 2.15406 ± 0.0160263 (W 0.00824464) | 2.12101 ± 0.011896 (W 0.013078) | 🔵 faer-fork 1.23× faster than `faer-upstream` | 🔵 faer-fork 1.21× faster than `lapack-mkl` |  |
+| `svd_thin/1024x64/b1 [in_place]` | 1.73951 ± 0.00352197 (W 0.00483441) | 2.13211 ± 0.00389232 (W 0.00671904) | - | 🔵 faer-fork 1.23× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/4096x256/b1` | 39.8789 ± 0.038703 (W 0.0790551) | 47.4837 ± 0.161733 (W 0.146477) | 51.8068 ± 0.216252 (W 0.245591) | 🔵 faer-fork 1.19× faster than `faer-upstream` | 🔵 faer-fork 1.30× faster than `lapack-mkl` |  |
+| `svd_thin/4096x256/b1 [in_place]` | 39.7143 ± 0.0786557 (W 0.0624381) | 47.2829 ± 0.125392 (W 0.0759557) | - | 🔵 faer-fork 1.19× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/1024x64/b1` | 0.900906 ± 0.000993054 (W 0.00371148) | 1.55188 ± 0.00681377 (W 0.00671241) | 0.915944 ± 0.0056674 (W 0.00315174) | 🔵 faer-fork 1.72× faster than `faer-upstream` | · |  |
+| `svd_values/1024x64/b1 [in_place]` | 0.904092 ± 0.00317545 (W 0.00164685) | 1.5337 ± 0.0063804 (W 0.0055953) | - | 🔵 faer-fork 1.70× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/4096x256/b1` | 23.2069 ± 0.0519335 (W 0.0460636) | 32.7467 ± 0.0272653 (W 0.0391227) | 21.7797 ± 0.0398846 (W 0.0833677) | 🔵 faer-fork 1.41× faster than `faer-upstream` | 🔴 faer-fork 1.07× slower than `lapack-mkl` |  |
+| `svd_values/4096x256/b1 [in_place]` | 23.1791 ± 0.0286472 (W 0.0324519) | 32.701 ± 0.0206687 (W 0.069529) | - | 🔵 faer-fork 1.41× faster than `faer-upstream` | - | `*` one row has no measurement here |
+
+## linalg-tall, f64, c order, 8T (CPU 4-11)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `full_piv_lu/1024x64/b1` | 0.582856 ± 0.00251199 (W 0.00903246) | 0.817422 ± 0.00928524 (W 0.00202002) | - | 🔵 faer-fork 1.40× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/1024x64/b1 [in_place]` | 0.535716 ± 0.00502842 (W 0.00535025) | 1.21447 ± 0.0108852 (W 0.00436179) | - | 🔵 faer-fork 2.27× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1` | 12.3129 ± 0.606699 (W 0.0701289) | 16.0579 ± 0.0532111 (W 0.0304383) | - | 🔵 faer-fork 1.30× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `full_piv_lu/4096x256/b1 [in_place]` | 10.4741 ± 0.0629314 (W 0.0816204) | 41.3502 ± 0.0751934 (W 0.0690517) | - | 🔵 faer-fork 3.95× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `householder_apply/1024x64/b1 [block(basis=64,target=64)]` | 0.109726 ± 0.000798256 (W 0.00446982) | 0.14898 ± 0.006582 (W 0.00738618) | - | 🔵 faer-fork 1.36× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `householder_apply/1024x64/b1 [sequence(basis=64,target=64)]` | 0.108052 ± 0.00615196 (W 0.00364562) | 0.146543 ± 0.00769554 (W 0.0062884) | - | 🔵 faer-fork 1.36× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `householder_apply/4096x256/b1 [block(basis=256,target=256)]` | 5.65686 ± 0.0280872 (W 0.029033) | 6.62479 ± 0.909718 (W 0.887479) | - | 🔵 faer-fork 1.17× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `householder_apply/4096x256/b1 [sequence(basis=256,target=256)]` | 5.69322 ± 0.0157386 (W 0.037087) | 5.09335 ± 0.905089 (W 0.703295) | - | · | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `lu/1024x64/b1` | 0.429667 ± 0.00285318 (W 0.00167595) | 0.435999 ± 0.00794159 (W 0.00271137) | 0.275728 ± 0.000684189 (W 0.00227654) | · | 🔴 faer-fork 1.56× slower than `lapack-mkl` |  |
+| `lu/1024x64/b1 [in_place]` | 0.387748 ± 0.00131892 (W 0.00259076) | 0.92886 ± 0.0141608 (W 0.00745878) | - | 🔵 faer-fork 2.40× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `lu/4096x256/b1` | 8.37205 ± 0.0519683 (W 0.0475032) | 11.7418 ± 0.0120201 (W 0.0246935) | 3.2347 ± 0.0189494 (W 0.0184347) | 🔵 faer-fork 1.40× faster than `faer-upstream` | 🔴 faer-fork 2.59× slower than `lapack-mkl` |  |
+| `lu/4096x256/b1 [in_place]` | 6.63354 ± 0.0370872 (W 0.0250954) | 32.3071 ± 0.148326 (W 0.0951632) | - | 🔵 faer-fork 4.87× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/1024x64/b1` | 1.04148 ± 0.004687 (W 0.00426635) | 1.23788 ± 0.0126436 (W 0.00874215) | - | 🔵 faer-fork 1.19× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/4096x256/b1` | 25.3336 ± 0.0392785 (W 0.0561978) | 33.4214 ± 1.13245 (W 1.50542) | - | 🔵 faer-fork 1.32× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr_factor/1024x64/b1` | 0.550295 ± 0.0035957 (W 0.0045313) | 3.03948 ± 0.0560862 (W 0.107487) | 0.310802 ± 0.00161104 (W 0.00186272) | 🔵 faer-fork 5.52× faster than `faer-upstream` | 🔴 faer-fork 1.77× slower than `lapack-mkl` |  |
+| `qr_factor/4096x256/b1` | 9.76624 ± 0.301586 (W 0.0336453) | 71.2066 ± 0.0579211 (W 0.195462) | 7.05646 ± 0.035904 (W 0.0274623) | 🔵 faer-fork 7.29× faster than `faer-upstream` | 🔴 faer-fork 1.38× slower than `lapack-mkl` | `!` between-start range over 5% |
+| `svd_thin/1024x64/b1` | 1.68674 ± 0.00950526 (W 0.00429153) | 2.258 ± 0.00975716 (W 0.00944902) | 1.9694 ± 0.00288227 (W 0.0142976) | 🔵 faer-fork 1.34× faster than `faer-upstream` | 🔵 faer-fork 1.17× faster than `lapack-mkl` |  |
+| `svd_thin/1024x64/b1 [in_place]` | 1.65847 ± 0.0139406 (W 0.00216592) | 2.23373 ± 0.00756719 (W 0.0095204) | - | 🔵 faer-fork 1.35× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/4096x256/b1` | 33.8274 ± 0.199077 (W 0.316791) | 46.3939 ± 0.137708 (W 1.04451) | 39.3338 ± 0.0893464 (W 0.160024) | 🔵 faer-fork 1.37× faster than `faer-upstream` | 🔵 faer-fork 1.16× faster than `lapack-mkl` |  |
+| `svd_thin/4096x256/b1 [in_place]` | 33.6162 ± 0.0603107 (W 0.0499684) | 46.1961 ± 0.0490985 (W 0.163091) | - | 🔵 faer-fork 1.37× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/1024x64/b1` | 0.883987 ± 0.00595083 (W 0.00606563) | 1.62673 ± 0.007376 (W 0.0108151) | 0.775403 ± 0.0134204 (W 0.00375976) | 🔵 faer-fork 1.84× faster than `faer-upstream` | 🔴 faer-fork 1.14× slower than `lapack-mkl` |  |
+| `svd_values/1024x64/b1 [in_place]` | 0.878499 ± 0.00831347 (W 0.00494054) | 1.62629 ± 0.00561424 (W 0.00456713) | - | 🔵 faer-fork 1.85× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/4096x256/b1` | 20.7398 ± 0.590098 (W 0.0376267) | 33.5056 ± 0.115959 (W 0.0666359) | 15.8769 ± 0.212961 (W 0.0536759) | 🔵 faer-fork 1.62× faster than `faer-upstream` | 🔴 faer-fork 1.31× slower than `lapack-mkl` |  |
+| `svd_values/4096x256/b1 [in_place]` | 20.7273 ± 0.0146204 (W 0.0221958) | 33.5267 ± 0.0490944 (W 0.115351) | - | 🔵 faer-fork 1.62× faster than `faer-upstream` | - | `*` one row has no measurement here |
+
+## linalg-tall, f64, f order, 1T (CPU 4)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `full_piv_lu/1024x64/b1` | 0.735833 ± 0.000937544 (W 0.0082589) | 0.7289 ± 0.00333293 (W 0.00163274) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/1024x64/b1 [in_place]` | 0.817235 ± 0.0143488 (W 0.0112957) | 0.809219 ± 0.00040817 (W 0.00212984) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1` | 46.7708 ± 0.115446 (W 0.191727) | 47.0266 ± 0.329456 (W 0.173392) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1 [in_place]` | 52.0186 ± 0.140628 (W 0.160855) | 52.2355 ± 0.445577 (W 0.235379) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/1024x64/b1 [block(basis=64,target=64)]` | 0.597319 ± 0.00813369 (W 0.00223571) | 0.597901 ± 0.00222252 (W 0.00361222) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/1024x64/b1 [sequence(basis=64,target=64)]` | 0.60719 ± 0.00613155 (W 0.00206488) | 0.596948 ± 0.00769147 (W 0.0028985) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/4096x256/b1 [block(basis=256,target=256)]` | 35.8946 ± 0.054292 (W 0.0839086) | 35.8975 ± 0.126123 (W 0.0524227) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/4096x256/b1 [sequence(basis=256,target=256)]` | 35.8902 ± 0.109958 (W 0.0598026) | 35.8169 ± 0.0462643 (W 0.102942) | - | · | - | `*` one row has no measurement here |
+| `lu/1024x64/b1` | 0.383954 ± 0.00289063 (W 0.00267208) | 0.383937 ± 0.00134271 (W 0.00235467) | 0.246989 ± 0.000687677 (W 0.00238275) | · | 🔴 faer-fork 1.55× slower than `lapack-mkl` |  |
+| `lu/1024x64/b1 [in_place]` | 0.366925 ± 0.00187594 (W 0.00227367) | 0.365572 ± 0.00306377 (W 0.00308236) | - | · | - | `*` one row has no measurement here |
+| `lu/4096x256/b1` | 13.2953 ± 0.0268587 (W 0.0259154) | 13.3064 ± 0.0617423 (W 0.0420641) | 11.0337 ± 0.0164574 (W 0.0109663) | · | 🔴 faer-fork 1.20× slower than `lapack-mkl` |  |
+| `lu/4096x256/b1 [in_place]` | 12.7151 ± 0.0257944 (W 0.00748702) | 12.7157 ± 0.0277009 (W 0.022982) | - | · | - | `*` one row has no measurement here |
+| `qr/1024x64/b1` | 1.56459 ± 0.00468073 (W 0.00485795) | 1.72899 ± 0.00440297 (W 0.0044185) | - | 🔵 faer-fork 1.11× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/4096x256/b1` | 69.1667 ± 0.0829496 (W 0.0510733) | 70.3115 ± 0.157289 (W 0.0741468) | - | · | - | `*` one row has no measurement here |
+| `qr_factor/1024x64/b1` | 0.663628 ± 0.00273678 (W 0.00341877) | 0.801792 ± 0.00152529 (W 0.00402799) | 0.755759 ± 0.00197279 (W 0.00199729) | 🔵 faer-fork 1.21× faster than `faer-upstream` | 🔵 faer-fork 1.14× faster than `lapack-mkl` |  |
+| `qr_factor/4096x256/b1` | 24.9149 ± 0.0555548 (W 0.040527) | 26.0372 ± 0.0492797 (W 0.0286578) | 29.068 ± 0.537513 (W 0.0552331) | · | 🔵 faer-fork 1.17× faster than `lapack-mkl` |  |
+| `svd_thin/1024x64/b1` | 2.25409 ± 0.00187379 (W 0.0031429) | 2.46568 ± 0.00329402 (W 0.00156163) | 2.77299 ± 0.00338974 (W 0.0128109) | 🔵 faer-fork 1.09× faster than `faer-upstream` | 🔵 faer-fork 1.23× faster than `lapack-mkl` |  |
+| `svd_thin/1024x64/b1 [in_place]` | 2.24006 ± 0.00212203 (W 0.00364875) | 2.45973 ± 0.00684687 (W 0.00516464) | - | 🔵 faer-fork 1.10× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/4096x256/b1` | 80.9427 ± 0.0822189 (W 0.490465) | 83.7126 ± 0.366946 (W 0.371676) | 110.211 ± 0.683613 (W 0.147631) | · | 🔵 faer-fork 1.36× faster than `lapack-mkl` |  |
+| `svd_thin/4096x256/b1 [in_place]` | 80.7215 ± 0.0386595 (W 0.417922) | 83.2987 ± 0.139313 (W 0.114276) | - | · | - | `*` one row has no measurement here |
+| `svd_values/1024x64/b1` | 0.958574 ± 0.0026973 (W 0.00167133) | 1.40678 ± 0.00217209 (W 0.00277416) | 1.20971 ± 0.00218068 (W 0.00162861) | 🔵 faer-fork 1.47× faster than `faer-upstream` | 🔵 faer-fork 1.26× faster than `lapack-mkl` |  |
+| `svd_values/1024x64/b1 [in_place]` | 0.963719 ± 0.00475362 (W 0.00227407) | 1.40557 ± 0.00223002 (W 0.00361067) | - | 🔵 faer-fork 1.46× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/4096x256/b1` | 32.7352 ± 0.106375 (W 0.0709587) | 39.2505 ± 0.068591 (W 0.0499928) | 39.8307 ± 0.0691967 (W 0.0221024) | 🔵 faer-fork 1.20× faster than `faer-upstream` | 🔵 faer-fork 1.22× faster than `lapack-mkl` |  |
+| `svd_values/4096x256/b1 [in_place]` | 32.601 ± 0.0646981 (W 0.0366095) | 39.2006 ± 0.0244186 (W 0.078603) | - | 🔵 faer-fork 1.20× faster than `faer-upstream` | - | `*` one row has no measurement here |
+
+## linalg-tall, f64, f order, 4T (CPU 4-7)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `full_piv_lu/1024x64/b1` | 0.516823 ± 0.0022734 (W 0.0115566) | 0.729103 ± 0.00378653 (W 0.00410842) | - | 🔵 faer-fork 1.41× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/1024x64/b1 [in_place]` | 0.502114 ± 0.00519028 (W 0.00702989) | 0.810386 ± 0.00236951 (W 0.00304642) | - | 🔵 faer-fork 1.61× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1` | 14.7141 ± 0.0934389 (W 0.069831) | 14.9305 ± 0.0454552 (W 0.0190052) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1 [in_place]` | 15.7123 ± 0.0468499 (W 0.061745) | 16.0467 ± 0.0151553 (W 0.021661) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/1024x64/b1 [block(basis=64,target=64)]` | 0.203172 ± 0.00152661 (W 0.000520408) | 0.194726 ± 0.00270586 (W 0.00184179) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/1024x64/b1 [sequence(basis=64,target=64)]` | 0.206123 ± 0.00354264 (W 0.00216119) | 0.196791 ± 0.00221427 (W 0.00214381) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/4096x256/b1 [block(basis=256,target=256)]` | 11.1649 ± 0.0246238 (W 0.0130294) | 11.1334 ± 0.0539462 (W 0.0146482) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/4096x256/b1 [sequence(basis=256,target=256)]` | 11.1455 ± 0.0203241 (W 0.0132722) | 11.1351 ± 0.0908993 (W 0.0172791) | - | · | - | `*` one row has no measurement here |
+| `lu/1024x64/b1` | 0.350951 ± 0.00305401 (W 0.00363019) | 0.357135 ± 0.00150811 (W 0.00314233) | 0.247154 ± 0.000810329 (W 0.00288815) | · | 🔴 faer-fork 1.42× slower than `lapack-mkl` |  |
+| `lu/1024x64/b1 [in_place]` | 0.322792 ± 0.00182705 (W 0.00251046) | 0.32758 ± 0.001707 (W 0.00268372) | - | · | - | `*` one row has no measurement here |
+| `lu/4096x256/b1` | 6.92121 ± 0.00363642 (W 0.0198213) | 6.96433 ± 0.0125664 (W 0.0283562) | 11.041 ± 0.0258149 (W 0.00936701) | · | 🔵 faer-fork 1.60× faster than `lapack-mkl` |  |
+| `lu/4096x256/b1 [in_place]` | 6.42207 ± 0.0247686 (W 0.022499) | 6.48018 ± 0.0019486 (W 0.00896839) | - | · | - | `*` one row has no measurement here |
+| `qr/1024x64/b1` | 0.975757 ± 0.0118088 (W 0.00258626) | 1.37574 ± 0.171973 (W 0.0264757) | - | 🔵 faer-fork 1.41× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr/4096x256/b1` | 28.631 ± 0.0979509 (W 0.0686304) | 28.3232 ± 3.59938 (W 0.05748) | - | · | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr_factor/1024x64/b1` | 0.521682 ± 0.00214508 (W 0.00329907) | 0.844908 ± 0.00539226 (W 0.0044554) | 0.400375 ± 0.00699281 (W 0.0072668) | 🔵 faer-fork 1.62× faster than `faer-upstream` | 🔴 faer-fork 1.30× slower than `lapack-mkl` |  |
+| `qr_factor/4096x256/b1` | 10.8999 ± 0.0123075 (W 0.0236019) | 15.599 ± 0.0459204 (W 0.0246866) | 11.2404 ± 0.121557 (W 0.0447924) | 🔵 faer-fork 1.43× faster than `faer-upstream` | · |  |
+| `svd_thin/1024x64/b1` | 1.7046 ± 0.00283346 (W 0.00273406) | 2.10208 ± 0.00353739 (W 0.00749697) | 1.76378 ± 0.00689012 (W 0.0090494) | 🔵 faer-fork 1.23× faster than `faer-upstream` | · |  |
+| `svd_thin/1024x64/b1 [in_place]` | 1.69449 ± 0.00488686 (W 0.00408103) | 2.08253 ± 0.00445632 (W 0.0047906) | - | 🔵 faer-fork 1.23× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/4096x256/b1` | 34.4209 ± 0.0195331 (W 0.0560368) | 42.1358 ± 0.084332 (W 0.0984698) | 45.009 ± 0.0561823 (W 0.0634172) | 🔵 faer-fork 1.22× faster than `faer-upstream` | 🔵 faer-fork 1.31× faster than `lapack-mkl` |  |
+| `svd_thin/4096x256/b1 [in_place]` | 34.3695 ± 0.11381 (W 0.107436) | 42.0712 ± 0.0287971 (W 0.0674) | - | 🔵 faer-fork 1.22× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/1024x64/b1` | 0.834929 ± 0.0031983 (W 0.00316212) | 1.45766 ± 0.00119074 (W 0.00462914) | 0.860677 ± 0.00417102 (W 0.00572906) | 🔵 faer-fork 1.75× faster than `faer-upstream` | · |  |
+| `svd_values/1024x64/b1 [in_place]` | 0.831732 ± 0.00317242 (W 0.00289078) | 1.45065 ± 0.00404005 (W 0.00369739) | - | 🔵 faer-fork 1.74× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/4096x256/b1` | 17.367 ± 0.0277654 (W 0.0412799) | 26.8844 ± 0.0233251 (W 0.026046) | 20.2911 ± 0.0204348 (W 0.0739429) | 🔵 faer-fork 1.55× faster than `faer-upstream` | 🔵 faer-fork 1.17× faster than `lapack-mkl` |  |
+| `svd_values/4096x256/b1 [in_place]` | 17.4519 ± 0.0670771 (W 0.0551148) | 26.9255 ± 0.0936585 (W 0.0302516) | - | 🔵 faer-fork 1.54× faster than `faer-upstream` | - | `*` one row has no measurement here |
+
+## linalg-tall, f64, f order, 8T (CPU 4-11)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `full_piv_lu/1024x64/b1` | 0.501921 ± 0.0133667 (W 0.0108506) | 0.731533 ± 0.00234479 (W 0.003624) | - | 🔵 faer-fork 1.46× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/1024x64/b1 [in_place]` | 0.472517 ± 0.00698996 (W 0.00894808) | 0.807334 ± 0.0014438 (W 0.00369186) | - | 🔵 faer-fork 1.71× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1` | 9.84494 ± 0.0945041 (W 0.0491885) | 10.2524 ± 0.0280788 (W 0.0171742) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1 [in_place]` | 10.1431 ± 0.0533824 (W 0.073522) | 10.6655 ± 0.0228304 (W 0.0574955) | - | 🔵 faer-fork 1.05× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `householder_apply/1024x64/b1 [block(basis=64,target=64)]` | 0.131356 ± 0.00315526 (W 0.000928424) | 0.181227 ± 0.00126574 (W 0.00862036) | - | 🔵 faer-fork 1.38× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `householder_apply/1024x64/b1 [sequence(basis=64,target=64)]` | 0.128239 ± 0.00316496 (W 0.000959905) | 0.191829 ± 0.0070243 (W 0.005436) | - | 🔵 faer-fork 1.50× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `householder_apply/4096x256/b1 [block(basis=256,target=256)]` | 8.83538 ± 0.00319834 (W 0.0262474) | 8.24454 ± 0.114164 (W 0.547134) | - | 🔴 faer-fork 1.07× slower than `faer-upstream` | - | `*` one row has no measurement here |
+| `householder_apply/4096x256/b1 [sequence(basis=256,target=256)]` | 8.84192 ± 0.00370964 (W 0.0356498) | 8.17053 ± 0.891454 (W 0.180071) | - | · | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `lu/1024x64/b1` | 0.348609 ± 0.000615388 (W 0.002486) | 0.349226 ± 0.00247579 (W 0.00364232) | 0.247545 ± 0.000498676 (W 0.00193331) | · | 🔴 faer-fork 1.41× slower than `lapack-mkl` |  |
+| `lu/1024x64/b1 [in_place]` | 0.317371 ± 0.00176606 (W 0.00244863) | 0.324625 ± 0.00152858 (W 0.00216776) | - | · | - | `*` one row has no measurement here |
+| `lu/4096x256/b1` | 6.05303 ± 0.0200437 (W 0.0177736) | 6.1224 ± 0.00709499 (W 0.0144935) | 2.35317 ± 0.0132068 (W 0.0102809) | · | 🔴 faer-fork 2.57× slower than `lapack-mkl` |  |
+| `lu/4096x256/b1 [in_place]` | 5.49368 ± 0.0364016 (W 0.0192629) | 5.59009 ± 0.00274243 (W 0.0176783) | - | · | - | `*` one row has no measurement here |
+| `qr/1024x64/b1` | 0.908763 ± 0.00388751 (W 0.00383992) | 1.16767 ± 0.00339643 (W 0.0257519) | - | 🔵 faer-fork 1.28× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/4096x256/b1` | 22.7371 ± 0.0186845 (W 0.038264) | 28.7131 ± 1.05001 (W 1.33046) | - | 🔵 faer-fork 1.26× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr_factor/1024x64/b1` | 0.492774 ± 0.00442008 (W 0.00334843) | 0.93324 ± 0.0034201 (W 0.0057976) | 0.282501 ± 0.000763566 (W 0.00200167) | 🔵 faer-fork 1.89× faster than `faer-upstream` | 🔴 faer-fork 1.74× slower than `lapack-mkl` |  |
+| `qr_factor/4096x256/b1` | 8.54101 ± 0.0180188 (W 0.0403399) | 16.4805 ± 0.0595137 (W 0.0539182) | 6.24992 ± 0.0448062 (W 0.0674053) | 🔵 faer-fork 1.93× faster than `faer-upstream` | 🔴 faer-fork 1.37× slower than `lapack-mkl` |  |
+| `svd_thin/1024x64/b1` | 1.62169 ± 0.00826786 (W 0.00576888) | 2.19414 ± 0.00281549 (W 0.00651822) | 1.57445 ± 0.00148503 (W 0.00404877) | 🔵 faer-fork 1.35× faster than `faer-upstream` | · |  |
+| `svd_thin/1024x64/b1 [in_place]` | 1.60902 ± 0.00954823 (W 0.00403995) | 2.1809 ± 0.00612151 (W 0.00768439) | - | 🔵 faer-fork 1.36× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/4096x256/b1` | 28.4472 ± 0.0339221 (W 0.0710617) | 41.1385 ± 1.29369 (W 1.15774) | 33.8249 ± 0.0334369 (W 0.0919746) | 🔵 faer-fork 1.45× faster than `faer-upstream` | 🔵 faer-fork 1.19× faster than `lapack-mkl` | `!` between-start range over 5% |
+| `svd_thin/4096x256/b1 [in_place]` | 28.3262 ± 0.0345805 (W 0.142566) | 41.1091 ± 0.103731 (W 0.161126) | - | 🔵 faer-fork 1.45× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/1024x64/b1` | 0.81541 ± 0.00578917 (W 0.00216366) | 1.53827 ± 0.00161327 (W 0.00419386) | 0.744227 ± 0.00344717 (W 0.00212109) | 🔵 faer-fork 1.89× faster than `faer-upstream` | 🔴 faer-fork 1.10× slower than `lapack-mkl` |  |
+| `svd_values/1024x64/b1 [in_place]` | 0.808397 ± 0.00479566 (W 0.00477775) | 1.54312 ± 0.00134048 (W 0.00556696) | - | 🔵 faer-fork 1.91× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/4096x256/b1` | 15.0347 ± 0.0407751 (W 0.0340288) | 27.8933 ± 0.0458139 (W 0.0584163) | 15.3168 ± 0.0528497 (W 0.0465485) | 🔵 faer-fork 1.86× faster than `faer-upstream` | · |  |
+| `svd_values/4096x256/b1 [in_place]` | 14.9919 ± 0.0194539 (W 0.0279764) | 27.9502 ± 0.0778073 (W 0.0528496) | - | 🔵 faer-fork 1.86× faster than `faer-upstream` | - | `*` one row has no measurement here |
+
+## linalg-tall, c64, c order, 1T (CPU 4)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `full_piv_lu/1024x64/b1` | 1.77609 ± 0.00402398 (W 0.00473037) | 1.78704 ± 0.00964021 (W 0.00205818) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/1024x64/b1 [in_place]` | 1.92218 ± 0.00739204 (W 0.00483963) | 2.80652 ± 0.0201281 (W 0.0178658) | - | 🔵 faer-fork 1.46× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1` | 149.415 ± 0.209276 (W 0.708928) | 155.514 ± 0.67262 (W 0.88519) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1 [in_place]` | 153.194 ± 0.213958 (W 0.613497) | 271.836 ± 0.192962 (W 1.14922) | - | 🔵 faer-fork 1.77× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `householder_apply/1024x64/b1 [block(basis=64,target=64)]` | 2.20615 ± 0.009077 (W 0.00811935) | 2.20288 ± 0.0066152 (W 0.00696257) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/1024x64/b1 [sequence(basis=64,target=64)]` | 2.20884 ± 0.0105034 (W 0.00416743) | 2.21324 ± 0.0226596 (W 0.00726603) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/4096x256/b1 [block(basis=256,target=256)]` | 137.553 ± 0.281795 (W 0.416519) | 137.742 ± 0.219684 (W 0.145608) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/4096x256/b1 [sequence(basis=256,target=256)]` | 137.414 ± 0.240611 (W 0.478246) | 137.725 ± 0.255861 (W 0.0973486) | - | · | - | `*` one row has no measurement here |
+| `lu/1024x64/b1` | 1.04508 ± 0.00345767 (W 0.00239639) | 1.04189 ± 0.0024339 (W 0.00183461) | 1.03663 ± 0.00266008 (W 0.00310511) | · | · |  |
+| `lu/1024x64/b1 [in_place]` | 1.19936 ± 0.00415004 (W 0.00302461) | 1.50252 ± 0.0519952 (W 0.0228538) | - | 🔵 faer-fork 1.25× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `lu/4096x256/b1` | 47.2509 ± 0.164104 (W 0.0650517) | 54.1387 ± 0.120785 (W 0.0406578) | 54.9008 ± 0.0524614 (W 0.115659) | 🔵 faer-fork 1.15× faster than `faer-upstream` | 🔵 faer-fork 1.16× faster than `lapack-mkl` |  |
+| `lu/4096x256/b1 [in_place]` | 51.2025 ± 0.0704305 (W 0.107917) | 90.5616 ± 0.330424 (W 0.125925) | - | 🔵 faer-fork 1.77× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/1024x64/b1` | 5.11482 ± 0.0117048 (W 0.00827713) | 5.3007 ± 0.0151522 (W 0.00782338) | - | · | - | `*` one row has no measurement here |
+| `qr/4096x256/b1` | 250.524 ± 0.0860506 (W 0.898053) | 259.064 ± 0.204101 (W 0.302866) | - | · | - | `*` one row has no measurement here |
+| `qr_factor/1024x64/b1` | 2.27857 ± 0.00534793 (W 0.00598804) | 3.98146 ± 0.0393342 (W 0.0236674) | 2.36445 ± 0.00218019 (W 0.00351432) | 🔵 faer-fork 1.75× faster than `faer-upstream` | · |  |
+| `qr_factor/4096x256/b1` | 98.2092 ± 0.154332 (W 0.380607) | 176.06 ± 0.504081 (W 0.626205) | 106.257 ± 2.26121 (W 1.41027) | 🔵 faer-fork 1.79× faster than `faer-upstream` | 🔵 faer-fork 1.08× faster than `lapack-mkl` |  |
+| `svd_thin/1024x64/b1` | 5.74325 ± 0.0139544 (W 0.00688763) | 6.0245 ± 0.0187393 (W 0.0220121) | 9.32727 ± 0.0583561 (W 0.0462287) | · | 🔵 faer-fork 1.62× faster than `lapack-mkl` |  |
+| `svd_thin/1024x64/b1 [in_place]` | 5.71105 ± 0.0152914 (W 0.0079645) | 6.03077 ± 0.0191657 (W 0.0158393) | - | 🔵 faer-fork 1.06× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/4096x256/b1` | 276.526 ± 1.17818 (W 5.89385) | 280.803 ± 0.450128 (W 6.57293) | 378.62 ± 0.296174 (W 0.656061) | · | 🔵 faer-fork 1.37× faster than `lapack-mkl` |  |
+| `svd_thin/4096x256/b1 [in_place]` | 275.449 ± 0.873189 (W 0.64296) | 280.954 ± 0.311161 (W 0.367753) | - | · | - | `*` one row has no measurement here |
+| `svd_values/1024x64/b1` | 2.58431 ± 0.00653848 (W 0.00967139) | 3.10357 ± 0.0175052 (W 0.00517706) | 3.78732 ± 0.0447171 (W 0.00594639) | 🔵 faer-fork 1.20× faster than `faer-upstream` | 🔵 faer-fork 1.47× faster than `lapack-mkl` |  |
+| `svd_values/1024x64/b1 [in_place]` | 2.55629 ± 0.0120055 (W 0.00242543) | 3.1289 ± 0.00656555 (W 0.00781511) | - | 🔵 faer-fork 1.22× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/4096x256/b1` | 116.009 ± 0.35559 (W 0.477805) | 122.709 ± 0.423262 (W 0.393435) | 142.583 ± 2.30674 (W 0.316361) | 🔵 faer-fork 1.06× faster than `faer-upstream` | 🔵 faer-fork 1.23× faster than `lapack-mkl` |  |
+| `svd_values/4096x256/b1 [in_place]` | 115.237 ± 1.36394 (W 0.271961) | 123.185 ± 0.16362 (W 0.360217) | - | 🔵 faer-fork 1.07× faster than `faer-upstream` | - | `*` one row has no measurement here |
+
+## linalg-tall, c64, c order, 4T (CPU 4-7)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `full_piv_lu/1024x64/b1` | 0.944807 ± 0.00269341 (W 0.00352332) | 1.79747 ± 0.0207895 (W 0.00476056) | - | 🔵 faer-fork 1.90× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/1024x64/b1 [in_place]` | 0.875604 ± 0.0109542 (W 0.00217932) | 2.84986 ± 0.0279001 (W 0.0284344) | - | 🔵 faer-fork 3.25× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1` | 52.1738 ± 0.107347 (W 0.228955) | 63.0352 ± 0.377717 (W 1.07421) | - | 🔵 faer-fork 1.21× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1 [in_place]` | 49.9686 ± 0.0558789 (W 0.126298) | 114.386 ± 0.0778233 (W 0.397013) | - | 🔵 faer-fork 2.29× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `householder_apply/1024x64/b1 [block(basis=64,target=64)]` | 0.595548 ± 0.00188602 (W 0.00187829) | 0.577976 ± 0.00196438 (W 0.00224685) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/1024x64/b1 [sequence(basis=64,target=64)]` | 0.596831 ± 0.0024962 (W 0.00270467) | 0.576913 ± 0.00714386 (W 0.00516549) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/4096x256/b1 [block(basis=256,target=256)]` | 37.3628 ± 0.320191 (W 0.0923065) | 36.795 ± 0.264068 (W 0.297992) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/4096x256/b1 [sequence(basis=256,target=256)]` | 36.8074 ± 0.326317 (W 0.0240346) | 37.1611 ± 0.122555 (W 0.283137) | - | · | - | `*` one row has no measurement here |
+| `lu/1024x64/b1` | 0.796857 ± 0.00261699 (W 0.00283087) | 0.784965 ± 0.0146435 (W 0.00333941) | 0.928336 ± 0.00238953 (W 0.00260501) | · | 🔵 faer-fork 1.16× faster than `lapack-mkl` |  |
+| `lu/1024x64/b1 [in_place]` | 0.741793 ± 0.00318907 (W 0.0045111) | 1.34427 ± 0.0252289 (W 0.0178077) | - | 🔵 faer-fork 1.81× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `lu/4096x256/b1` | 22.8425 ± 0.324071 (W 0.167437) | 29.7863 ± 0.0522836 (W 0.0706024) | 50.351 ± 0.112634 (W 0.0535401) | 🔵 faer-fork 1.30× faster than `faer-upstream` | 🔵 faer-fork 2.20× faster than `lapack-mkl` |  |
+| `lu/4096x256/b1 [in_place]` | 20.6225 ± 0.0477079 (W 0.0702106) | 65.498 ± 0.360456 (W 0.191367) | - | 🔵 faer-fork 3.18× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/1024x64/b1` | 2.60676 ± 0.0232679 (W 0.00493002) | 3.01853 ± 0.0229962 (W 0.0376824) | - | 🔵 faer-fork 1.16× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/4096x256/b1` | 92.5253 ± 0.425127 (W 0.282377) | 108.951 ± 0.111652 (W 0.0930466) | - | 🔵 faer-fork 1.18× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr_factor/1024x64/b1` | 1.26774 ± 0.00506853 (W 0.00244939) | 3.90106 ± 0.0630358 (W 0.0473692) | 1.36359 ± 0.00477406 (W 0.00215704) | 🔵 faer-fork 3.08× faster than `faer-upstream` | 🔵 faer-fork 1.08× faster than `lapack-mkl` |  |
+| `qr_factor/4096x256/b1` | 36.5995 ± 0.0542602 (W 0.146004) | 128.234 ± 0.156884 (W 0.617953) | 33.4396 ± 0.109346 (W 0.137417) | 🔵 faer-fork 3.50× faster than `faer-upstream` | 🔴 faer-fork 1.09× slower than `lapack-mkl` |  |
+| `svd_thin/1024x64/b1` | 3.11045 ± 0.0298826 (W 0.00858099) | 3.68532 ± 0.0124276 (W 0.0074209) | 5.91397 ± 0.0386914 (W 0.0600784) | 🔵 faer-fork 1.18× faster than `faer-upstream` | 🔵 faer-fork 1.90× faster than `lapack-mkl` |  |
+| `svd_thin/1024x64/b1 [in_place]` | 3.0941 ± 0.0417238 (W 0.0102567) | 3.66796 ± 0.0261399 (W 0.00886532) | - | 🔵 faer-fork 1.19× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/4096x256/b1` | 102.168 ± 0.0209081 (W 0.130213) | 118.569 ± 0.0998074 (W 0.226317) | 137.428 ± 0.0851098 (W 0.363184) | 🔵 faer-fork 1.16× faster than `faer-upstream` | 🔵 faer-fork 1.35× faster than `lapack-mkl` |  |
+| `svd_thin/4096x256/b1 [in_place]` | 101.393 ± 0.092015 (W 0.118643) | 117.677 ± 0.202051 (W 0.129108) | - | 🔵 faer-fork 1.16× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/1024x64/b1` | 1.69759 ± 0.00975327 (W 0.00902553) | 2.43757 ± 0.00894804 (W 0.00610283) | 2.78107 ± 0.0205136 (W 0.0447376) | 🔵 faer-fork 1.44× faster than `faer-upstream` | 🔵 faer-fork 1.64× faster than `lapack-mkl` |  |
+| `svd_values/1024x64/b1 [in_place]` | 1.70163 ± 0.0114288 (W 0.00568317) | 2.4351 ± 0.00830659 (W 0.00839123) | - | 🔵 faer-fork 1.43× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/4096x256/b1` | 53.7887 ± 0.136183 (W 0.327681) | 72.0755 ± 0.0249853 (W 0.131125) | 49.5563 ± 0.250982 (W 0.2475) | 🔵 faer-fork 1.34× faster than `faer-upstream` | 🔴 faer-fork 1.09× slower than `lapack-mkl` |  |
+| `svd_values/4096x256/b1 [in_place]` | 53.5895 ± 0.108509 (W 0.0615037) | 72.0021 ± 0.120912 (W 0.181113) | - | 🔵 faer-fork 1.34× faster than `faer-upstream` | - | `*` one row has no measurement here |
+
+## linalg-tall, c64, c order, 8T (CPU 4-11)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `full_piv_lu/1024x64/b1` | 0.827572 ± 0.00683872 (W 0.00656509) | 1.7906 ± 0.0192944 (W 0.00369274) | - | 🔵 faer-fork 2.16× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/1024x64/b1 [in_place]` | 0.743553 ± 0.00163231 (W 0.00299926) | 2.87896 ± 0.0224117 (W 0.0117231) | - | 🔵 faer-fork 3.87× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1` | 29.0883 ± 0.0847367 (W 0.141497) | 40.747 ± 0.231266 (W 0.597384) | - | 🔵 faer-fork 1.40× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1 [in_place]` | 25.8955 ± 0.658569 (W 0.0723502) | 78.9949 ± 0.209475 (W 0.275777) | - | 🔵 faer-fork 3.05× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `householder_apply/1024x64/b1 [block(basis=64,target=64)]` | 0.317956 ± 0.0013667 (W 0.00231916) | 0.471565 ± 0.0348987 (W 0.0420202) | - | 🔵 faer-fork 1.48× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `householder_apply/1024x64/b1 [sequence(basis=64,target=64)]` | 0.317672 ± 0.00247343 (W 0.00403955) | 0.474124 ± 0.00199293 (W 0.0389974) | - | 🔵 faer-fork 1.49× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `householder_apply/4096x256/b1 [block(basis=256,target=256)]` | 24.0634 ± 0.0767749 (W 0.196967) | 25.4436 ± 3.7376 (W 3.60108) | - | · | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `householder_apply/4096x256/b1 [sequence(basis=256,target=256)]` | 24.1711 ± 0.0570679 (W 0.147981) | 25.3727 ± 0.075119 (W 2.95546) | - | · | - | `*` one row has no measurement here |
+| `lu/1024x64/b1` | 0.754436 ± 0.00100001 (W 0.00271544) | 0.732083 ± 0.00228657 (W 0.00216002) | 0.922871 ± 0.00419984 (W 0.00208601) | · | 🔵 faer-fork 1.22× faster than `lapack-mkl` |  |
+| `lu/1024x64/b1 [in_place]` | 0.677179 ± 0.00325934 (W 0.00493799) | 1.38084 ± 0.00683736 (W 0.0170014) | - | 🔵 faer-fork 2.04× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `lu/4096x256/b1` | 19.2652 ± 0.0526069 (W 0.0645986) | 25.7084 ± 0.0192349 (W 0.0464057) | 50.0278 ± 0.066144 (W 0.0574077) | 🔵 faer-fork 1.33× faster than `faer-upstream` | 🔵 faer-fork 2.60× faster than `lapack-mkl` |  |
+| `lu/4096x256/b1 [in_place]` | 15.4953 ± 0.0395432 (W 0.0272542) | 61.6728 ± 0.107219 (W 0.104625) | - | 🔵 faer-fork 3.98× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/1024x64/b1` | 2.24415 ± 0.00567821 (W 0.00527964) | 2.44957 ± 0.201743 (W 0.260985) | - | 🔵 faer-fork 1.09× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr/4096x256/b1` | 69.429 ± 0.183566 (W 0.153375) | 84.7423 ± 6.18641 (W 3.05715) | - | 🔵 faer-fork 1.22× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr_factor/1024x64/b1` | 1.12077 ± 0.00688381 (W 0.00274717) | 3.90286 ± 0.0204964 (W 0.0562648) | 0.840447 ± 0.00204047 (W 0.00244866) | 🔵 faer-fork 3.48× faster than `faer-upstream` | 🔴 faer-fork 1.33× slower than `lapack-mkl` |  |
+| `qr_factor/4096x256/b1` | 26.704 ± 0.021718 (W 0.0456631) | 123.619 ± 0.618918 (W 0.725252) | 19.2124 ± 0.170639 (W 0.104903) | 🔵 faer-fork 4.63× faster than `faer-upstream` | 🔴 faer-fork 1.39× slower than `lapack-mkl` |  |
+| `svd_thin/1024x64/b1` | 2.72221 ± 0.01903 (W 0.00333593) | 3.70541 ± 0.165162 (W 0.391106) | 4.8909 ± 0.0138413 (W 0.0345885) | 🔵 faer-fork 1.36× faster than `faer-upstream` | 🔵 faer-fork 1.80× faster than `lapack-mkl` | `!` between-start range over 5% |
+| `svd_thin/1024x64/b1 [in_place]` | 2.71341 ± 0.0252596 (W 0.00384647) | 3.66423 ± 0.0278628 (W 0.0280175) | - | 🔵 faer-fork 1.35× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/4096x256/b1` | 77.5021 ± 0.0565205 (W 0.0670424) | 107.022 ± 0.721023 (W 2.42508) | 81.7069 ± 0.196696 (W 0.418257) | 🔵 faer-fork 1.38× faster than `faer-upstream` | 🔵 faer-fork 1.05× faster than `lapack-mkl` |  |
+| `svd_thin/4096x256/b1 [in_place]` | 76.7546 ± 0.10196 (W 0.130673) | 105.593 ± 0.349175 (W 1.22442) | - | 🔵 faer-fork 1.38× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/1024x64/b1` | 1.60378 ± 0.0194517 (W 0.00497597) | 2.48597 ± 0.00712828 (W 0.010188) | 2.2711 ± 0.0165815 (W 0.00803439) | 🔵 faer-fork 1.55× faster than `faer-upstream` | 🔵 faer-fork 1.42× faster than `lapack-mkl` |  |
+| `svd_values/1024x64/b1 [in_place]` | 1.61012 ± 0.0355634 (W 0.00358651) | 2.48642 ± 0.0212867 (W 0.00891276) | - | 🔵 faer-fork 1.54× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/4096x256/b1` | 44.9382 ± 0.05075 (W 0.0433394) | 69.7061 ± 0.377829 (W 0.479269) | 32.4165 ± 0.190727 (W 0.134765) | 🔵 faer-fork 1.55× faster than `faer-upstream` | 🔴 faer-fork 1.39× slower than `lapack-mkl` |  |
+| `svd_values/4096x256/b1 [in_place]` | 44.7011 ± 0.00910953 (W 0.0721055) | 69.3837 ± 0.0411123 (W 0.591699) | - | 🔵 faer-fork 1.55× faster than `faer-upstream` | - | `*` one row has no measurement here |
+
+## linalg-tall, c64, f order, 1T (CPU 4)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `full_piv_lu/1024x64/b1` | 1.66414 ± 0.00658449 (W 0.00418295) | 1.66526 ± 0.00263494 (W 0.00209031) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/1024x64/b1 [in_place]` | 1.70994 ± 0.00773486 (W 0.00225625) | 1.70538 ± 0.000662455 (W 0.00445555) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1` | 142.7 ± 0.307538 (W 0.667005) | 144.01 ± 0.420213 (W 0.639019) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1 [in_place]` | 151.933 ± 1.05962 (W 0.698527) | 151.434 ± 0.936008 (W 1.05075) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/1024x64/b1 [block(basis=64,target=64)]` | 2.26367 ± 0.00922472 (W 0.00300644) | 2.2739 ± 0.0074119 (W 0.00409444) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/1024x64/b1 [sequence(basis=64,target=64)]` | 2.25981 ± 0.00335382 (W 0.00369249) | 2.27291 ± 0.00904597 (W 0.00368887) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/4096x256/b1 [block(basis=256,target=256)]` | 138.501 ± 0.452127 (W 0.157967) | 138.678 ± 0.37847 (W 0.154832) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/4096x256/b1 [sequence(basis=256,target=256)]` | 138.621 ± 0.358282 (W 0.199456) | 138.88 ± 0.386501 (W 0.319038) | - | · | - | `*` one row has no measurement here |
+| `lu/1024x64/b1` | 0.931083 ± 0.00125736 (W 0.00287699) | 0.915524 ± 0.00249822 (W 0.00330534) | 0.948966 ± 0.0174991 (W 0.00216588) | · | · |  |
+| `lu/1024x64/b1 [in_place]` | 0.898845 ± 0.0035298 (W 0.00259365) | 0.889682 ± 0.00279064 (W 0.00226373) | - | · | - | `*` one row has no measurement here |
+| `lu/4096x256/b1` | 42.2978 ± 0.509395 (W 0.0608219) | 42.1234 ± 0.0936297 (W 0.0230545) | 47.9576 ± 0.0811158 (W 0.064995) | · | 🔵 faer-fork 1.13× faster than `lapack-mkl` |  |
+| `lu/4096x256/b1 [in_place]` | 41.1628 ± 0.0254831 (W 0.0392729) | 41.0215 ± 0.114091 (W 0.0478106) | - | · | - | `*` one row has no measurement here |
+| `qr/1024x64/b1` | 4.96347 ± 0.00246339 (W 0.0055364) | 5.18023 ± 0.0410786 (W 0.0131333) | - | · | - | `*` one row has no measurement here |
+| `qr/4096x256/b1` | 244.564 ± 0.169624 (W 0.532932) | 247.941 ± 0.0766112 (W 0.395746) | - | · | - | `*` one row has no measurement here |
+| `qr_factor/1024x64/b1` | 2.0206 ± 0.00464234 (W 0.00147172) | 2.2834 ± 0.00533024 (W 0.00348236) | 2.22549 ± 0.00345403 (W 0.00346318) | 🔵 faer-fork 1.13× faster than `faer-upstream` | 🔵 faer-fork 1.10× faster than `lapack-mkl` |  |
+| `qr_factor/4096x256/b1` | 87.8145 ± 0.143085 (W 0.0861989) | 90.7624 ± 0.122258 (W 0.0691463) | 105.895 ± 1.27447 (W 0.553771) | · | 🔵 faer-fork 1.21× faster than `lapack-mkl` |  |
+| `svd_thin/1024x64/b1` | 5.63826 ± 0.00411134 (W 0.0186867) | 5.90651 ± 0.0161881 (W 0.00604938) | 8.50542 ± 0.0426339 (W 0.0228348) | · | 🔵 faer-fork 1.51× faster than `lapack-mkl` |  |
+| `svd_thin/1024x64/b1 [in_place]` | 5.59502 ± 0.0145154 (W 0.0072367) | 5.89593 ± 0.0341517 (W 0.00602799) | - | 🔵 faer-fork 1.05× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/4096x256/b1` | 263.826 ± 1.02734 (W 6.76648) | 268.724 ± 0.498214 (W 6.6511) | 363.052 ± 0.645845 (W 0.651993) | · | 🔵 faer-fork 1.38× faster than `lapack-mkl` |  |
+| `svd_thin/4096x256/b1 [in_place]` | 263.553 ± 0.533072 (W 0.387754) | 267.992 ± 0.339562 (W 0.594454) | - | · | - | `*` one row has no measurement here |
+| `svd_values/1024x64/b1` | 2.46374 ± 0.00569896 (W 0.00891571) | 2.97579 ± 0.00523881 (W 0.00403088) | 3.64079 ± 0.0104496 (W 0.00431335) | 🔵 faer-fork 1.21× faster than `faer-upstream` | 🔵 faer-fork 1.48× faster than `lapack-mkl` |  |
+| `svd_values/1024x64/b1 [in_place]` | 2.43254 ± 0.00701206 (W 0.0112661) | 2.99677 ± 0.0072097 (W 0.00337595) | - | 🔵 faer-fork 1.23× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/4096x256/b1` | 102.281 ± 0.174377 (W 0.175318) | 110.659 ± 0.349819 (W 0.0879699) | 144.825 ± 0.392782 (W 0.924608) | 🔵 faer-fork 1.08× faster than `faer-upstream` | 🔵 faer-fork 1.42× faster than `lapack-mkl` |  |
+| `svd_values/4096x256/b1 [in_place]` | 102.008 ± 0.203439 (W 0.15385) | 110.317 ± 0.31103 (W 0.120151) | - | 🔵 faer-fork 1.08× faster than `faer-upstream` | - | `*` one row has no measurement here |
+
+## linalg-tall, c64, f order, 4T (CPU 4-7)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `full_piv_lu/1024x64/b1` | 0.841933 ± 0.00857461 (W 0.00172209) | 1.6608 ± 0.0035631 (W 0.00335779) | - | 🔵 faer-fork 1.97× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/1024x64/b1 [in_place]` | 0.789302 ± 0.00184367 (W 0.00257858) | 1.69933 ± 0.00105485 (W 0.00478622) | - | 🔵 faer-fork 2.15× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1` | 46.7742 ± 0.193413 (W 0.155176) | 48.8994 ± 0.440491 (W 0.423242) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1 [in_place]` | 47.4924 ± 0.0232545 (W 0.130717) | 49.3461 ± 0.337441 (W 0.329704) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/1024x64/b1 [block(basis=64,target=64)]` | 0.654888 ± 0.00740149 (W 0.00391348) | 0.643369 ± 0.00742546 (W 0.00355095) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/1024x64/b1 [sequence(basis=64,target=64)]` | 0.653316 ± 0.00572479 (W 0.00374566) | 0.646083 ± 0.00719295 (W 0.00362356) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/4096x256/b1 [block(basis=256,target=256)]` | 39.4822 ± 0.116514 (W 0.0892659) | 39.5065 ± 0.0325282 (W 0.0742423) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/4096x256/b1 [sequence(basis=256,target=256)]` | 39.4123 ± 0.0643406 (W 0.066113) | 39.4538 ± 0.0689087 (W 0.141576) | - | · | - | `*` one row has no measurement here |
+| `lu/1024x64/b1` | 0.691478 ± 0.000644987 (W 0.00378243) | 0.678064 ± 0.00257554 (W 0.0032976) | 0.94243 ± 0.00173503 (W 0.00332812) | · | 🔵 faer-fork 1.36× faster than `lapack-mkl` |  |
+| `lu/1024x64/b1 [in_place]` | 0.634142 ± 0.000865018 (W 0.00230089) | 0.619083 ± 0.00302608 (W 0.00299354) | - | · | - | `*` one row has no measurement here |
+| `lu/4096x256/b1` | 17.8162 ± 0.0395892 (W 0.0138679) | 17.6855 ± 0.118968 (W 0.063906) | 47.8421 ± 0.18287 (W 0.103329) | · | 🔵 faer-fork 2.69× faster than `lapack-mkl` |  |
+| `lu/4096x256/b1 [in_place]` | 16.5875 ± 0.0419362 (W 0.0291482) | 16.54 ± 0.0162128 (W 0.0376348) | - | · | - | `*` one row has no measurement here |
+| `qr/1024x64/b1` | 2.43736 ± 0.0300386 (W 0.0122668) | 2.89925 ± 0.0348672 (W 0.0415734) | - | 🔵 faer-fork 1.19× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/4096x256/b1` | 86.2528 ± 0.189494 (W 0.0822094) | 97.0639 ± 0.525773 (W 0.596966) | - | 🔵 faer-fork 1.13× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr_factor/1024x64/b1` | 1.16595 ± 0.00373039 (W 0.00424471) | 1.60894 ± 0.00535901 (W 0.00490038) | 1.33408 ± 0.000575377 (W 0.00291114) | 🔵 faer-fork 1.38× faster than `faer-upstream` | 🔵 faer-fork 1.14× faster than `lapack-mkl` |  |
+| `qr_factor/4096x256/b1` | 32.4053 ± 0.0904789 (W 0.0722733) | 42.3905 ± 0.0537787 (W 0.0525755) | 31.0305 ± 0.242015 (W 0.0527214) | 🔵 faer-fork 1.31× faster than `faer-upstream` | · |  |
+| `svd_thin/1024x64/b1` | 2.99193 ± 0.0132948 (W 0.00789583) | 3.56768 ± 0.00829953 (W 0.00764389) | 5.35386 ± 0.011593 (W 0.021574) | 🔵 faer-fork 1.19× faster than `faer-upstream` | 🔵 faer-fork 1.79× faster than `lapack-mkl` |  |
+| `svd_thin/1024x64/b1 [in_place]` | 2.99367 ± 0.00220061 (W 0.0110606) | 3.5601 ± 0.00299643 (W 0.00954422) | - | 🔵 faer-fork 1.19× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/4096x256/b1` | 90.0088 ± 0.117848 (W 0.126985) | 106.496 ± 0.150127 (W 2.30007) | 128.315 ± 0.525047 (W 0.416151) | 🔵 faer-fork 1.18× faster than `faer-upstream` | 🔵 faer-fork 1.43× faster than `lapack-mkl` |  |
+| `svd_thin/4096x256/b1 [in_place]` | 89.3082 ± 0.0556642 (W 0.0608955) | 105.734 ± 0.124348 (W 0.263584) | - | 🔵 faer-fork 1.18× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/1024x64/b1` | 1.62695 ± 0.0126569 (W 0.00785188) | 2.35142 ± 0.002187 (W 0.00636969) | 2.74078 ± 0.00653111 (W 0.0071273) | 🔵 faer-fork 1.45× faster than `faer-upstream` | 🔵 faer-fork 1.68× faster than `lapack-mkl` |  |
+| `svd_values/1024x64/b1 [in_place]` | 1.61735 ± 0.00758142 (W 0.00526111) | 2.34075 ± 0.00298106 (W 0.00453957) | - | 🔵 faer-fork 1.45× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/4096x256/b1` | 41.749 ± 0.0499307 (W 0.0580889) | 59.8594 ± 0.132132 (W 0.11915) | 48.4085 ± 0.373658 (W 0.115656) | 🔵 faer-fork 1.43× faster than `faer-upstream` | 🔵 faer-fork 1.16× faster than `lapack-mkl` |  |
+| `svd_values/4096x256/b1 [in_place]` | 41.6016 ± 0.0505813 (W 0.0735415) | 59.8719 ± 0.0964377 (W 0.100489) | - | 🔵 faer-fork 1.44× faster than `faer-upstream` | - | `*` one row has no measurement here |
+
+## linalg-tall, c64, f order, 8T (CPU 4-11)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `full_piv_lu/1024x64/b1` | 0.72079 ± 0.00865299 (W 0.00402109) | 1.66221 ± 0.00322688 (W 0.00628935) | - | 🔵 faer-fork 2.31× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/1024x64/b1 [in_place]` | 0.659018 ± 0.00275591 (W 0.00467195) | 1.70343 ± 0.000640205 (W 0.00399362) | - | 🔵 faer-fork 2.58× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1` | 23.968 ± 0.170922 (W 0.13508) | 26.3812 ± 0.149414 (W 0.143448) | - | 🔵 faer-fork 1.10× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1 [in_place]` | 23.4943 ± 0.00760998 (W 0.0445783) | 26.2508 ± 0.119963 (W 0.135034) | - | 🔵 faer-fork 1.12× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `householder_apply/1024x64/b1 [block(basis=64,target=64)]` | 0.387826 ± 0.00256892 (W 0.00304143) | 0.532613 ± 0.0432501 (W 0.045198) | - | 🔵 faer-fork 1.37× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `householder_apply/1024x64/b1 [sequence(basis=64,target=64)]` | 0.38446 ± 0.00809342 (W 0.00488279) | 0.461169 ± 0.0434879 (W 0.0471721) | - | 🔵 faer-fork 1.20× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `householder_apply/4096x256/b1 [block(basis=256,target=256)]` | 26.5981 ± 0.264797 (W 0.579505) | 26.3365 ± 0.137073 (W 1.42481) | - | · | - | `*` one row has no measurement here |
+| `householder_apply/4096x256/b1 [sequence(basis=256,target=256)]` | 26.9032 ± 0.481464 (W 0.248139) | 26.3735 ± 0.118863 (W 2.9452) | - | · | - | `*` one row has no measurement here |
+| `lu/1024x64/b1` | 0.644391 ± 0.00185266 (W 0.00343714) | 0.633127 ± 0.00106107 (W 0.00316917) | 0.942306 ± 0.00227176 (W 0.00287238) | · | 🔵 faer-fork 1.46× faster than `lapack-mkl` |  |
+| `lu/1024x64/b1 [in_place]` | 0.585567 ± 0.000503346 (W 0.00264328) | 0.573218 ± 0.00116017 (W 0.00432485) | - | · | - | `*` one row has no measurement here |
+| `lu/4096x256/b1` | 13.7957 ± 0.0250677 (W 0.0471878) | 13.6801 ± 0.0359856 (W 0.0260909) | 47.9337 ± 0.0497559 (W 0.0920927) | · | 🔵 faer-fork 3.47× faster than `lapack-mkl` |  |
+| `lu/4096x256/b1 [in_place]` | 12.643 ± 0.0215558 (W 0.0299907) | 12.5986 ± 0.0402226 (W 0.0394162) | - | · | - | `*` one row has no measurement here |
+| `qr/1024x64/b1` | 2.04954 ± 0.00713003 (W 0.00777861) | 2.34072 ± 0.0556468 (W 0.062965) | - | 🔵 faer-fork 1.14× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/4096x256/b1` | 62.8704 ± 0.226373 (W 0.237969) | 76.2622 ± 5.81778 (W 3.53833) | - | 🔵 faer-fork 1.21× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr_factor/1024x64/b1` | 1.03493 ± 0.00361929 (W 0.00381479) | 1.6795 ± 0.0159641 (W 0.00725359) | 0.815319 ± 0.00125602 (W 0.00180569) | 🔵 faer-fork 1.62× faster than `faer-upstream` | 🔴 faer-fork 1.27× slower than `lapack-mkl` |  |
+| `qr_factor/4096x256/b1` | 23.8459 ± 0.0314117 (W 0.0402856) | 39.7085 ± 0.441496 (W 0.312434) | 16.9821 ± 0.0418662 (W 0.124956) | 🔵 faer-fork 1.67× faster than `faer-upstream` | 🔴 faer-fork 1.40× slower than `lapack-mkl` |  |
+| `svd_thin/1024x64/b1` | 2.60991 ± 0.000750547 (W 0.0058164) | 3.8716 ± 0.155535 (W 0.308) | 4.21327 ± 0.0157978 (W 0.00391814) | 🔵 faer-fork 1.48× faster than `faer-upstream` | 🔵 faer-fork 1.61× faster than `lapack-mkl` | `!` between-start range over 5% |
+| `svd_thin/1024x64/b1 [in_place]` | 2.59846 ± 0.00594672 (W 0.00370492) | 3.5825 ± 0.0156764 (W 0.0244766) | - | 🔵 faer-fork 1.38× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/4096x256/b1` | 65.1478 ± 0.0537553 (W 0.10809) | 93.953 ± 1.61016 (W 2.30044) | 74.281 ± 1.02174 (W 0.66559) | 🔵 faer-fork 1.44× faster than `faer-upstream` | 🔵 faer-fork 1.14× faster than `lapack-mkl` |  |
+| `svd_thin/4096x256/b1 [in_place]` | 64.2615 ± 0.109104 (W 0.117088) | 93.5129 ± 0.510215 (W 1.79798) | - | 🔵 faer-fork 1.46× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/1024x64/b1` | 1.51652 ± 0.00174222 (W 0.00390054) | 2.41025 ± 0.00564866 (W 0.00769791) | 2.24944 ± 0.0253656 (W 0.0028828) | 🔵 faer-fork 1.59× faster than `faer-upstream` | 🔵 faer-fork 1.48× faster than `lapack-mkl` |  |
+| `svd_values/1024x64/b1 [in_place]` | 1.5178 ± 0.00751199 (W 0.00457388) | 2.39796 ± 0.0128136 (W 0.0165486) | - | 🔵 faer-fork 1.58× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/4096x256/b1` | 32.8548 ± 0.114239 (W 0.0480687) | 57.5314 ± 0.175345 (W 0.472423) | 30.8561 ± 0.0835964 (W 0.172005) | 🔵 faer-fork 1.75× faster than `faer-upstream` | 🔴 faer-fork 1.06× slower than `lapack-mkl` |  |
+| `svd_values/4096x256/b1 [in_place]` | 32.6862 ± 0.104584 (W 0.0321926) | 57.6404 ± 0.0957594 (W 0.414726) | - | 🔵 faer-fork 1.76× faster than `faer-upstream` | - | `*` one row has no measurement here |
+
+Not applicable to this population's shapes and reported as skipped: `cholesky/1024x64`, `cholesky/4096x256`, `eigh/1024x64`, `eigh/4096x256`, `full_piv_lu/1024x64`, `full_piv_lu/4096x256`, `householder_apply/1024x64`, `householder_apply/4096x256`, `qr/1024x64`, `qr/4096x256`, `solve/1024x64`, `solve/4096x256`, `triangular_solve/1024x64`, `triangular_solve/4096x256`, `upgrade_factor/1024x64`, `upgrade_factor/4096x256`.
+
+## linalg-wide, f64, c order, 1T (CPU 4)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `full_piv_lu/256x4096/b1` | 75.5678 ± 0.489619 (W 0.648353) | 76.4106 ± 0.355095 (W 0.344336) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/256x4096/b1 [in_place]` | 52.7352 ± 0.112721 (W 0.478499) | 52.4763 ± 0.30043 (W 0.257649) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/64x1024/b1` | 1.13488 ± 0.0103268 (W 0.00811314) | 1.24592 ± 0.000671224 (W 0.00382247) | - | 🔵 faer-fork 1.10× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/64x1024/b1 [in_place]` | 0.790934 ± 0.00214853 (W 0.00407919) | 0.786283 ± 0.00128246 (W 0.00197937) | - | · | - | `*` one row has no measurement here |
+| `lu/256x4096/b1` | 15.9622 ± 0.0308175 (W 0.0467303) | 18.0566 ± 0.172033 (W 0.0464162) | 26.3795 ± 0.0899376 (W 0.0723077) | 🔵 faer-fork 1.13× faster than `faer-upstream` | 🔵 faer-fork 1.65× faster than `lapack-mkl` |  |
+| `lu/256x4096/b1 [in_place]` | 110.366 ± 1.87074 (W 0.163003) | 111.541 ± 20.1224 (W 0.19299) | - | · | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `lu/64x1024/b1` | 0.398316 ± 0.000355332 (W 0.00307751) | 0.513763 ± 0.00509449 (W 0.00292097) | 0.591923 ± 0.00240646 (W 0.00315909) | 🔵 faer-fork 1.29× faster than `faer-upstream` | 🔵 faer-fork 1.49× faster than `lapack-mkl` |  |
+| `lu/64x1024/b1 [in_place]` | 3.18787 ± 0.00362884 (W 0.0145462) | 3.19239 ± 0.00837868 (W 0.0107777) | - | · | - | `*` one row has no measurement here |
+| `qr/256x4096/b1` | 30.4769 ± 0.188131 (W 0.364338) | 32.0311 ± 0.331887 (W 0.0560295) | - | · | - | `*` one row has no measurement here |
+| `qr/64x1024/b1` | 0.743704 ± 0.00330067 (W 0.00169416) | 0.835116 ± 0.00602525 (W 0.00556761) | - | 🔵 faer-fork 1.12× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr_factor/256x4096/b1` | 27.4812 ± 0.115319 (W 0.303108) | 27.3595 ± 0.083175 (W 0.0446067) | 59.1125 ± 1.14958 (W 0.425132) | · | 🔵 faer-fork 2.15× faster than `lapack-mkl` |  |
+| `qr_factor/64x1024/b1` | 0.984293 ± 0.000838394 (W 0.00326264) | 1.00405 ± 0.00205537 (W 0.00644632) | 1.32906 ± 0.00508755 (W 0.00609635) | · | 🔵 faer-fork 1.35× faster than `lapack-mkl` |  |
+| `svd_thin/256x4096/b1` | 81.0801 ± 0.0726296 (W 0.130801) | 83.6015 ± 0.109481 (W 0.177344) | 250.698 ± 0.91393 (W 1.58098) | · | 🔵 faer-fork 3.09× faster than `lapack-mkl` |  |
+| `svd_thin/256x4096/b1 [in_place]` | 80.6408 ± 0.175546 (W 0.453833) | 83.3958 ± 0.212873 (W 0.0679856) | - | · | - | `*` one row has no measurement here |
+| `svd_thin/64x1024/b1` | 2.25161 ± 0.00244809 (W 0.00240127) | 2.46507 ± 0.0020658 (W 0.00315502) | 4.10994 ± 0.102299 (W 0.00760553) | 🔵 faer-fork 1.09× faster than `faer-upstream` | 🔵 faer-fork 1.83× faster than `lapack-mkl` |  |
+| `svd_thin/64x1024/b1 [in_place]` | 2.24195 ± 0.00284022 (W 0.00294043) | 2.45841 ± 0.00364592 (W 0.00334652) | - | 🔵 faer-fork 1.10× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/256x4096/b1` | 32.75 ± 0.0172976 (W 0.0550088) | 39.2589 ± 0.0227059 (W 0.0385834) | 178.663 ± 4.93561 (W 3.56996) | 🔵 faer-fork 1.20× faster than `faer-upstream` | 🔵 faer-fork 5.46× faster than `lapack-mkl` |  |
+| `svd_values/256x4096/b1 [in_place]` | 32.7341 ± 0.0445009 (W 0.104693) | 39.2076 ± 0.0885147 (W 0.0451575) | - | 🔵 faer-fork 1.20× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/64x1024/b1` | 0.962283 ± 0.000845707 (W 0.00387292) | 1.42537 ± 0.00158139 (W 0.00309588) | 2.58935 ± 0.0421918 (W 0.00559875) | 🔵 faer-fork 1.48× faster than `faer-upstream` | 🔵 faer-fork 2.69× faster than `lapack-mkl` |  |
+| `svd_values/64x1024/b1 [in_place]` | 0.960219 ± 0.00280906 (W 0.00277895) | 1.42425 ± 0.00313447 (W 0.00479946) | - | 🔵 faer-fork 1.48× faster than `faer-upstream` | - | `*` one row has no measurement here |
+
+## linalg-wide, f64, c order, 4T (CPU 4-7)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `full_piv_lu/256x4096/b1` | 32.5751 ± 0.110221 (W 0.0800604) | 35.9994 ± 0.254799 (W 0.208243) | - | 🔵 faer-fork 1.11× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/256x4096/b1 [in_place]` | 15.8833 ± 0.0258253 (W 0.0424643) | 16.3136 ± 0.0815575 (W 0.0436125) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/64x1024/b1` | 0.736639 ± 0.00125655 (W 0.00313636) | 1.26188 ± 0.00339803 (W 0.00495658) | - | 🔵 faer-fork 1.71× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/64x1024/b1 [in_place]` | 0.471378 ± 0.00260105 (W 0.00199607) | 0.785294 ± 0.000477252 (W 0.00286051) | - | 🔵 faer-fork 1.67× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `lu/256x4096/b1` | 6.52506 ± 0.0705947 (W 0.0527052) | 9.96205 ± 0.277996 (W 0.46431) | 6.11904 ± 0.04648 (W 0.0361445) | 🔵 faer-fork 1.53× faster than `faer-upstream` | 🔴 faer-fork 1.07× slower than `lapack-mkl` | `!` between-start range over 5% |
+| `lu/256x4096/b1 [in_place]` | 30.6703 ± 4.72166 (W 0.0818125) | 56.1381 ± 0.364556 (W 10.1486) | - | 🔵 faer-fork 1.83× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `lu/64x1024/b1` | 0.205595 ± 0.000295145 (W 0.00263714) | 0.359252 ± 0.0195811 (W 0.0186627) | 0.260025 ± 0.00164821 (W 0.00258835) | 🔵 faer-fork 1.75× faster than `faer-upstream` | 🔵 faer-fork 1.26× faster than `lapack-mkl` | `!` between-start range over 5% |
+| `lu/64x1024/b1 [in_place]` | 0.935894 ± 0.00498469 (W 0.00402488) | 1.61769 ± 0.367714 (W 0.358247) | - | 🔵 faer-fork 1.73× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr/256x4096/b1` | 10.3004 ± 0.0244301 (W 0.025324) | 12.7544 ± 0.13503 (W 0.0337455) | - | 🔵 faer-fork 1.24× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/64x1024/b1` | 0.362348 ± 0.000194456 (W 0.00204608) | 0.533329 ± 0.0135032 (W 0.0013373) | - | 🔵 faer-fork 1.47× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr_factor/256x4096/b1` | 10.0916 ± 0.0830479 (W 0.038716) | 10.5813 ± 0.225623 (W 0.39982) | 12.6172 ± 0.0204279 (W 0.025126) | · | 🔵 faer-fork 1.25× faster than `lapack-mkl` |  |
+| `qr_factor/64x1024/b1` | 0.603109 ± 0.00547301 (W 0.00316931) | 0.68936 ± 0.000849849 (W 0.00626084) | 0.398135 ± 0.00262947 (W 0.00259239) | 🔵 faer-fork 1.14× faster than `faer-upstream` | 🔴 faer-fork 1.51× slower than `lapack-mkl` |  |
+| `svd_thin/256x4096/b1` | 34.4815 ± 0.098411 (W 0.0689815) | 42.2376 ± 0.0260486 (W 0.967675) | 125.299 ± 1.6557 (W 1.79717) | 🔵 faer-fork 1.22× faster than `faer-upstream` | 🔵 faer-fork 3.63× faster than `lapack-mkl` |  |
+| `svd_thin/256x4096/b1 [in_place]` | 34.4565 ± 0.166532 (W 0.186797) | 41.983 ± 0.120291 (W 0.0547495) | - | 🔵 faer-fork 1.22× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/64x1024/b1` | 1.69892 ± 0.00700438 (W 0.00557608) | 2.09703 ± 0.00496869 (W 0.00480471) | 3.05259 ± 0.00482442 (W 0.024622) | 🔵 faer-fork 1.23× faster than `faer-upstream` | 🔵 faer-fork 1.80× faster than `lapack-mkl` |  |
+| `svd_thin/64x1024/b1 [in_place]` | 1.69029 ± 0.00509165 (W 0.00478178) | 2.08553 ± 0.00297021 (W 0.00480984) | - | 🔵 faer-fork 1.23× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/256x4096/b1` | 17.5131 ± 0.021096 (W 0.0237809) | 26.9495 ± 0.0592125 (W 0.0825514) | 94.5534 ± 1.58516 (W 0.44256) | 🔵 faer-fork 1.54× faster than `faer-upstream` | 🔵 faer-fork 5.40× faster than `lapack-mkl` |  |
+| `svd_values/256x4096/b1 [in_place]` | 17.4379 ± 0.00616334 (W 0.0251587) | 26.9371 ± 0.0253251 (W 0.0489631) | - | 🔵 faer-fork 1.54× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/64x1024/b1` | 0.828781 ± 0.00168893 (W 0.0029941) | 1.46387 ± 0.00344665 (W 0.00607688) | 2.09154 ± 0.0147024 (W 0.00789252) | 🔵 faer-fork 1.77× faster than `faer-upstream` | 🔵 faer-fork 2.52× faster than `lapack-mkl` |  |
+| `svd_values/64x1024/b1 [in_place]` | 0.826708 ± 0.00250517 (W 0.00219162) | 1.46828 ± 0.00357578 (W 0.00371297) | - | 🔵 faer-fork 1.78× faster than `faer-upstream` | - | `*` one row has no measurement here |
+
+## linalg-wide, f64, c order, 8T (CPU 4-11)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `full_piv_lu/256x4096/b1` | 27.2172 ± 0.0331727 (W 0.0447179) | 30.7648 ± 0.0537905 (W 0.0340069) | - | 🔵 faer-fork 1.13× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/256x4096/b1 [in_place]` | 10.3088 ± 0.226749 (W 0.0265807) | 10.9028 ± 0.0231157 (W 0.0206099) | - | 🔵 faer-fork 1.06× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/64x1024/b1` | 0.699698 ± 0.00590056 (W 0.00276035) | 1.25632 ± 0.00307705 (W 0.00456766) | - | 🔵 faer-fork 1.80× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/64x1024/b1 [in_place]` | 0.443891 ± 0.00209972 (W 0.00277109) | 0.788394 ± 0.00269082 (W 0.00441675) | - | 🔵 faer-fork 1.78× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `lu/256x4096/b1` | 5.00806 ± 0.0504628 (W 0.0285067) | 7.79526 ± 0.0314447 (W 0.102369) | 3.14595 ± 0.00696678 (W 0.0186763) | 🔵 faer-fork 1.56× faster than `faer-upstream` | 🔴 faer-fork 1.59× slower than `lapack-mkl` |  |
+| `lu/256x4096/b1 [in_place]` | 16.3584 ± 2.02115 (W 0.0789481) | 30.9914 ± 0.855702 (W 0.262936) | - | 🔵 faer-fork 1.89× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `lu/64x1024/b1` | 0.178264 ± 0.00051844 (W 0.00244911) | 0.346679 ± 0.00692798 (W 0.0073683) | 0.124663 ± 0.000792347 (W 0.00161375) | 🔵 faer-fork 1.94× faster than `faer-upstream` | 🔴 faer-fork 1.43× slower than `lapack-mkl` |  |
+| `lu/64x1024/b1 [in_place]` | 0.557743 ± 0.00325849 (W 0.00430189) | 0.949166 ± 0.00665904 (W 0.00940918) | - | 🔵 faer-fork 1.70× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/256x4096/b1` | 7.02238 ± 0.068099 (W 0.0530292) | 11.0231 ± 0.117549 (W 0.120185) | - | 🔵 faer-fork 1.57× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/64x1024/b1` | 0.31568 ± 0.00113292 (W 0.00212804) | 0.581607 ± 0.014902 (W 0.00433067) | - | 🔵 faer-fork 1.84× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr_factor/256x4096/b1` | 7.27014 ± 0.0639314 (W 0.17485) | 8.85649 ± 0.125857 (W 0.16121) | 6.37656 ± 0.0091321 (W 0.0132892) | 🔵 faer-fork 1.22× faster than `faer-upstream` | 🔴 faer-fork 1.14× slower than `lapack-mkl` |  |
+| `qr_factor/64x1024/b1` | 0.546191 ± 0.00386968 (W 0.00453694) | 0.728012 ± 0.00106357 (W 0.00640966) | 0.226964 ± 0.00101267 (W 0.00273863) | 🔵 faer-fork 1.33× faster than `faer-upstream` | 🔴 faer-fork 2.41× slower than `lapack-mkl` |  |
+| `svd_thin/256x4096/b1` | 28.6213 ± 0.0122147 (W 0.0299917) | 41.3172 ± 1.22525 (W 0.566978) | 112.08 ± 2.11738 (W 1.74381) | 🔵 faer-fork 1.44× faster than `faer-upstream` | 🔵 faer-fork 3.92× faster than `lapack-mkl` | `!` between-start range over 5% |
+| `svd_thin/256x4096/b1 [in_place]` | 28.4355 ± 0.0606761 (W 0.0276771) | 40.8683 ± 0.195339 (W 0.101688) | - | 🔵 faer-fork 1.44× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/64x1024/b1` | 1.62394 ± 0.00545693 (W 0.00662422) | 2.19932 ± 0.00363746 (W 0.00442985) | 3.06773 ± 0.00631703 (W 0.0258445) | 🔵 faer-fork 1.35× faster than `faer-upstream` | 🔵 faer-fork 1.89× faster than `lapack-mkl` |  |
+| `svd_thin/64x1024/b1 [in_place]` | 1.60743 ± 0.00165975 (W 0.00500916) | 2.17769 ± 0.00755867 (W 0.00617784) | - | 🔵 faer-fork 1.35× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/256x4096/b1` | 15.0528 ± 0.0265067 (W 0.0284083) | 27.7988 ± 0.0785597 (W 0.0642375) | 82.3693 ± 0.154584 (W 0.316043) | 🔵 faer-fork 1.85× faster than `faer-upstream` | 🔵 faer-fork 5.47× faster than `lapack-mkl` |  |
+| `svd_values/256x4096/b1 [in_place]` | 15.0798 ± 0.0351838 (W 0.0601365) | 27.8536 ± 0.0516822 (W 0.078353) | - | 🔵 faer-fork 1.85× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/64x1024/b1` | 0.809313 ± 0.00473422 (W 0.0023593) | 1.55143 ± 0.00306577 (W 0.00281326) | 2.08754 ± 0.00250456 (W 0.00295774) | 🔵 faer-fork 1.92× faster than `faer-upstream` | 🔵 faer-fork 2.58× faster than `lapack-mkl` |  |
+| `svd_values/64x1024/b1 [in_place]` | 0.810535 ± 0.00622629 (W 0.00489548) | 1.55018 ± 0.00575757 (W 0.00428734) | - | 🔵 faer-fork 1.91× faster than `faer-upstream` | - | `*` one row has no measurement here |
+
+## linalg-wide, f64, f order, 1T (CPU 4)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `full_piv_lu/256x4096/b1` | 72.4537 ± 0.434909 (W 0.288931) | 72.388 ± 0.595993 (W 0.221507) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/256x4096/b1 [in_place]` | 87.2274 ± 1.5683 (W 0.259563) | 87.2971 ± 0.43085 (W 0.95932) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/64x1024/b1` | 1.05474 ± 0.357859 (W 0.00349244) | 1.04156 ± 0.0120215 (W 0.00251881) | - | · | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `full_piv_lu/64x1024/b1 [in_place]` | 1.11294 ± 0.00613053 (W 0.00371926) | 1.11609 ± 0.00836859 (W 0.00230841) | - | · | - | `*` one row has no measurement here |
+| `lu/256x4096/b1` | 13.3693 ± 0.0110634 (W 0.078489) | 13.2965 ± 0.0126392 (W 0.020484) | 20.6851 ± 0.150883 (W 0.0449964) | · | 🔵 faer-fork 1.55× faster than `lapack-mkl` |  |
+| `lu/256x4096/b1 [in_place]` | 14.6307 ± 0.0608062 (W 0.0195355) | 14.5868 ± 0.0210795 (W 0.012731) | - | · | - | `*` one row has no measurement here |
+| `lu/64x1024/b1` | 0.312713 ± 0.000840529 (W 0.00293058) | 0.311874 ± 0.005263 (W 0.00343795) | 0.433368 ± 0.00191576 (W 0.00216998) | · | 🔵 faer-fork 1.39× faster than `lapack-mkl` |  |
+| `lu/64x1024/b1 [in_place]` | 0.299632 ± 0.00112461 (W 0.00306614) | 0.299171 ± 0.0002107 (W 0.00178887) | - | · | - | `*` one row has no measurement here |
+| `qr/256x4096/b1` | 27.6484 ± 0.176449 (W 0.382205) | 27.4308 ± 0.380181 (W 0.23763) | - | · | - | `*` one row has no measurement here |
+| `qr/64x1024/b1` | 0.627004 ± 0.00221269 (W 0.00190091) | 0.633888 ± 0.000902422 (W 0.00203549) | - | · | - | `*` one row has no measurement here |
+| `qr_factor/256x4096/b1` | 25.283 ± 0.0483092 (W 0.0721183) | 25.1561 ± 0.0615279 (W 0.0694976) | 56.1014 ± 0.0909252 (W 0.521684) | · | 🔵 faer-fork 2.22× faster than `lapack-mkl` |  |
+| `qr_factor/64x1024/b1` | 0.565811 ± 0.00069485 (W 0.00194084) | 0.5711 ± 0.00356034 (W 0.00262283) | 1.21569 ± 0.0145912 (W 0.00278311) | · | 🔵 faer-fork 2.15× faster than `lapack-mkl` |  |
+| `svd_thin/256x4096/b1` | 86.3281 ± 0.130724 (W 0.194213) | 89.1038 ± 0.103455 (W 0.162156) | 241.457 ± 1.72858 (W 1.31072) | · | 🔵 faer-fork 2.80× faster than `lapack-mkl` |  |
+| `svd_thin/256x4096/b1 [in_place]` | 86.1094 ± 0.060825 (W 0.128503) | 88.7322 ± 0.0679532 (W 0.134944) | - | · | - | `*` one row has no measurement here |
+| `svd_thin/64x1024/b1` | 2.31729 ± 0.00529439 (W 0.00569113) | 2.53618 ± 0.0009204 (W 0.00393509) | 3.9265 ± 0.0247993 (W 0.00700434) | 🔵 faer-fork 1.09× faster than `faer-upstream` | 🔵 faer-fork 1.69× faster than `lapack-mkl` |  |
+| `svd_thin/64x1024/b1 [in_place]` | 2.31444 ± 0.00346373 (W 0.00368261) | 2.52537 ± 0.00155727 (W 0.00218078) | - | 🔵 faer-fork 1.09× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/256x4096/b1` | 38.4629 ± 0.0770546 (W 0.052251) | 45.0995 ± 0.030027 (W 0.386036) | 176.938 ± 5.45426 (W 1.01762) | 🔵 faer-fork 1.17× faster than `faer-upstream` | 🔵 faer-fork 4.60× faster than `lapack-mkl` | `!` between-start range over 5% |
+| `svd_values/256x4096/b1 [in_place]` | 38.5014 ± 0.0957397 (W 0.0438999) | 45.0674 ± 0.0336486 (W 0.107616) | - | 🔵 faer-fork 1.17× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/64x1024/b1` | 1.03952 ± 0.00202154 (W 0.00641686) | 1.48656 ± 0.00549314 (W 0.00483952) | 2.49696 ± 0.00520354 (W 0.00658756) | 🔵 faer-fork 1.43× faster than `faer-upstream` | 🔵 faer-fork 2.40× faster than `lapack-mkl` |  |
+| `svd_values/64x1024/b1 [in_place]` | 1.03883 ± 0.00147269 (W 0.00669654) | 1.48196 ± 0.00383743 (W 0.00825415) | - | 🔵 faer-fork 1.43× faster than `faer-upstream` | - | `*` one row has no measurement here |
+
+## linalg-wide, f64, f order, 4T (CPU 4-7)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `full_piv_lu/256x4096/b1` | 30.2321 ± 0.137273 (W 0.0380411) | 31.3248 ± 0.0801938 (W 0.14954) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/256x4096/b1 [in_place]` | 32.7063 ± 0.035844 (W 0.0387554) | 34.2534 ± 0.0898887 (W 0.0472446) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/64x1024/b1` | 0.665751 ± 0.0377704 (W 0.00324177) | 1.06081 ± 0.00301106 (W 0.00352872) | - | 🔵 faer-fork 1.59× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `full_piv_lu/64x1024/b1 [in_place]` | 0.63539 ± 0.00148883 (W 0.00433748) | 1.11108 ± 0.00373452 (W 0.0032524) | - | 🔵 faer-fork 1.75× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `lu/256x4096/b1` | 4.06781 ± 0.0174882 (W 0.00908945) | 5.36256 ± 0.130349 (W 0.266768) | 4.6944 ± 0.0108089 (W 0.0161078) | 🔵 faer-fork 1.32× faster than `faer-upstream` | 🔵 faer-fork 1.15× faster than `lapack-mkl` |  |
+| `lu/256x4096/b1 [in_place]` | 4.0722 ± 0.00163571 (W 0.00816151) | 5.55327 ± 0.11819 (W 0.419811) | - | 🔵 faer-fork 1.36× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `lu/64x1024/b1` | 0.117369 ± 0.000550001 (W 0.000575904) | 0.157053 ± 0.00807754 (W 0.0145797) | 0.201096 ± 0.00236435 (W 0.00487186) | 🔵 faer-fork 1.34× faster than `faer-upstream` | 🔵 faer-fork 1.71× faster than `lapack-mkl` | `!` between-start range over 5% |
+| `lu/64x1024/b1 [in_place]` | 0.09633 ± 0.000153731 (W 0.00140613) | 0.146374 ± 0.0151261 (W 0.0149768) | - | 🔵 faer-fork 1.52× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr/256x4096/b1` | 7.63622 ± 0.090235 (W 0.0204462) | 8.05925 ± 0.00584283 (W 0.0176738) | - | 🔵 faer-fork 1.06× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/64x1024/b1` | 0.251359 ± 0.000528792 (W 0.00138767) | 0.322872 ± 0.00214704 (W 0.00357649) | - | 🔵 faer-fork 1.28× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr_factor/256x4096/b1` | 6.59606 ± 0.0334167 (W 0.0171319) | 7.01894 ± 0.0153766 (W 0.0195303) | 11.1242 ± 0.0192082 (W 0.0151533) | 🔵 faer-fork 1.06× faster than `faer-upstream` | 🔵 faer-fork 1.69× faster than `lapack-mkl` |  |
+| `qr_factor/64x1024/b1` | 0.199363 ± 0.000153627 (W 0.00208488) | 0.266827 ± 0.00046243 (W 0.00166159) | 0.349975 ± 0.0025131 (W 0.00211642) | 🔵 faer-fork 1.34× faster than `faer-upstream` | 🔵 faer-fork 1.76× faster than `lapack-mkl` |  |
+| `svd_thin/256x4096/b1` | 39.8058 ± 0.0905795 (W 0.0819516) | 47.5713 ± 0.140611 (W 0.883991) | 120.173 ± 2.46137 (W 1.15292) | 🔵 faer-fork 1.20× faster than `faer-upstream` | 🔵 faer-fork 3.02× faster than `lapack-mkl` |  |
+| `svd_thin/256x4096/b1 [in_place]` | 39.7862 ± 0.08943 (W 0.145316) | 47.4934 ± 0.0440107 (W 0.0736506) | - | 🔵 faer-fork 1.19× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/64x1024/b1` | 1.76348 ± 0.00812967 (W 0.00445128) | 2.16207 ± 0.0026295 (W 0.00565836) | 3.07577 ± 0.00655782 (W 0.0150393) | 🔵 faer-fork 1.23× faster than `faer-upstream` | 🔵 faer-fork 1.74× faster than `lapack-mkl` |  |
+| `svd_thin/64x1024/b1 [in_place]` | 1.75194 ± 0.00762923 (W 0.00403078) | 2.15593 ± 0.0139249 (W 0.00626789) | - | 🔵 faer-fork 1.23× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/256x4096/b1` | 23.0323 ± 0.0280157 (W 0.0317902) | 32.8227 ± 0.0389288 (W 0.0795372) | 93.5236 ± 0.609548 (W 0.217167) | 🔵 faer-fork 1.43× faster than `faer-upstream` | 🔵 faer-fork 4.06× faster than `lapack-mkl` |  |
+| `svd_values/256x4096/b1 [in_place]` | 23.021 ± 0.0359088 (W 0.118371) | 32.8054 ± 0.0514611 (W 0.0474631) | - | 🔵 faer-fork 1.43× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/64x1024/b1` | 0.895456 ± 0.00820679 (W 0.00382244) | 1.52259 ± 0.0104626 (W 0.00597089) | 2.07189 ± 0.0188555 (W 0.00663556) | 🔵 faer-fork 1.70× faster than `faer-upstream` | 🔵 faer-fork 2.31× faster than `lapack-mkl` |  |
+| `svd_values/64x1024/b1 [in_place]` | 0.897408 ± 0.00279659 (W 0.00587694) | 1.50978 ± 0.00376133 (W 0.00612859) | - | 🔵 faer-fork 1.68× faster than `faer-upstream` | - | `*` one row has no measurement here |
+
+## linalg-wide, f64, f order, 8T (CPU 4-11)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `full_piv_lu/256x4096/b1` | 24.9269 ± 0.0685303 (W 0.0591563) | 26.1158 ± 0.0432498 (W 0.0589982) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/256x4096/b1 [in_place]` | 25.8486 ± 0.142137 (W 0.38929) | 27.3312 ± 0.115099 (W 0.129387) | - | 🔵 faer-fork 1.06× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/64x1024/b1` | 0.622473 ± 0.0010807 (W 0.00329806) | 1.05526 ± 0.00388022 (W 0.00338717) | - | 🔵 faer-fork 1.70× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/64x1024/b1 [in_place]` | 0.591225 ± 0.00150015 (W 0.00358703) | 1.11197 ± 0.0033503 (W 0.00310512) | - | 🔵 faer-fork 1.88× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `lu/256x4096/b1` | 2.55687 ± 0.00605502 (W 0.00781493) | 3.28473 ± 0.0212755 (W 0.0708632) | 2.45301 ± 0.00516714 (W 0.00975431) | 🔵 faer-fork 1.28× faster than `faer-upstream` | · |  |
+| `lu/256x4096/b1 [in_place]` | 2.37089 ± 0.00420927 (W 0.00653126) | 3.23735 ± 0.0600032 (W 0.123268) | - | 🔵 faer-fork 1.37× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `lu/64x1024/b1` | 0.089587 ± 0.00345349 (W 0.000759861) | 0.138599 ± 0.000806839 (W 0.00549044) | 0.100899 ± 0.00889332 (W 0.00149819) | 🔵 faer-fork 1.55× faster than `faer-upstream` | 🔵 faer-fork 1.13× faster than `lapack-mkl` | `!` between-start range over 5% |
+| `lu/64x1024/b1 [in_place]` | 0.063188 ± 0.00719532 (W 0.000259536) | 0.111639 ± 0.00154127 (W 0.00901427) | - | 🔵 faer-fork 1.77× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr/256x4096/b1` | 4.32722 ± 0.0208249 (W 0.0127398) | 6.4102 ± 0.265344 (W 0.218054) | - | 🔵 faer-fork 1.48× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr/64x1024/b1` | 0.199373 ± 0.0156226 (W 0.00215166) | 0.383808 ± 0.00295275 (W 0.00601153) | - | 🔵 faer-fork 1.93× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr_factor/256x4096/b1` | 3.56213 ± 0.0100782 (W 0.00740744) | 5.34507 ± 0.0462234 (W 0.148925) | 5.63316 ± 0.00502367 (W 0.0134963) | 🔵 faer-fork 1.50× faster than `faer-upstream` | 🔵 faer-fork 1.58× faster than `lapack-mkl` |  |
+| `qr_factor/64x1024/b1` | 0.146364 ± 0.000493526 (W 0.00126146) | 0.322533 ± 0.0015368 (W 0.0026926) | 0.19794 ± 0.000908327 (W 0.00132931) | 🔵 faer-fork 2.20× faster than `faer-upstream` | 🔵 faer-fork 1.35× faster than `lapack-mkl` |  |
+| `svd_thin/256x4096/b1` | 33.898 ± 0.073893 (W 0.0322308) | 46.8939 ± 0.229892 (W 1.25011) | 104.032 ± 0.389779 (W 0.374261) | 🔵 faer-fork 1.38× faster than `faer-upstream` | 🔵 faer-fork 3.07× faster than `lapack-mkl` |  |
+| `svd_thin/256x4096/b1 [in_place]` | 33.6851 ± 0.0665692 (W 0.054512) | 46.5694 ± 0.217417 (W 0.228569) | - | 🔵 faer-fork 1.38× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/64x1024/b1` | 1.68937 ± 0.00513222 (W 0.00435772) | 2.26459 ± 0.0110843 (W 0.00661286) | 3.03726 ± 0.0256505 (W 0.0207915) | 🔵 faer-fork 1.34× faster than `faer-upstream` | 🔵 faer-fork 1.80× faster than `lapack-mkl` |  |
+| `svd_thin/64x1024/b1 [in_place]` | 1.67554 ± 0.00477102 (W 0.00359107) | 2.25746 ± 0.00272859 (W 0.00744044) | - | 🔵 faer-fork 1.35× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/256x4096/b1` | 20.7352 ± 0.0464637 (W 0.0376913) | 33.5972 ± 0.0429407 (W 0.135692) | 82.2983 ± 0.420498 (W 0.361684) | 🔵 faer-fork 1.62× faster than `faer-upstream` | 🔵 faer-fork 3.97× faster than `lapack-mkl` |  |
+| `svd_values/256x4096/b1 [in_place]` | 20.6507 ± 1.43758 (W 0.0253325) | 33.7209 ± 0.0674158 (W 0.0821795) | - | 🔵 faer-fork 1.63× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_values/64x1024/b1` | 0.873973 ± 0.00172997 (W 0.00713124) | 1.60621 ± 0.00421699 (W 0.00587572) | 2.12381 ± 0.00306932 (W 0.00384031) | 🔵 faer-fork 1.84× faster than `faer-upstream` | 🔵 faer-fork 2.43× faster than `lapack-mkl` |  |
+| `svd_values/64x1024/b1 [in_place]` | 0.881349 ± 0.00499536 (W 0.0052888) | 1.61677 ± 0.00853925 (W 0.00361676) | - | 🔵 faer-fork 1.83× faster than `faer-upstream` | - | `*` one row has no measurement here |
+
+## linalg-wide, c64, c order, 1T (CPU 4)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `full_piv_lu/256x4096/b1` | 231.753 ± 0.961957 (W 1.08543) | 228.515 ± 2.45153 (W 0.872802) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/256x4096/b1 [in_place]` | 151.021 ± 0.303897 (W 1.19822) | 150.145 ± 0.305661 (W 0.881629) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/64x1024/b1` | 2.41459 ± 0.055254 (W 0.00919316) | 2.46917 ± 0.0600386 (W 0.0102821) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/64x1024/b1 [in_place]` | 1.67273 ± 0.00669537 (W 0.00351908) | 1.67092 ± 0.00166483 (W 0.00428457) | - | · | - | `*` one row has no measurement here |
+| `lu/256x4096/b1` | 46.0316 ± 0.109608 (W 0.110243) | 46.8889 ± 0.191534 (W 0.0500356) | 77.3883 ± 0.076455 (W 0.353251) | · | 🔵 faer-fork 1.68× faster than `lapack-mkl` |  |
+| `lu/256x4096/b1 [in_place]` | 138.976 ± 1.3206 (W 0.184479) | 140.909 ± 1.14453 (W 0.328374) | - | · | - | `*` one row has no measurement here |
+| `lu/64x1024/b1` | 0.999272 ± 0.00198024 (W 0.0032833) | 1.0498 ± 0.00262552 (W 0.00314007) | 2.24573 ± 0.0104005 (W 0.0106767) | · | 🔵 faer-fork 2.25× faster than `lapack-mkl` |  |
+| `lu/64x1024/b1 [in_place]` | 3.83211 ± 0.0116044 (W 0.0116103) | 3.81985 ± 0.00433698 (W 0.0115076) | - | · | - | `*` one row has no measurement here |
+| `qr/256x4096/b1` | 106.809 ± 0.705688 (W 0.360872) | 107.867 ± 0.217008 (W 0.479247) | - | · | - | `*` one row has no measurement here |
+| `qr/64x1024/b1` | 2.53777 ± 0.00907466 (W 0.013113) | 2.59866 ± 0.00681221 (W 0.00581712) | - | · | - | `*` one row has no measurement here |
+| `qr_factor/256x4096/b1` | 97.2323 ± 0.281911 (W 0.131727) | 97.6872 ± 0.3634 (W 0.130278) | 159.138 ± 0.451061 (W 1.10628) | · | 🔵 faer-fork 1.64× faster than `lapack-mkl` |  |
+| `qr_factor/64x1024/b1` | 2.60191 ± 0.0128473 (W 0.00768686) | 2.61748 ± 0.00986627 (W 0.00484116) | 3.51612 ± 0.0291683 (W 0.00413532) | · | 🔵 faer-fork 1.35× faster than `lapack-mkl` |  |
+| `svd_thin/256x4096/b1` | 265.229 ± 0.492394 (W 6.526) | 269.774 ± 0.228264 (W 6.4673) | 546.9 ± 0.48331 (W 1.11425) | · | 🔵 faer-fork 2.06× faster than `lapack-mkl` |  |
+| `svd_thin/256x4096/b1 [in_place]` | 264.004 ± 0.321887 (W 0.372869) | 269.148 ± 0.0946279 (W 0.585154) | - | · | - | `*` one row has no measurement here |
+| `svd_thin/64x1024/b1` | 5.68086 ± 0.00908226 (W 0.00340682) | 5.94668 ± 0.0100444 (W 0.00773202) | 12.8372 ± 0.0778456 (W 0.0920734) | · | 🔵 faer-fork 2.26× faster than `lapack-mkl` |  |
+| `svd_thin/64x1024/b1 [in_place]` | 5.64838 ± 0.0158694 (W 0.00708662) | 5.95096 ± 0.00834645 (W 0.014033) | - | 🔵 faer-fork 1.05× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/256x4096/b1` | 102.222 ± 0.125046 (W 0.110326) | 110.788 ± 0.0505268 (W 0.0945275) | 202.214 ± 0.246415 (W 1.14964) | 🔵 faer-fork 1.08× faster than `faer-upstream` | 🔵 faer-fork 1.98× faster than `lapack-mkl` |  |
+| `svd_values/256x4096/b1 [in_place]` | 102.064 ± 0.142373 (W 0.104266) | 110.754 ± 0.0416463 (W 0.442517) | - | 🔵 faer-fork 1.09× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/64x1024/b1` | 2.45701 ± 0.00440023 (W 0.00490101) | 2.96798 ± 0.0166152 (W 0.00219671) | 5.53426 ± 0.0379598 (W 0.00495194) | 🔵 faer-fork 1.21× faster than `faer-upstream` | 🔵 faer-fork 2.25× faster than `lapack-mkl` |  |
+| `svd_values/64x1024/b1 [in_place]` | 2.43217 ± 0.00893967 (W 0.00420178) | 2.99171 ± 0.00583494 (W 0.00273305) | - | 🔵 faer-fork 1.23× faster than `faer-upstream` | - | `*` one row has no measurement here |
+
+## linalg-wide, c64, c order, 4T (CPU 4-7)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `full_piv_lu/256x4096/b1` | 84.0793 ± 0.191259 (W 0.310835) | 87.203 ± 1.36608 (W 0.402205) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/256x4096/b1 [in_place]` | 46.8595 ± 0.0998377 (W 0.1408) | 49.1379 ± 0.314975 (W 0.315773) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/64x1024/b1` | 1.35765 ± 0.00672804 (W 0.0041554) | 2.48156 ± 0.023301 (W 0.00730714) | - | 🔵 faer-fork 1.83× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/64x1024/b1 [in_place]` | 0.739354 ± 0.00144376 (W 0.00236159) | 1.65748 ± 0.00562015 (W 0.00429865) | - | 🔵 faer-fork 2.24× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `lu/256x4096/b1` | 17.2326 ± 0.0655564 (W 0.0416314) | 20.9154 ± 0.293021 (W 1.08389) | 21.7091 ± 0.073169 (W 0.0572803) | 🔵 faer-fork 1.21× faster than `faer-upstream` | 🔵 faer-fork 1.26× faster than `lapack-mkl` |  |
+| `lu/256x4096/b1 [in_place]` | 37.3477 ± 0.0719955 (W 0.05127) | 66.0665 ± 0.342594 (W 13.1755) | - | 🔵 faer-fork 1.77× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `lu/64x1024/b1` | 0.494836 ± 0.0459237 (W 0.0376109) | 0.492391 ± 0.00370837 (W 0.035483) | 0.547434 ± 0.00329507 (W 0.00225203) | · | 🔵 faer-fork 1.11× faster than `lapack-mkl` | `!` between-start range over 5%; `p` position effect over 5% |
+| `lu/64x1024/b1 [in_place]` | 1.10225 ± 0.0157565 (W 0.00844128) | 1.21185 ± 0.406695 (W 0.293537) | - | · | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr/256x4096/b1` | 31.7922 ± 0.460053 (W 0.0878703) | 33.1318 ± 0.076268 (W 0.0849846) | - | · | - | `*` one row has no measurement here |
+| `qr/64x1024/b1` | 0.878834 ± 0.00254961 (W 0.00263321) | 1.03496 ± 0.00239737 (W 0.0017376) | - | 🔵 faer-fork 1.18× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr_factor/256x4096/b1` | 27.8404 ± 0.0938837 (W 0.0982086) | 28.5285 ± 0.0365552 (W 0.115689) | 37.3969 ± 0.0260003 (W 0.0369525) | · | 🔵 faer-fork 1.34× faster than `lapack-mkl` |  |
+| `qr_factor/64x1024/b1` | 0.987737 ± 0.00277357 (W 0.00685897) | 1.07171 ± 0.00212651 (W 0.00526523) | 1.24313 ± 0.00476336 (W 0.00501742) | 🔵 faer-fork 1.09× faster than `faer-upstream` | 🔵 faer-fork 1.26× faster than `lapack-mkl` |  |
+| `svd_thin/256x4096/b1` | 90.8547 ± 0.137314 (W 0.112285) | 107.419 ± 0.171738 (W 0.166449) | 190.04 ± 0.834872 (W 0.54833) | 🔵 faer-fork 1.18× faster than `faer-upstream` | 🔵 faer-fork 2.09× faster than `lapack-mkl` |  |
+| `svd_thin/256x4096/b1 [in_place]` | 89.9882 ± 0.0814576 (W 0.117024) | 106.44 ± 0.0381774 (W 0.342995) | - | 🔵 faer-fork 1.18× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/64x1024/b1` | 3.03504 ± 0.00734309 (W 0.0115484) | 3.60775 ± 0.0166514 (W 0.00786168) | 7.71243 ± 0.069378 (W 0.0896923) | 🔵 faer-fork 1.19× faster than `faer-upstream` | 🔵 faer-fork 2.54× faster than `lapack-mkl` |  |
+| `svd_thin/64x1024/b1 [in_place]` | 3.02771 ± 0.0101954 (W 0.012035) | 3.59709 ± 0.0107969 (W 0.00910255) | - | 🔵 faer-fork 1.19× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/256x4096/b1` | 41.6964 ± 0.0922197 (W 0.0620214) | 59.8748 ± 0.138984 (W 0.0394251) | 84.1672 ± 0.856995 (W 0.13325) | 🔵 faer-fork 1.44× faster than `faer-upstream` | 🔵 faer-fork 2.02× faster than `lapack-mkl` |  |
+| `svd_values/256x4096/b1 [in_place]` | 41.6512 ± 0.0685949 (W 0.130793) | 59.9569 ± 0.100623 (W 0.0754321) | - | 🔵 faer-fork 1.44× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/64x1024/b1` | 1.60299 ± 0.0103787 (W 0.0087929) | 2.33813 ± 0.00785184 (W 0.00425693) | 3.58256 ± 0.0251296 (W 0.00985304) | 🔵 faer-fork 1.46× faster than `faer-upstream` | 🔵 faer-fork 2.23× faster than `lapack-mkl` |  |
+| `svd_values/64x1024/b1 [in_place]` | 1.61075 ± 0.00586937 (W 0.0055838) | 2.34269 ± 0.00789674 (W 0.0199372) | - | 🔵 faer-fork 1.45× faster than `faer-upstream` | - | `*` one row has no measurement here |
+
+## linalg-wide, c64, c order, 8T (CPU 4-11)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `full_piv_lu/256x4096/b1` | 54.6575 ± 0.225422 (W 0.16718) | 59.7873 ± 0.734283 (W 0.231028) | - | 🔵 faer-fork 1.09× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/256x4096/b1 [in_place]` | 23.4862 ± 0.0649556 (W 1.97044) | 25.829 ± 0.0760849 (W 0.103759) | - | 🔵 faer-fork 1.10× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/64x1024/b1` | 1.2327 ± 0.00963429 (W 0.0102726) | 2.46926 ± 0.0708275 (W 0.013576) | - | 🔵 faer-fork 2.00× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `full_piv_lu/64x1024/b1 [in_place]` | 0.607465 ± 0.0059163 (W 0.0038825) | 1.65627 ± 0.0119853 (W 0.00727176) | - | 🔵 faer-fork 2.73× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `lu/256x4096/b1` | 11.669 ± 0.0233586 (W 0.038843) | 14.0248 ± 0.0567807 (W 0.314247) | 11.6792 ± 0.0123296 (W 0.0320763) | 🔵 faer-fork 1.20× faster than `faer-upstream` | · |  |
+| `lu/256x4096/b1 [in_place]` | 20.7388 ± 0.214536 (W 0.0587214) | 36.0301 ± 0.203061 (W 5.28085) | - | 🔵 faer-fork 1.74× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `lu/64x1024/b1` | 0.368068 ± 0.000607934 (W 0.00217384) | 0.428932 ± 0.0237698 (W 0.0215587) | 0.354052 ± 0.00127938 (W 0.0017479) | 🔵 faer-fork 1.17× faster than `faer-upstream` | · | `!` between-start range over 5% |
+| `lu/64x1024/b1 [in_place]` | 0.66358 ± 0.00693947 (W 0.00502782) | 1.07827 ± 0.214042 (W 0.147063) | - | 🔵 faer-fork 1.62× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr/256x4096/b1` | 19.3314 ± 0.0293258 (W 0.0805944) | 24.1974 ± 0.113386 (W 0.971305) | - | 🔵 faer-fork 1.25× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/64x1024/b1` | 0.618486 ± 0.0018287 (W 0.002035) | 1.01141 ± 0.00517609 (W 0.0164846) | - | 🔵 faer-fork 1.64× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr_factor/256x4096/b1` | 16.3018 ± 0.0899213 (W 0.0221235) | 21.26 ± 0.419862 (W 1.0405) | 19.7646 ± 0.0279016 (W 0.0315205) | 🔵 faer-fork 1.30× faster than `faer-upstream` | 🔵 faer-fork 1.21× faster than `lapack-mkl` |  |
+| `qr_factor/64x1024/b1` | 0.722722 ± 0.0046618 (W 0.00541161) | 1.03767 ± 0.00119953 (W 0.0119483) | 0.670613 ± 0.0020214 (W 0.00296354) | 🔵 faer-fork 1.44× faster than `faer-upstream` | 🔴 faer-fork 1.08× slower than `lapack-mkl` |  |
+| `svd_thin/256x4096/b1` | 65.5645 ± 0.111008 (W 0.125352) | 95.7135 ± 0.16485 (W 1.59715) | 118.084 ± 0.263293 (W 0.401007) | 🔵 faer-fork 1.46× faster than `faer-upstream` | 🔵 faer-fork 1.80× faster than `lapack-mkl` |  |
+| `svd_thin/256x4096/b1 [in_place]` | 64.7856 ± 0.171948 (W 0.117704) | 94.5513 ± 0.67992 (W 1.36245) | - | 🔵 faer-fork 1.46× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/64x1024/b1` | 2.63818 ± 0.0181513 (W 0.00384749) | 3.64442 ± 0.169141 (W 0.362058) | 6.54343 ± 0.0269027 (W 0.0463606) | 🔵 faer-fork 1.38× faster than `faer-upstream` | 🔵 faer-fork 2.48× faster than `lapack-mkl` | `!` between-start range over 5% |
+| `svd_thin/64x1024/b1 [in_place]` | 2.62975 ± 0.0127511 (W 0.00579076) | 3.61422 ± 0.0113818 (W 0.0194749) | - | 🔵 faer-fork 1.37× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/256x4096/b1` | 32.7755 ± 0.0453594 (W 0.0467583) | 57.4787 ± 0.140598 (W 0.441411) | 54.7924 ± 0.0448198 (W 0.0571117) | 🔵 faer-fork 1.75× faster than `faer-upstream` | 🔵 faer-fork 1.67× faster than `lapack-mkl` |  |
+| `svd_values/256x4096/b1 [in_place]` | 32.7865 ± 0.00974706 (W 0.0310774) | 57.6596 ± 0.262245 (W 0.304562) | - | 🔵 faer-fork 1.76× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/64x1024/b1` | 1.50789 ± 0.00421212 (W 0.00597557) | 2.39855 ± 0.0142557 (W 0.0100131) | 3.1963 ± 0.0544333 (W 0.0113494) | 🔵 faer-fork 1.59× faster than `faer-upstream` | 🔵 faer-fork 2.12× faster than `lapack-mkl` |  |
+| `svd_values/64x1024/b1 [in_place]` | 1.50649 ± 0.008459 (W 0.00451947) | 2.38857 ± 0.00601217 (W 0.00937475) | - | 🔵 faer-fork 1.59× faster than `faer-upstream` | - | `*` one row has no measurement here |
+
+## linalg-wide, c64, f order, 1T (CPU 4)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `full_piv_lu/256x4096/b1` | 228.146 ± 0.50969 (W 0.681656) | 222.577 ± 0.897099 (W 0.658025) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/256x4096/b1 [in_place]` | 251.732 ± 1.51733 (W 0.87513) | 251.486 ± 0.835801 (W 0.583639) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/64x1024/b1` | 2.30174 ± 0.0117879 (W 0.0173159) | 2.27513 ± 0.0190977 (W 0.00659781) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/64x1024/b1 [in_place]` | 2.40008 ± 0.0101808 (W 0.0117813) | 2.67297 ± 0.181432 (W 0.00862862) | - | 🔵 faer-fork 1.11× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `lu/256x4096/b1` | 42.2308 ± 0.0542978 (W 0.0465933) | 42.2014 ± 0.0444168 (W 0.0526599) | 71.6912 ± 0.151142 (W 0.157596) | · | 🔵 faer-fork 1.70× faster than `lapack-mkl` |  |
+| `lu/256x4096/b1 [in_place]` | 43.0071 ± 0.0328995 (W 0.0342056) | 43.1193 ± 0.166594 (W 0.064997) | - | · | - | `*` one row has no measurement here |
+| `lu/64x1024/b1` | 0.898053 ± 0.00156374 (W 0.00523418) | 0.893535 ± 0.00189741 (W 0.00185905) | 2.04809 ± 0.00308556 (W 0.0021052) | · | 🔵 faer-fork 2.28× faster than `lapack-mkl` |  |
+| `lu/64x1024/b1 [in_place]` | 0.863086 ± 0.00640424 (W 0.00235796) | 0.860402 ± 0.00206672 (W 0.00323902) | - | · | - | `*` one row has no measurement here |
+| `qr/256x4096/b1` | 103.216 ± 0.308954 (W 0.683226) | 103.587 ± 0.15308 (W 0.323731) | - | · | - | `*` one row has no measurement here |
+| `qr/64x1024/b1` | 2.41382 ± 0.00367345 (W 0.0033949) | 2.41364 ± 0.00156071 (W 0.00522954) | - | · | - | `*` one row has no measurement here |
+| `qr_factor/256x4096/b1` | 96.4478 ± 0.463153 (W 0.310194) | 96.1231 ± 0.136475 (W 0.41751) | 157.676 ± 0.171891 (W 0.614357) | · | 🔵 faer-fork 1.63× faster than `lapack-mkl` |  |
+| `qr_factor/64x1024/b1` | 2.22922 ± 0.0103574 (W 0.00179613) | 2.22888 ± 0.00191261 (W 0.00387105) | 3.37041 ± 0.0391775 (W 0.0047716) | · | 🔵 faer-fork 1.51× faster than `lapack-mkl` |  |
+| `svd_thin/256x4096/b1` | 277.288 ± 0.305101 (W 6.10912) | 281.446 ± 0.616832 (W 6.18912) | 539.855 ± 0.405024 (W 1.12546) | · | 🔵 faer-fork 1.95× faster than `lapack-mkl` |  |
+| `svd_thin/256x4096/b1 [in_place]` | 276.2 ± 0.385955 (W 0.494798) | 281.258 ± 0.740312 (W 0.399279) | - | · | - | `*` one row has no measurement here |
+| `svd_thin/64x1024/b1` | 5.79175 ± 0.0117996 (W 0.013219) | 6.07659 ± 0.00493217 (W 0.00409314) | 11.8129 ± 0.246159 (W 0.0211183) | · | 🔵 faer-fork 2.04× faster than `lapack-mkl` |  |
+| `svd_thin/64x1024/b1 [in_place]` | 5.76346 ± 0.00265965 (W 0.0104777) | 6.0711 ± 0.0173792 (W 0.00836169) | - | 🔵 faer-fork 1.05× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/256x4096/b1` | 114.34 ± 0.334287 (W 0.165881) | 122.878 ± 0.192193 (W 0.328055) | 204.277 ± 1.15756 (W 0.629984) | 🔵 faer-fork 1.07× faster than `faer-upstream` | 🔵 faer-fork 1.79× faster than `lapack-mkl` |  |
+| `svd_values/256x4096/b1 [in_place]` | 114.287 ± 1.99493 (W 0.117009) | 122.926 ± 0.265877 (W 0.311758) | - | 🔵 faer-fork 1.08× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/64x1024/b1` | 2.58619 ± 0.00855849 (W 0.00357772) | 3.09167 ± 0.015373 (W 0.0126894) | 5.43494 ± 0.00577468 (W 0.0127823) | 🔵 faer-fork 1.20× faster than `faer-upstream` | 🔵 faer-fork 2.10× faster than `lapack-mkl` |  |
+| `svd_values/64x1024/b1 [in_place]` | 2.5607 ± 0.0038719 (W 0.00506886) | 3.11887 ± 0.00737632 (W 0.00493731) | - | 🔵 faer-fork 1.22× faster than `faer-upstream` | - | `*` one row has no measurement here |
+
+## linalg-wide, c64, f order, 4T (CPU 4-7)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `full_piv_lu/256x4096/b1` | 80.1365 ± 0.242016 (W 0.407196) | 82.7775 ± 0.0455875 (W 0.473046) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/256x4096/b1 [in_place]` | 89.1883 ± 0.330135 (W 0.345595) | 92.422 ± 0.330429 (W 0.365236) | - | · | - | `*` one row has no measurement here |
+| `full_piv_lu/64x1024/b1` | 1.21097 ± 0.00783675 (W 0.00506387) | 2.27538 ± 0.00571739 (W 0.00878693) | - | 🔵 faer-fork 1.88× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/64x1024/b1 [in_place]` | 1.17609 ± 0.00115877 (W 0.0043246) | 2.36913 ± 0.0750146 (W 0.0120179) | - | 🔵 faer-fork 2.01× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `lu/256x4096/b1` | 13.3195 ± 0.0990775 (W 0.0315286) | 18.0575 ± 1.04256 (W 0.677022) | 19.5565 ± 0.0336147 (W 0.0231777) | 🔵 faer-fork 1.36× faster than `faer-upstream` | 🔵 faer-fork 1.47× faster than `lapack-mkl` | `!` between-start range over 5% |
+| `lu/256x4096/b1 [in_place]` | 12.8064 ± 0.0142963 (W 0.0125697) | 16.8573 ± 0.710324 (W 1.61384) | - | 🔵 faer-fork 1.32× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `lu/64x1024/b1` | 0.308187 ± 0.0472936 (W 0.0460984) | 0.33695 ± 0.0388357 (W 0.050142) | 0.493112 ± 0.00188912 (W 0.00382286) | · | 🔵 faer-fork 1.60× faster than `lapack-mkl` | `!` between-start range over 5%; `p` position effect over 5% |
+| `lu/64x1024/b1 [in_place]` | 0.265256 ± 0.0456628 (W 0.0375425) | 0.362548 ± 0.0131697 (W 0.0548681) | - | 🔵 faer-fork 1.37× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr/256x4096/b1` | 28.0709 ± 0.136218 (W 0.113215) | 28.7519 ± 0.227017 (W 0.202853) | - | · | - | `*` one row has no measurement here |
+| `qr/64x1024/b1` | 0.772005 ± 0.000861875 (W 0.00188088) | 0.873363 ± 0.000247243 (W 0.00243158) | - | 🔵 faer-fork 1.13× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr_factor/256x4096/b1` | 24.8236 ± 0.0912637 (W 0.022614) | 25.1462 ± 0.0474068 (W 0.0219888) | 35.7038 ± 0.0160516 (W 0.0191131) | · | 🔵 faer-fork 1.44× faster than `lapack-mkl` |  |
+| `qr_factor/64x1024/b1` | 0.654013 ± 0.000448995 (W 0.00202133) | 0.72729 ± 0.0031105 (W 0.00440069) | 1.19412 ± 0.000762759 (W 0.00485704) | 🔵 faer-fork 1.11× faster than `faer-upstream` | 🔵 faer-fork 1.83× faster than `lapack-mkl` |  |
+| `svd_thin/256x4096/b1` | 103.006 ± 0.127432 (W 0.170418) | 119.413 ± 0.283888 (W 2.27141) | 185.268 ± 0.286072 (W 0.156297) | 🔵 faer-fork 1.16× faster than `faer-upstream` | 🔵 faer-fork 1.80× faster than `lapack-mkl` |  |
+| `svd_thin/256x4096/b1 [in_place]` | 102.318 ± 0.158147 (W 0.170202) | 118.378 ± 0.530545 (W 0.125564) | - | 🔵 faer-fork 1.16× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/64x1024/b1` | 3.17978 ± 0.0223507 (W 0.00956671) | 3.72044 ± 0.0110531 (W 0.00614876) | 7.24907 ± 0.0515587 (W 0.0181157) | 🔵 faer-fork 1.17× faster than `faer-upstream` | 🔵 faer-fork 2.28× faster than `lapack-mkl` |  |
+| `svd_thin/64x1024/b1 [in_place]` | 3.14551 ± 0.011145 (W 0.00714299) | 3.72002 ± 0.0139146 (W 0.0101745) | - | 🔵 faer-fork 1.18× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/256x4096/b1` | 53.7907 ± 0.101376 (W 0.0868521) | 72.004 ± 0.270746 (W 0.0738328) | 85.3759 ± 0.237149 (W 0.32758) | 🔵 faer-fork 1.34× faster than `faer-upstream` | 🔵 faer-fork 1.59× faster than `lapack-mkl` |  |
+| `svd_values/256x4096/b1 [in_place]` | 53.6828 ± 0.0511489 (W 0.110641) | 71.9825 ± 0.211357 (W 0.111118) | - | 🔵 faer-fork 1.34× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/64x1024/b1` | 1.71484 ± 0.00614516 (W 0.0105156) | 2.44093 ± 0.00572928 (W 0.00616848) | 3.68697 ± 0.0448468 (W 0.0101065) | 🔵 faer-fork 1.42× faster than `faer-upstream` | 🔵 faer-fork 2.15× faster than `lapack-mkl` |  |
+| `svd_values/64x1024/b1 [in_place]` | 1.70319 ± 0.00440397 (W 0.00839545) | 2.44607 ± 0.0170679 (W 0.00626047) | - | 🔵 faer-fork 1.44× faster than `faer-upstream` | - | `*` one row has no measurement here |
+
+## linalg-wide, c64, f order, 8T (CPU 4-11)
+
+| case | faer-fork (ms) | faer-upstream (ms) | lapack-mkl (ms) | vs `faer-upstream` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `full_piv_lu/256x4096/b1` | 51.061 ± 0.0534571 (W 0.158344) | 55.0129 ± 0.440774 (W 0.135675) | - | 🔵 faer-fork 1.08× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/256x4096/b1 [in_place]` | 52.5665 ± 0.261484 (W 0.393347) | 57.5648 ± 0.754528 (W 0.283799) | - | 🔵 faer-fork 1.10× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/64x1024/b1` | 1.08107 ± 0.00505725 (W 0.00293917) | 2.26738 ± 0.0430922 (W 0.0136121) | - | 🔵 faer-fork 2.10× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `full_piv_lu/64x1024/b1 [in_place]` | 1.00887 ± 0.0024149 (W 0.00322081) | 2.34046 ± 0.0201673 (W 0.00930926) | - | 🔵 faer-fork 2.32× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `lu/256x4096/b1` | 7.69204 ± 0.0111781 (W 0.0198296) | 9.63614 ± 0.178629 (W 0.218681) | 9.95206 ± 0.00904795 (W 0.0262109) | 🔵 faer-fork 1.25× faster than `faer-upstream` | 🔵 faer-fork 1.29× faster than `lapack-mkl` |  |
+| `lu/256x4096/b1 [in_place]` | 6.95545 ± 0.0155475 (W 0.019257) | 9.09279 ± 0.0303458 (W 0.149737) | - | 🔵 faer-fork 1.31× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `lu/64x1024/b1` | 0.253093 ± 0.000447132 (W 0.00235285) | 0.283009 ± 0.00115703 (W 0.0195538) | 0.321461 ± 0.00058712 (W 0.002415) | 🔵 faer-fork 1.12× faster than `faer-upstream` | 🔵 faer-fork 1.27× faster than `lapack-mkl` |  |
+| `lu/64x1024/b1 [in_place]` | 0.200876 ± 0.000313741 (W 0.000435976) | 0.23052 ± 0.00180722 (W 0.0290259) | - | 🔵 faer-fork 1.15× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/256x4096/b1` | 15.3206 ± 0.062545 (W 0.0329275) | 20.8382 ± 0.13766 (W 0.718127) | - | 🔵 faer-fork 1.36× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr/64x1024/b1` | 0.505495 ± 0.00109221 (W 0.00185508) | 0.847075 ± 0.01507 (W 0.0134081) | - | 🔵 faer-fork 1.68× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `qr_factor/256x4096/b1` | 13.0557 ± 0.0357926 (W 0.0245084) | 17.6141 ± 0.504622 (W 0.978443) | 18.135 ± 0.0137937 (W 0.0245014) | 🔵 faer-fork 1.35× faster than `faer-upstream` | 🔵 faer-fork 1.39× faster than `lapack-mkl` | `!` between-start range over 5% |
+| `qr_factor/64x1024/b1` | 0.39536 ± 0.00157348 (W 0.0022699) | 0.689428 ± 0.0104847 (W 0.0177356) | 0.640727 ± 0.000863083 (W 0.00190817) | 🔵 faer-fork 1.74× faster than `faer-upstream` | 🔵 faer-fork 1.62× faster than `lapack-mkl` |  |
+| `svd_thin/256x4096/b1` | 78.0169 ± 0.058533 (W 0.148025) | 107.186 ± 0.234928 (W 2.60895) | 111.863 ± 0.08373 (W 0.27145) | 🔵 faer-fork 1.37× faster than `faer-upstream` | 🔵 faer-fork 1.43× faster than `lapack-mkl` |  |
+| `svd_thin/256x4096/b1 [in_place]` | 77.4225 ± 0.129155 (W 0.0928437) | 106.586 ± 0.513853 (W 1.38486) | - | 🔵 faer-fork 1.38× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_thin/64x1024/b1` | 2.79829 ± 0.029297 (W 0.00257632) | 3.77254 ± 0.0374306 (W 0.138151) | 6.12891 ± 0.128822 (W 0.025464) | 🔵 faer-fork 1.35× faster than `faer-upstream` | 🔵 faer-fork 2.19× faster than `lapack-mkl` |  |
+| `svd_thin/64x1024/b1 [in_place]` | 2.78932 ± 0.00208911 (W 0.00716761) | 3.72605 ± 0.0187306 (W 0.0288985) | - | 🔵 faer-fork 1.34× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/256x4096/b1` | 44.9007 ± 0.183859 (W 0.061547) | 69.4737 ± 0.379255 (W 0.477041) | 55.1282 ± 0.53898 (W 0.14364) | 🔵 faer-fork 1.55× faster than `faer-upstream` | 🔵 faer-fork 1.23× faster than `lapack-mkl` |  |
+| `svd_values/256x4096/b1 [in_place]` | 44.9144 ± 0.128278 (W 0.0410804) | 69.8079 ± 0.326753 (W 0.391074) | - | 🔵 faer-fork 1.55× faster than `faer-upstream` | - | `*` one row has no measurement here |
+| `svd_values/64x1024/b1` | 1.61059 ± 0.0128401 (W 0.00718338) | 2.47786 ± 0.00644484 (W 0.0157488) | 3.23882 ± 0.0111422 (W 0.0267479) | 🔵 faer-fork 1.54× faster than `faer-upstream` | 🔵 faer-fork 2.01× faster than `lapack-mkl` |  |
+| `svd_values/64x1024/b1 [in_place]` | 1.60305 ± 0.0145839 (W 0.00805221) | 2.48283 ± 0.0037296 (W 0.0119695) | - | 🔵 faer-fork 1.55× faster than `faer-upstream` | - | `*` one row has no measurement here |
+
+Not applicable to this population's shapes and reported as skipped: `cholesky/256x4096`, `cholesky/64x1024`, `eigh/256x4096`, `eigh/64x1024`, `full_piv_lu/256x4096`, `full_piv_lu/64x1024`, `qr/256x4096`, `qr/64x1024`, `solve/256x4096`, `solve/64x1024`, `triangular_solve/256x4096`, `triangular_solve/64x1024`.
+
+Repeated process sets describe observed repeatability under the recorded order schedule; they are not a paired baseline/candidate experiment and do not establish equal performance between engines.
