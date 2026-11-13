@@ -12,7 +12,7 @@ recorded by a harness at or after `7bb8105` (#49) replaces it.
 
 ## 2026-11-06: pages recorded before #49
 
-Every page below `result/` was recorded before [#49](https://github.com/tensor4all/faer-benchmark/pull/49)
+Every page below `result/` was recorded before [#49](https://github.com/tensor4all/colmat-benchmark/pull/49)
 (`7bb8105`, 2026-11-06): the newest harness commit among them is `eeeaa363` (page `71b25ffb`, recorded
 2026-10-31/11-01). Their `lu`, `solve`, `full_piv_lu`, `cholesky` and vendor-arm cells were produced by a
 harness whose timed region included work the other row did not pay for. The cells are traced, call by
