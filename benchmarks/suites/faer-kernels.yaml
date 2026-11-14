@@ -96,7 +96,7 @@ workloads:
     - "`cholesky`, `eigh`, `solve` and `triangular_solve` are measured on square shapes only: the matrix they factor or solve with is square by definition (self-adjoint for the first two, a triangular factor for the last). `lu` and `full_piv_lu` are not gated that way -- they take the declared rectangular shapes too, with `min(m, n)` pivots and a trapezoidal `L` or `U`, which is what `dgetrf` does as well -- so a rectangular LU cell is measured in both orders beside its square one."
     - "`f32`/`c32` are declared and measured as of `docs/harness-dtype-axis.md`; the vendor arm has a route for `gemm` in those two dtypes and reports the LAPACK families as skipped for them. The large regime's 1024 shapes, BLIS, sparse, iterative and GPU arms are later declarations, not machinery built now."
     - "A vendor arm records the library it linked. Only OpenBLAS reports the kernel its runtime dispatched to; MKL names no kernel and no processor count, so its manifest leaves both empty rather than inferring them."
-    - "Known limitation (71b25ffb recording): multi-thread figures include threadteam 0.2.0 and are not final for the 0.3.0 runtime."
+    - "Known limitation: Coverage is partial: f64/c64, the small suite at 1/4/8T, and the 1024 + boundary tier at 4/8T."
 
 # One entry per engine name the harness emits. A result page explains every
 # column from this, so a reader needs no context beyond the page.
@@ -118,7 +118,7 @@ engines_doc:
       `Par` and trait types are not interchangeable: every adapter is written per
       arm, and shared transitive dependencies can unify Cargo features, so both
       arms declare equivalent feature sets and the resolved lock is recorded.
-      For the 71b25ffb recording: measured at 71b25ffb, the commit immediately before the 0.28.0 release commit 325e482; the only difference is Cargo.lock and faer/Cargo.toml (threadteam 0.2.0 in the measured build, 0.3.0 as shipped, plus the version string). Single-thread numbers apply to 0.28.0 as released; multi-thread numbers carry that threadteam difference and will be re-measured in the next campaign.
+      measured at 325e482, the t4a-faer 0.28.0 release source; the four 2026-11-13 zen5-cpu recordings were taken at this revision.
   faer-upstream:
     provider: faer-upstream
     summary: >-

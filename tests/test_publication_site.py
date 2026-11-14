@@ -27,7 +27,6 @@ class PublicationSiteTest(unittest.TestCase):
     def test_pin_is_the_measured_revision_not_the_release_source(self):
         pin = rev_file_value((ROOT / gen_site.PIN).read_text())
         self.assertEqual(pin, gen_site.MEASURED)
-        self.assertNotEqual(pin, gen_site.RELEASE)
 
     def test_the_four_71b25ffb_recordings_are_the_current_cells(self):
         found = collect()
@@ -42,14 +41,13 @@ class PublicationSiteTest(unittest.TestCase):
     def test_guard_passes_at_the_pin_and_fails_at_the_unrecorded_release(self):
         found = collect()
         self.assertEqual(pin_recorded.campaign_problems(found), [])
-        moved = dict(found, resolved=dict(found['resolved'], library=gen_site.RELEASE),
-                     references=dict(found['references'], library=gen_site.RELEASE))
+        unrecorded = '0' * 40
+        moved = dict(found, resolved=dict(found['resolved'], library=unrecorded),
+                     references=dict(found['references'], library=unrecorded))
         problems = pin_recorded.campaign_problems(moved)
         self.assertEqual(len(problems), 1)
-        self.assertIn(f'pins/t4a-faer.rev = {gen_site.RELEASE}', problems[0])
+        self.assertIn(f'pins/t4a-faer.rev = {unrecorded}', problems[0])
         self.assertIn('no current recording', problems[0])
-        self.assertIn('either record a publication at the pin, or keep the pin at the last measured '
-                      'revision (71b25ffb7ae3/0539947ffb75)', problems[0])
         # The site refuses to publish in that state rather than saying nothing was recorded.
         with mock.patch.object(gen_site.gen_index, 'collect', return_value=moved), \
              contextlib.redirect_stderr(io.StringIO()) as err:
@@ -73,12 +71,11 @@ class PublicationSiteTest(unittest.TestCase):
         # The measured profile lists its recordings; zen2 profiles were never recorded and say so.
         zen5 = index.split('<h2 id="zen5-cpu">', 1)[1].split('<h2', 1)[0]
         self.assertNotIn('Nothing recorded at the current pin', zen5)
-        self.assertIn('<code>71b25ffb7ae3</code>', zen5)
+        self.assertIn(f'<code>{gen_site.MEASURED[:12]}</code>', zen5)
         self.assertIn(gen_site.CAVEAT, index)
         self.assertIn(gen_site.LIMITATION, index)
-        self.assertIn('0.28.0 itself was not measured', index)
         for suite, vendor in RECORDED:
-            link = f'zen5-cpu/{suite}/71b25ffb7ae3-0539947ffb75-{vendor}-timing-v2.html'
+            link = f'zen5-cpu/{suite}/{gen_site.MEASURED[:12]}-0539947ffb75-{vendor}-timing-v2.html'
             self.assertIn(f'href="{link}"', index)
             self.assertTrue((ROOT / 'result' / link).is_file(), link)
         self.assertIn(f'href="zen5-cpu/faer-kernels/{gen_site.MEASURED[:12]}-comparison.html"', index)

@@ -29,15 +29,11 @@ import gen_comparison  # noqa: E402
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 PIN = 'pins/t4a-faer.rev'
 SUITE = 'faer-kernels'
-MEASURED = '71b25ffb7ae3ce038ec25b35c91e526be41b9a63'
+MEASURED = '325e482b6532624d06236ad6991a41c57b0c23d1'
 RELEASE = '325e482b6532624d06236ad6991a41c57b0c23d1'
 UPSTREAM = '0539947ffb757a739d7e703a7d2fa0c792a909c1'
-CAVEAT = ('measured at 71b25ffb, the commit immediately before the 0.28.0 release commit 325e482; '
-          'the only difference is Cargo.lock and faer/Cargo.toml (threadteam 0.2.0 in the measured '
-          'build, 0.3.0 as shipped, plus the version string). Single-thread numbers apply to 0.28.0 '
-          'as released; multi-thread numbers carry that threadteam difference and will be '
-          're-measured in the next campaign.')
-LIMITATION = 'multi-thread figures include threadteam 0.2.0 and are not final for the 0.3.0 runtime.'
+CAVEAT = ('measured at 325e482, the t4a-faer 0.28.0 release source; the four 2026-11-13 zen5-cpu recordings were taken at this revision.')
+LIMITATION = 'Coverage is partial: f64/c64, the small suite at 1/4/8T, and the 1024 + boundary tier at 4/8T.'
 
 
 def current_arms():
@@ -83,9 +79,9 @@ def main(argv=None):
     index = ROOT / 'result' / 'index.html'
     comparison = write_comparison()
     extra = '''<section>
-<h2>Current recordings at 71b25ffb: scope and provenance</h2>
+<h2>Current recordings at 325e482: scope and provenance</h2>
 <ul>
-<li>Recorded on evo (zen5-cpu), fork <code>71b25ffb7ae3ce038ec25b35c91e526be41b9a63</code>,
+<li>Recorded on evo (zen5-cpu), fork <code>325e482b6532624d06236ad6991a41c57b0c23d1</code>,
 upstream <code>0539947ffb757a739d7e703a7d2fa0c792a909c1</code>, harness <code>eeeaa36388c515a992d5056f4211e4a6cb92ba54</code>.</li>
 <li>The actual measurement toolkit was <code>74e50e8199cb2c2f07e810744a0943fc3a8c1170</code>,
 not the original renderer requirements pin <code>b71624bef111ce941bddaedcce3fdb6eab40f9eb</code>;
@@ -113,10 +109,7 @@ is preserved locally and explicitly excluded from this publication. One rejected
                  f'<p><a href="{rel}">The same recording against upstream, OpenBLAS and MKL in one '
                  f'table ({cells} cells)</a>, with the unchanged row\'s control in its header.</p>')
     site.write_site(index.parent, pins=[PIN], repo_ref=args.repo_ref, title='faer benchmark results',
-                    intro=('The recordings at the pinned fork revision 71b25ffb, the latest measured '
-                           'revision, one section per hardware profile. 71b25ffb is the parent of the '
-                           't4a-faer 0.28.0 release source 325e482; 0.28.0 itself was not measured '
-                           '(release caveat and known limitation below).'),
+                    intro=('The recordings at the pinned fork revision 325e482, the t4a-faer 0.28.0 release source, one section per hardware profile. These are the 2026-11-13 zen5-cpu recordings.'),
                     extra_html=extra, root=ROOT)
     return 0
 
