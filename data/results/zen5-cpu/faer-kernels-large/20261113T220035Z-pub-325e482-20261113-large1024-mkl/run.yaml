@@ -1,0 +1,287 @@
+schema_version: 1
+target_profile: zen5-cpu
+suite_id: faer-kernels-large
+suite_file: benchmarks/suites/faer-kernels-large.yaml
+suite_sha256: b4acdeb995efbfa2b650ce35db13c42bfff61b7a40539a521eb455a037225c85
+timestamp: '2026-11-14T01:21:05.031820Z'
+command: scripts/record_run.py zen5-cpu faer-kernels-large --checkout extern/t4a-faer
+  --upstream ./extern/upstream-faer --vendor mkl --engines faer-fork,faer-upstream,lapack-mkl
+  --dtypes f64,c64 --reps 5 --aa 3 --prime-ms 250 --label pub-325e482-20261113-large1024-mkl
+  --no-publish --threads 4,8 --regimes linalg-large,gemm-large,linalg-boundary --shapes
+  1024,1024x1024x1024,255,257,511,513
+library:
+  url: https://github.com/tensor4all/faer
+  commit: 325e482b6532624d06236ad6991a41c57b0c23d1
+  dirty: false
+  features:
+  - std
+  - rayon
+  measured_path: /home/shinaoka/projects/tensor4all/colmat-benchmark/extern/t4a-faer
+  version: 0.28.0
+upstream:
+  url: https://codeberg.org/sarah-quinones/faer
+  commit: 0539947ffb757a739d7e703a7d2fa0c792a909c1
+  version: 0.24.4
+  ref: faer-v0.24.4
+  dirty: false
+  measured_path: /home/shinaoka/projects/tensor4all/colmat-benchmark/extern/upstream-faer
+vendor:
+  name: mkl
+  linkage: shared
+  version: '2026.2'
+  config: null
+  corename: null
+  parallel: null
+  procs: null
+  build_env: MKLROOT=/opt/intel/oneapi/mkl/2026.2 MKL_THREADING_LIB=/opt/intel/oneapi/compiler/2026.2/lib/libiomp5.so
+harness:
+  commit: 5d66fe6adc69ea1ecc3ecfdc57e1658229b506ca
+  dirty: false
+  outputs_dirty: false
+  excluded_outputs:
+  - data/results
+  - result
+  excluded_sibling_outputs: []
+toolkit:
+  commit: d487991f2fa2e1a151f78389c5ef449a614e750c
+  dirty: false
+  measured_path: /home/shinaoka/.venvs/weekly-faer/src/campaign-toolkit
+verification_files:
+- verify-linalg-large-4t.csv
+- verify-linalg-large-8t.csv
+- verify-gemm-large-4t.csv
+- verify-gemm-large-8t.csv
+- verify-linalg-boundary-4t.csv
+- verify-linalg-boundary-8t.csv
+binary:
+  path: /home/shinaoka/projects/tensor4all/colmat-benchmark/target/faer-rev/325e482b6532-mkl/release/fbench
+  sha256: 27c07ca9fee3595513452bdbb1ad19e2b8ff08c27d26818fd56d6cf833189fde
+host:
+  power:
+    cpufreq_boost: '0'
+    amd_pstate_status: active
+    governor: performance
+    energy_performance_preference: performance
+    scaling_max_freq_khz: '2000000'
+    smt:
+      active: '1'
+      control: 'on'
+  numa:
+    nodes: 1
+    cpulists:
+      '0': 0-23
+  role: development
+  hostname: shinaoka-EVO-X1Pro
+  cpu: AMD Ryzen AI 9 HX 470
+  os: Linux 7.0.0-38-generic
+  arch: x86_64
+  logical_cpus: 24
+  l3: 24 MiB (2 instances)
+  l3_domains: '0-3: 16 MiB shared; 4-11: 8 MiB shared'
+  notes: 'AMD Ryzen AI 9 HX 470 (Zen5 mobile APU), 12 physical / 24 logical cores.
+    Heterogeneous L3: CPUs 0-3 share 16 MiB, CPUs 4-11 share 8 MiB, so a thread set
+    must be stated together with the domain it sits in. SMT siblings of CPUs 4-11
+    are 16-23; the idle gate checks them too, because a busy sibling contends with
+    the physical core being measured.'
+build:
+  toolchain:
+    rustc: 'rustc 1.99.0 (b940084d7 2026-09-28)
+
+      binary: rustc
+
+      commit-hash: b940084d7eb6a299eb4bfeb8e34901bc051e7ac4
+
+      commit-date: 2026-09-28
+
+      host: x86_64-unknown-linux-gnu
+
+      release: 1.99.0
+
+      LLVM version: 23.1.1
+
+      '
+    rustc_release: 1.99.0
+    rustflags: null
+    target_cpu: null
+threads:
+  counts:
+  - 4
+  - 8
+  cpu_sets:
+    '4': 4-7
+    '8': 4-11
+  observer:
+    affinity: 0-3, 12-15
+    free_cpus: 0-3, 12-15
+    source: os.sched_getaffinity(0) in the recording process
+  env:
+    OPENBLAS_NUM_THREADS: null
+    MKL_NUM_THREADS: null
+    MKL_DOMAIN_NUM_THREADS: null
+    MKL_INTERFACE_LAYER: null
+    MKL_THREADING_LAYER: null
+    MKL_DYNAMIC: null
+    MKL_ENABLE_INSTRUCTIONS: null
+    MKL_CBWR: null
+    OMP_NUM_THREADS: null
+    OMP_THREAD_LIMIT: null
+    OMP_PROC_BIND: null
+    OMP_PLACES: null
+    KMP_AFFINITY: null
+    GOMP_CPU_AFFINITY: null
+    RAYON_NUM_THREADS: null
+  note: the vendor's budget is set by the harness from the row's thread count and
+    read back before each measurement; these variables were removed from the measured
+    process's environment so it cannot inherit a different one
+timing_policy:
+  version: 2
+  minimum_untimed_priming_ms: 250
+  statistic: median
+  row_rotation_step: 1
+  repetitions: 5
+  notes: descriptive process medians under a rotating engine-order schedule; raw samples
+    and the verification census are retained
+guards:
+  idle_window_seconds: 3
+  max_busy_percent: 5.0
+  attempts: 8
+  sibling_aware: true
+  logs:
+  - run0-gemm-large-4t.guard
+  - run0-gemm-large-8t.guard
+  - run0-linalg-boundary-4t.guard
+  - run0-linalg-boundary-8t.guard
+  - run0-linalg-large-4t.guard
+  - run0-linalg-large-8t.guard
+  - run1-gemm-large-4t.guard
+  - run1-gemm-large-8t.guard
+  - run1-linalg-boundary-4t.guard
+  - run1-linalg-boundary-8t.guard
+  - run1-linalg-large-4t.guard
+  - run1-linalg-large-8t.guard
+  - run2-gemm-large-4t.guard
+  - run2-gemm-large-8t.guard
+  - run2-linalg-boundary-4t.guard
+  - run2-linalg-boundary-8t.guard
+  - run2-linalg-large-4t.guard
+  - run2-linalg-large-8t.guard
+  - verify-gemm-large-4t.guard
+  - verify-gemm-large-8t.guard
+  - verify-linalg-boundary-4t.guard
+  - verify-linalg-boundary-8t.guard
+  - verify-linalg-large-4t.guard
+  - verify-linalg-large-8t.guard
+providers:
+- name: faer-fork
+  version: null
+  commit: null
+  path: null
+  note: the provider in the measured revision; see library and upstream above
+- name: faer-upstream
+  version: null
+  commit: null
+  path: null
+  note: the provider in the measured revision; see library and upstream above
+- name: mkl
+  version: '2026.2'
+  commit: null
+  path: null
+  note: linked shared, kernel not reported by the vendor
+invalidated_by:
+- faer/src/**
+- faer-traits/src/**
+- faer-macros/src/**
+- Cargo.toml
+- Cargo.lock
+result_files:
+- run0-linalg-large-4t.csv
+- run0-linalg-large-8t.csv
+- run0-gemm-large-4t.csv
+- run0-gemm-large-8t.csv
+- run0-linalg-boundary-4t.csv
+- run0-linalg-boundary-8t.csv
+- run1-linalg-large-4t.csv
+- run1-linalg-large-8t.csv
+- run1-gemm-large-4t.csv
+- run1-gemm-large-8t.csv
+- run1-linalg-boundary-4t.csv
+- run1-linalg-boundary-8t.csv
+- run2-linalg-large-4t.csv
+- run2-linalg-large-8t.csv
+- run2-gemm-large-4t.csv
+- run2-gemm-large-8t.csv
+- run2-linalg-boundary-4t.csv
+- run2-linalg-boundary-8t.csv
+run_spec:
+  populations:
+  - regime: linalg-large
+    families:
+    - lu
+    - full_piv_lu
+    - cholesky
+    - triangular_solve
+    - solve
+    - qr_factor
+    - qr
+    - svd_values
+    - svd_thin
+    - eigh
+    n:
+    - '1024'
+    batch:
+    - 1
+    skipped:
+    - full_piv_lu/1024
+    - qr/1024
+    - triangular_solve/1024
+  - regime: gemm-large
+    families:
+    - gemm
+    n:
+    - 1024x1024x1024
+    batch:
+    - 1
+  - regime: linalg-boundary
+    families:
+    - lu
+    - full_piv_lu
+    - cholesky
+    - triangular_solve
+    - solve
+    - qr_factor
+    - qr
+    - svd_values
+    - svd_thin
+    - eigh
+    n:
+    - '255'
+    - '257'
+    - '511'
+    - '513'
+    batch:
+    - 1
+    skipped:
+    - full_piv_lu/255
+    - full_piv_lu/257
+    - full_piv_lu/511
+    - full_piv_lu/513
+    - qr/255
+    - qr/257
+    - qr/511
+    - qr/513
+    - triangular_solve/255
+    - triangular_solve/257
+    - triangular_solve/511
+    - triangular_solve/513
+  dtypes:
+  - f64
+  - c64
+  order:
+  - c
+  - f
+  engines:
+  - faer-fork
+  - faer-upstream
+  - lapack-mkl
+  aa: 3
+  covers_declared_suite: false

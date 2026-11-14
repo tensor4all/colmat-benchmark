@@ -1,0 +1,56 @@
+{
+  "schema": "link-preflight/1",
+  "time": "2026-11-13T22:00:29Z",
+  "host": "shinaoka-EVO-X1Pro",
+  "profile": null,
+  "config": {
+    "path": "/home/shinaoka/projects/tensor4all/colmat-benchmark/benchmarks/link-preflight.yaml",
+    "sha256": "2156785ea1b294fa5128b1a600ccf7458d64be5088bfbd78947803efe72b89a2"
+  },
+  "rustc": "rustc 1.99.0 (b940084d7 2026-09-28)\nbinary: rustc\ncommit-hash: b940084d7eb6a299eb4bfeb8e34901bc051e7ac4\ncommit-date: 2026-09-28\nhost: x86_64-unknown-linux-gnu\nrelease: 1.99.0\nLLVM version: 23.1.1",
+  "rustflags": [],
+  "arms": [
+    {
+      "arm": "mkl",
+      "source": "fbench/build.rs (feature link-mkl); MKLROOT and MKL_THREADING_LIB as scripts/build_for_faer_rev.sh resolves them",
+      "libs": [
+        "mkl_intel_lp64",
+        "mkl_intel_thread",
+        "mkl_core",
+        "iomp5"
+      ],
+      "env": {
+        "MKLROOT": "/opt/intel/oneapi/mkl/2026.2",
+        "MKL_THREADING_LIB": "/opt/intel/oneapi/compiler/2026.2/lib/libiomp5.so"
+      },
+      "env_notes": [
+        "MKLROOT unset; resolved to /opt/intel/oneapi/mkl/2026.2 from /opt/intel/oneapi/mkl/*",
+        "MKL_THREADING_LIB unset; resolved to /opt/intel/oneapi/compiler/2026.2/lib/libiomp5.so from /opt/intel/oneapi/compiler/*/lib/libiomp5.so"
+      ],
+      "search": [
+        {
+          "entry": "$MKLROOT/lib",
+          "path": "/opt/intel/oneapi/mkl/2026.2/lib",
+          "status": "searched"
+        },
+        {
+          "entry": "dirname:$MKL_THREADING_LIB",
+          "path": "/opt/intel/oneapi/compiler/2026.2/lib",
+          "status": "searched"
+        }
+      ],
+      "library_path": null,
+      "rpath": true,
+      "loader_paths": [],
+      "ld_library_path": null,
+      "missing": [],
+      "ok": true,
+      "stage": null,
+      "command": "rustc --edition 2021 -C opt-level=0 -C debuginfo=0 -L native=/opt/intel/oneapi/mkl/2026.2/lib -L native=/opt/intel/oneapi/compiler/2026.2/lib -C link-arg=-Wl,--push-state,--no-as-needed -C link-arg=-lmkl_intel_lp64 -C link-arg=-lmkl_intel_thread -C link-arg=-lmkl_core -C link-arg=-liomp5 -C link-arg=-Wl,--pop-state -C link-arg=-Wl,-rpath,/opt/intel/oneapi/mkl/2026.2/lib -C link-arg=-Wl,-rpath,/opt/intel/oneapi/compiler/2026.2/lib /tmp/link-preflight-_5qmq2in/mkl.rs -o /tmp/link-preflight-_5qmq2in/probe-mkl",
+      "stderr": null,
+      "seconds": 0.105
+    }
+  ],
+  "ok": true,
+  "text": "link preflight on shinaoka-EVO-X1Pro: /home/shinaoka/projects/tensor4all/colmat-benchmark/benchmarks/link-preflight.yaml\n  OK   mkl  [fbench/build.rs (feature link-mkl); MKLROOT and MKL_THREADING_LIB as scripts/build_for_faer_rev.sh resolves them]  (0.105 s)\n       note:     MKLROOT unset; resolved to /opt/intel/oneapi/mkl/2026.2 from /opt/intel/oneapi/mkl/*\n       note:     MKL_THREADING_LIB unset; resolved to /opt/intel/oneapi/compiler/2026.2/lib/libiomp5.so from /opt/intel/oneapi/compiler/*/lib/libiomp5.so\nLINK PREFLIGHT OK"
+}
