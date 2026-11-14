@@ -160,7 +160,7 @@ fn measure_row(
 ) -> Result<Vec<f64>, String> {
     #[cfg(feature = "fork-team")]
     if threads > 1 && row == "faer-fork" {
-        return faer_fork::team::with_team(threads, |par| {
+        return colmat::team::with_team(threads, |par| {
             let mut token = op::Token::Fork(par);
             timing::measure(ops, prime_ms, reps, &mut token)
         });
@@ -435,7 +435,9 @@ fn configure_threads(n: usize) -> Result<(), String> {
         .num_threads(n)
         .build_global()
         .map_err(|e| format!("cannot create the owned {n}-worker Rayon pool: {e}"))?;
-    vendor::set_threads(n)?;
+    if vendor::NAME != "none" {
+        vendor::set_threads(n)?;
+    }
     backend::fork::set_threads(n);
     backend::upstream::set_threads(n);
     require_threads(n)

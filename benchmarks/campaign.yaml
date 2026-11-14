@@ -7,8 +7,8 @@ id: colmat-benchmark
 # path out of their checkouts. So the recorded commits describe the libraries, and the
 # harness revision is recorded separately, per run.
 measured:
-  name: t4a-faer
-  url: https://github.com/tensor4all/faer
+  name: colmat
+  url: https://github.com/tensor4all/colmat-rs
   pin_file: pins/t4a-faer.rev
   extern_dir: extern/t4a-faer
   build_script: scripts/build_for_faer_rev.sh
@@ -77,7 +77,7 @@ case_axes: [order]
 case_label: "`{family}/{dims}/b{batch}` {order} {threads}T {row}"
 
 # Engine name the harness emits -> provider. Both faer rows are measured in one binary:
-# the fork (package `t4a-faer`) and upstream (package `faer`) are distinct dependency keys
+# the fork (package `colmat`) and upstream (package `faer`) are distinct dependency keys
 # and therefore distinct engines, so their providers are the fork and upstream
 # themselves. A vendor arm names its vendor twice: once here, and once in the engine
 # string itself, because the harness derives it from the vendor library it linked.
@@ -147,8 +147,8 @@ timing:
 
 # The strings the generated index and report headers print.
 report:
-  library_label: t4a-faer (fork, measured) commit
-  library_version_label: t4a-faer version
+  library_label: colmat (fork, measured) commit
+  library_version_label: colmat version
   upstream_label: upstream faer commit
   upstream_ref_label: upstream faer ref/version
   provider_label: faer rows
