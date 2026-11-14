@@ -121,8 +121,10 @@ The declared square tiers follow faer's own published benchmark distribution
 minus 4/8/16: `small` (32, 64, 96 - overhead and regression checks), `mid` (128, 192,
 256, 384, 512, 768 - the block/parallel switchover region), `large` (1024, 1536), and
 two adoption-only tiers: `linalg-big` / `gemm-huge` (2048, 3072, 4096) and
-`linalg-boundary` (255, 257, 511, 513 - only for suspected block-boundary
-overfitting). 4, 8 and 16 are deliberately not in this campaign: they belong to a
+`linalg-boundary` (255, 257, 511, 512, 513 - only for suspected block-boundary
+overfitting; 512 is a power-of-two / 4K-alias diagnostic read only as the three-point
+set 511/512/513 from one run, never alone, never in the trend or a cross-size
+aggregate, and with MKL's SVD slow at 512 - see the suite's `known_blind_spots`). 4, 8 and 16 are deliberately not in this campaign: they belong to a
 separate small-matrix loop bench, which is also where a "too many threads on too
 little work" side-effect check belongs.
 
@@ -131,7 +133,7 @@ little work" side-effect check belongs.
   with `--regimes` naming the daily tiers. A run records the subset it covered, so
   a daily subset is never mistaken for the whole declaration.
 - **Large tiers are their own suite** (`faer-kernels-large`, `threads: [4, 8]`):
-  1024, and the adoption-only 2048/4096 and the diagnostic 255/257/511/513. A run
+  1024, and the adoption-only 2048/4096 and the diagnostic 255/257/511/512/513. A run
   time dominated by the biggest shapes is not worth a 1T pass, and splitting by
   thread budget keeps each page a full cover of its own declaration instead of two
   partial pages overwriting each other. The daily suite keeps the 1/4/8T

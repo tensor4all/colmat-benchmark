@@ -99,6 +99,7 @@ workloads:
     - "`f32`/`c32`, the large regime's 1024 shapes, BLIS, sparse, iterative and GPU arms are later declarations, not machinery built now."
     - "A vendor arm records the library it linked. Only OpenBLAS reports the kernel its runtime dispatched to; MKL names no kernel and no processor count, so its manifest leaves both empty rather than inferring them."
     - "Known limitation: Coverage is partial: f64/c64, the small suite at 1/4/8T, and the 1024 + boundary tier at 4/8T."
+    - "`linalg-boundary` 512 is a power-of-two / 4K-alias diagnostic: report it only beside 511 and 513 of the same run, never alone and never in a trend or a cross-size aggregate; 1024 is the large-size reference. Known vendor artifact: MKL's SVD is slow at the power of two. In the 325e482 MKL recordings (zen5-cpu, F order), `svd_thin` f64 at 8T costs MKL 0.24 / 0.36 / 0.25 ns per n^3 at 511 / 512 / 513 (`svd_values` 0.12 / 0.17 / 0.12; c64 `svd_thin` 0.41 / 0.62 / 0.41), while the fork row is flat (0.29 / 0.26 / 0.26); 256 shows the same step against 255/257. A fork/MKL ratio at 512 for `svd_thin`/`svd_values` therefore flatters the fork and is not evidence of a fork improvement. (The 512 figures come from the daily run's `linalg-mid` and 511/513 from this suite's boundary tier, two different runs; this declaration puts all three in one run.)"
 
 # One entry per engine name the harness emits. A result page explains every
 # column from this, so a reader needs no context beyond the page.
@@ -205,7 +206,15 @@ runs:
         n: ["2048x2048x2048", "3072x3072x3072", "4096x4096x4096"]
         batch: [1]
       # Diagnostic tier for block-boundary overfitting (255/257, 511/513).
+      # 512 is here as a power-of-two / 4K-alias diagnostic, not as a trend size: at 512 a
+      # column-major f64/c64 column stride is a multiple of 4 KiB, so cache-set and TLB aliasing
+      # and power-of-two blocking land on it and on neither neighbour. It is read only as the
+      # three-point set 511/512/513 from the same run (a 512 cell differing from both neighbours
+      # is a size artifact, not a scaling result), it is not an input of the primary trend
+      # (`benchmarks/campaign.yaml`, `trend:` is the 1024 cases) or of any aggregate across
+      # sizes, and 1024 stays the large-size reference. See the `known_blind_spots` entry on the
+      # MKL SVD at 512.
       - regime: linalg-boundary
         groups: [factor, decompose]
-        n: ["255", "257", "511", "513"]
+        n: ["255", "257", "511", "512", "513"]
         batch: [1]

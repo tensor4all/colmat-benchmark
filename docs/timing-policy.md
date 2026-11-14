@@ -112,7 +112,7 @@ The two suites answer different questions, so they run on different triggers.
 | | `faer-kernels` (small) | `faer-kernels-large`, 1024 tier |
 | --- | --- | --- |
 | question | *has anything regressed* - the whole family list at every thread budget | *does the result hold at scale* - the first size whose working set leaves the cache |
-| shapes | squares 32-512, tall/wide up to `4096x256` | `1024`, `1024^3`, and the boundary shapes `255/257/511/513` |
+| shapes | squares 32-512, tall/wide up to `4096x256` | `1024`, `1024^3`, and the boundary shapes `255/257/511/512/513` (512: power-of-two diagnostic, read with 511/513 only) |
 | thread budgets | 1T, 4T, 8T | 4T, 8T |
 | families | all 14 | the 10 factor/decompose families plus `gemm` |
 | working set | 2 MB at 512, resident in L2/L3 | 8 MB at 1024, which fills the Zen5c 8 MiB L3 domain, so bandwidth and reuse dominate |
