@@ -75,13 +75,13 @@ python3 - "$patch_meta" "$fork_manifest" "$upstream_manifest" <<'PYEOF'
 import json, sys
 meta, expected_fork, expected_upstream = sys.argv[1], sys.argv[2], sys.argv[3]
 data = json.load(open(meta))
-found = {p['name']: p['manifest_path'] for p in data['packages'] if p['name'] in ('t4a-faer', 'faer')}
-for name, expected in (('t4a-faer', expected_fork), ('faer', expected_upstream)):
+found = {p['name']: p['manifest_path'] for p in data['packages'] if p['name'] in ('colmat', 'faer')}
+for name, expected in (('colmat', expected_fork), ('faer', expected_upstream)):
     actual = found.get(name)
     if actual != expected:
         print(f"ERROR: this build would link {name} from {actual!r}, not from {expected!r}: a `[patch]`"
               f" is ignored either when the checkout's version is outside the range the harness"
-              f" declares (see `faer_fork` / `faer_upstream` in fbench/Cargo.toml) or when Cargo.lock"
+              f" declares (see `colmat` / `faer_upstream` in fbench/Cargo.toml) or when Cargo.lock"
               f" already pins a *different* version of that crate: widening the range alone does not"
               f" move an existing lock entry, so the lock has to be re-resolved against this checkout"
               f" (the build keeps the resolved lock beside the binary as Cargo.lock.resolved), then"

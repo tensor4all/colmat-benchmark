@@ -20,7 +20,7 @@ pub enum Token<'a> {
     /// fork, or a harness built for a fork without the team API)
     None(core::marker::PhantomData<&'a ()>),
     #[cfg(feature = "fork-team")]
-    Fork(faer_fork::Par<'a>),
+    Fork(colmat::Par<'a>),
 }
 
 impl Token<'_> {
@@ -160,7 +160,7 @@ mod tests {
     #[cfg(feature = "fork-team")]
     #[test]
     fn fork_calls_run_on_the_lent_team() {
-        use faer_fork::utils::team::stats;
+        use colmat::utils::team::stats;
         let _budget = hold_budget();
         let threads = 2;
         backend::fork::set_threads(threads);
@@ -189,7 +189,7 @@ mod tests {
                 };
                 for mut op in crate::ops_for("faer-fork", Dtype::F64, family, case, order).unwrap() {
                     op.prepare().unwrap();
-                    let s = faer_fork::team::with_team(threads, |par| {
+                    let s = colmat::team::with_team(threads, |par| {
                         stats::enable(true);
                         let _ = stats::take();
                         op.run(Token::Fork(par)).unwrap();

@@ -1,6 +1,6 @@
 //! The per-crate adapter.
 //!
-//! `faer_fork` (`t4a-faer`) and `faer_upstream` (`faer`) are distinct dependency
+//! `colmat` and `faer_upstream` (`faer`) are distinct dependency
 //! keys with distinct `Mat`, `Par` and trait types, so the glue that turns a plain
 //! `&[T]` and a shape into that crate's calls is written twice. `define_backend!`
 //! expands the same body once per crate; the family logic and every correctness
@@ -34,7 +34,7 @@ pub enum ParCfg {
 /// generation. The row's budget is the harness's own [`FORK_THREADS`], never a library global.
 pub mod fork_par {
     use super::ParCfg;
-    use faer_fork::Par;
+    use colmat::Par;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     static FORK_THREADS: AtomicUsize = AtomicUsize::new(1);
@@ -44,7 +44,7 @@ pub mod fork_par {
     #[cfg(not(feature = "fork-par-shape"))]
     pub type Run = Par<'static>;
     #[cfg(feature = "fork-par-shape")]
-    pub type Shape = faer_fork::ParShape;
+    pub type Shape = colmat::ParShape;
     #[cfg(not(feature = "fork-par-shape"))]
     pub type Shape = Par<'static>;
 
@@ -96,15 +96,15 @@ pub mod fork_par {
     #[cfg(all(feature = "fork-par-shape", feature = "fork-team"))]
     pub fn shape(c: ParCfg) -> Shape {
         match c {
-            ParCfg::Seq => faer_fork::ParShape::Seq,
-            ParCfg::Rayon(n) => faer_fork::ParShape::team(n),
+            ParCfg::Seq => colmat::ParShape::Seq,
+            ParCfg::Rayon(n) => colmat::ParShape::team(n),
         }
     }
     #[cfg(all(feature = "fork-par-shape", not(feature = "fork-team")))]
     pub fn shape(c: ParCfg) -> Shape {
         match c {
-            ParCfg::Seq => faer_fork::ParShape::Seq,
-            ParCfg::Rayon(n) => faer_fork::ParShape::rayon(n),
+            ParCfg::Seq => colmat::ParShape::Seq,
+            ParCfg::Rayon(n) => colmat::ParShape::rayon(n),
         }
     }
     #[cfg(not(feature = "fork-par-shape"))]
@@ -2640,5 +2640,5 @@ macro_rules! explicit_ops {
     };
 }
 
-define_backend!(fork, faer_fork, fork_par, explicit_ops);
+define_backend!(fork, colmat, fork_par, explicit_ops);
 define_backend!(upstream, faer_upstream, upstream_par, highlevel_ops);

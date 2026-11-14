@@ -75,7 +75,7 @@ class PreflightTests(unittest.TestCase):
 
     def write_metadata(self, *, fork, upstream):
         self.metadata.write_text(json.dumps({"packages": [
-            {"name": "t4a-faer", "manifest_path": str(fork)},
+            {"name": "colmat", "manifest_path": str(fork)},
             {"name": "faer", "manifest_path": str(upstream)},
         ]}))
 
@@ -94,7 +94,7 @@ class PreflightTests(unittest.TestCase):
         return subprocess.run(
             ["bash", str(script), "--manifest", str(self.manifest),
              "--fork-manifest", str(self.fork), "--upstream-manifest", str(self.upstream),
-             "--config", 'patch.crates-io.t4a-faer.path="x"',
+             "--config", 'patch.crates-io.colmat.path="x"',
              "--config", 'patch.crates-io.faer.path="y"'],
             capture_output=True, text=True, env=environment,
         )
@@ -112,7 +112,7 @@ class PreflightTests(unittest.TestCase):
         self.assertIn(f"--manifest-path {self.manifest}", self.calls()[0])
         # The patch arguments are the whole point of the preflight: if the caller stops forwarding
         # them, cargo resolves the registry crate and the comparison would compare the wrong thing.
-        self.assertIn("--config patch.crates-io.t4a-faer.path=", self.calls()[0])
+        self.assertIn("--config patch.crates-io.colmat.path=", self.calls()[0])
 
     def test_a_cache_miss_prints_cargos_own_error_and_retries_online(self):
         result = self.run_preflight(offline="fail", online="ok")
@@ -123,7 +123,7 @@ class PreflightTests(unittest.TestCase):
         self.assertNotIn("--offline", self.calls()[1])
         # The retry must keep the patch arguments. Without this assertion, deleting them from the
         # second call left the suite green while the retry silently resolved the registry copy.
-        self.assertIn('--config patch.crates-io.t4a-faer.path=', self.calls()[1])
+        self.assertIn('--config patch.crates-io.colmat.path=', self.calls()[1])
         self.assertIn('--config patch.crates-io.faer.path=', self.calls()[1])
 
     def test_both_attempts_failing_is_reported_with_the_cause(self):
@@ -134,11 +134,11 @@ class PreflightTests(unittest.TestCase):
         self.assertIn("cargo metadata failed", result.stderr)
 
     def test_a_checkout_that_is_not_the_resolved_one_is_refused_with_the_next_step(self):
-        self.write_metadata(fork=self.root / "registry" / "t4a-faer" / "Cargo.toml",
+        self.write_metadata(fork=self.root / "registry" / "colmat" / "Cargo.toml",
                             upstream=self.upstream)
         result = self.run_preflight(offline="ok")
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("would link t4a-faer from", result.stderr)
+        self.assertIn("would link colmat from", result.stderr)
         self.assertIn("widening the range alone does not", result.stderr)
 
     def test_a_directory_given_as_the_manifest_is_refused_before_cargo_runs(self):
@@ -156,7 +156,7 @@ class PreflightTests(unittest.TestCase):
         result = subprocess.run(
             ["bash", str(PREFLIGHT), "--manifest", "Cargo.toml",
              "--fork-manifest", str(self.fork), "--upstream-manifest", str(self.upstream),
-             "--config", 'patch.crates-io.t4a-faer.path="x"',
+             "--config", 'patch.crates-io.colmat.path="x"',
              "--config", 'patch.crates-io.faer.path="y"'],
             capture_output=True, text=True, cwd=self.root,
             env={**os.environ, "PATH": f"{self.bin}:{os.environ['PATH']}", "STUB_LOG": str(self.log),
@@ -182,6 +182,15 @@ class PreflightTests(unittest.TestCase):
                 for guess in ("resolution error", "download problem", "not something the network can fix"):
                     self.assertNotIn(guess, result.stderr, f"the script guessed: {guess}")
                 self.assertEqual(len(self.calls()), 2)
+
+    def test_a_legacy_package_cannot_satisfy_the_colmat_check(self):
+        self.metadata.write_text(json.dumps({"packages": [
+            {"name": "t4a-faer", "manifest_path": str(self.fork)},
+            {"name": "faer", "manifest_path": str(self.upstream)},
+        ]}))
+        result = self.run_preflight(offline="ok")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("would link colmat from None", result.stderr)
 
     def test_the_upstream_check_is_not_decorative(self):
         """Both measured crates are compared; only checking the fork would pass an upstream mix-up."""

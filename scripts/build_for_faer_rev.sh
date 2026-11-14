@@ -2,7 +2,7 @@
 # Build the campaign harness (`fbench`) with both faer libraries linked *by path*.
 #
 #   build_for_faer_rev.sh --checkout <fork-dir> --upstream <upstream-dir> \
-#                         --vendor <openblas|mkl> --out <var-file> [--bin fbench]...
+#                         --vendor <openblas|mkl|none> --out <var-file> [--bin fbench]...
 #
 # Writes shell assignments to <var-file>:
 #   FAER_FORK_REV, FAER_FORK_DIRTY, FAER_FORK_DIR, FAER_FORK_VERSION, FAER_FORK_FEATURES,
@@ -47,7 +47,7 @@ PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
 usage() {
     echo "usage: build_for_faer_rev.sh --checkout <fork-dir> --upstream <upstream-dir>" >&2
-    echo "                            --vendor <openblas|mkl> --out <var-file> [--bin <name>]..." >&2
+    echo "                            --vendor <openblas|mkl|none> --out <var-file> [--bin <name>]..." >&2
 }
 
 FORK_DIR=""
@@ -81,7 +81,7 @@ real="$(cd "$UPSTREAM_DIR" 2>/dev/null && pwd -P)" || { echo "ERROR: --upstream 
 UPSTREAM_DIR="$real"
 [[ -d "$FORK_DIR/.git" ]] || { echo "ERROR: $FORK_DIR is not a git checkout" >&2; exit 1; }
 [[ -d "$UPSTREAM_DIR/.git" ]] || { echo "ERROR: $UPSTREAM_DIR is not a git checkout" >&2; exit 1; }
-# The fork publishes the crate as `t4a-faer` and upstream calls it `faer`, but both carry the
+# The fork publishes the crate as `colmat` and upstream calls it `faer`, but both carry the
 # package in their `faer/` workspace member. A checkout without it is not a faer tree.
 [[ -f "$FORK_DIR/faer/Cargo.toml" ]] || { echo "ERROR: $FORK_DIR/faer/Cargo.toml not found; not a faer checkout" >&2; exit 1; }
 [[ -f "$UPSTREAM_DIR/faer/Cargo.toml" ]] || { echo "ERROR: $UPSTREAM_DIR/faer/Cargo.toml not found; not an upstream faer checkout" >&2; exit 1; }
@@ -122,6 +122,11 @@ if [[ "$PROFILE" == release ]]; then profile_flag=(--release); subdir=release; f
 newest_dir() { ls -d $1 2>/dev/null | sort -V | tail -1; }
 
 case "$VENDOR" in
+  none)
+    # Library-only diagnostics: no vendor is linked or advertised.
+    FEATURES=""
+    VENDOR_BUILD_ENV="vendor=none"
+    ;;
   openblas)
     FEATURES="fbench/link-openblas"
     # Declared, not inherited. `openblas-src` reads `OPENBLAS_DYNAMIC_ARCH` at build time; without
@@ -197,7 +202,7 @@ case "$VENDOR" in
     VENDOR_BUILD_ENV="MKLROOT=$MKLROOT MKL_THREADING_LIB=$MKL_THREADING_LIB"
     ;;
   *)
-    echo "ERROR: unknown --vendor '$VENDOR'; this harness knows openblas and mkl" >&2; exit 1 ;;
+    echo "ERROR: unknown --vendor '$VENDOR'; this harness knows openblas, mkl and none" >&2; exit 1 ;;
 esac
 
 # ------------------------------------------------------------ fork API generation
@@ -210,7 +215,7 @@ esac
 # or it does not), so it cannot disagree with the revision that is linked.
 if grep -q '^pub enum ParShape' "$FORK_DIR/faer/src/lib.rs"; then
     FORK_API="parshape"
-    FEATURES="$FEATURES,fbench/fork-par-shape"
+    FEATURES="${FEATURES:+$FEATURES,}fbench/fork-par-shape"
 else
     FORK_API="par"
 fi
@@ -220,16 +225,16 @@ fi
 # cannot disagree with the revision it links; a checkout without `with_team` keeps the old path.
 if grep -q 'pub fn with_team' "$FORK_DIR/faer/src/utils/team.rs"; then
     TEAM_API="threadteam"
-    FEATURES="$FEATURES,fbench/fork-team"
+    FEATURES="${FEATURES:+$FEATURES,}fbench/fork-team"
 else
     TEAM_API="rayon"
 fi
 # The harness default features describe the API of the committed lock (`Cargo.lock` ->
-# `t4a-faer` 0.28.0, registry): `ParShape` for workspace queries, the threadteam team API.
+# `colmat` 0.34.0, registry): `ParShape` for workspace queries, the threadteam team API.
 # That keeps `cargo check -p fbench` working from the registry arm, which is what
 # faer-benchmark#59 caught. A checkout at an older generation has neither spelling, so the
 # build turns the defaults off and names only the features its detection found. That path is
-# untested end to end -- a 0.24-style checkout also lacks `faer_fork/threadteam`, which
+# untested end to end -- a 0.24-style checkout also lacks `colmat/threadteam`, which
 # `fork-team` names -- and is tracked in #61.
 NO_DEFAULT=()
 if [[ "$FORK_API" != "parshape" || "$TEAM_API" != "threadteam" ]]; then
@@ -242,12 +247,12 @@ fi
 # no `--path` for a dependency. So the registry entries the harness declares are patched to those
 # checkout paths here. `--config` keeps the tracked manifests untouched: a checkout path belongs to
 # the measuring host and must not be committed. The crate directory inside each checkout is `faer/`
-# -- the workspace member that carries the package whose lib is named `faer`, published by the fork
-# as `t4a-faer` and by upstream as `faer` -- so the two patches cannot collide. If the harness
+# -- the fork publishes package and library `colmat`, upstream publishes `faer`,
+# so the two patches cannot collide. If the harness
 # declares its dependencies another way (a `[patch]` section of its own, or a generated manifest),
 # this is the one place that has to change; the build below is the same either way.
 PATCH_ARGS=(
-    --config "patch.crates-io.t4a-faer.path=\"$FORK_DIR/faer\""
+    --config "patch.crates-io.colmat.path=\"$FORK_DIR/faer\""
     --config "patch.crates-io.faer.path=\"$UPSTREAM_DIR/faer\""
 )
 # ------------------------------------------------------------------------------
@@ -294,7 +299,7 @@ lock_sha="$(sha256sum "$target/Cargo.lock.resolved" | cut -d' ' -f1)"
     printf 'FAER_FORK_DIRTY=%q\n' "$fork_dirty"
     printf 'FAER_FORK_DIR=%q\n' "$FORK_DIR"
     printf 'FAER_FORK_VERSION=%q\n' "$fork_version"
-    printf 'FAER_FORK_FEATURES=%q\n' "$(features_of faer_fork)"
+    printf 'FAER_FORK_FEATURES=%q\n' "$(features_of colmat)"
     printf 'FAER_UPSTREAM_REV=%q\n' "$up_rev"
     printf 'FAER_UPSTREAM_DIRTY=%q\n' "$up_dirty"
     printf 'FAER_UPSTREAM_DIR=%q\n' "$UPSTREAM_DIR"

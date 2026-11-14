@@ -4,7 +4,7 @@
 #   setup_extern_deps.sh                      # from the pins, via clones of the fork
 #   setup_extern_deps.sh <fork> <upstream>   # symlink existing checkouts
 #
-# extern/t4a-faer is the measured fork (t4a-faer, lib name faer); extern/upstream-faer is
+# extern/t4a-faer is the measured fork (package and library colmat); extern/upstream-faer is
 # the upstream release it is compared against. Both are linked *by path* by
 # scripts/build_for_faer_rev.sh, and the index and the validator read the recorded commits
 # and the reference pins out of them, so both have to exist before either runs.
@@ -20,7 +20,7 @@
 # particular remote.
 set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-FORK_URL="https://github.com/tensor4all/faer"
+FORK_URL="https://github.com/tensor4all/colmat-rs"
 
 materialise() {  # <relative dest> <existing checkout or empty> <url>
     local dest="$PROJECT_DIR/$1" existing="${2:-}" url="$3"

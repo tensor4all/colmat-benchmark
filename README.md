@@ -83,7 +83,7 @@ three are recorded in `run.yaml`:
 
 | identity | what it is | pinned by |
 |---|---|---|
-| `library` | the measured fork checkout (`t4a-faer`, lib name `faer`) | `pins/t4a-faer.rev` |
+| `library` | the measured fork checkout (package and library `colmat`) | `pins/t4a-faer.rev` |
 | `upstream` | the upstream `faer` release the fork is based on | `pins/upstream-faer.rev` |
 | `harness` | this repository, whose commit and dirty state can move a number | per run (`harness.commit`) |
 
@@ -96,13 +96,17 @@ python3 scripts/record_run.py zen5-cpu faer-kernels --vendor mkl \
     --checkout /path/to/t4a-faer --upstream /path/to/upstream-faer
 ```
 
-Four arms are compared at faer's own API: the fork (`faer-fork`), upstream
-(`faer-upstream`), CBLAS + LAPACK against OpenBLAS, and the same calls against
-Intel oneAPI MKL. The two faer rows share one binary — the fork is package
-`t4a-faer` and upstream is package `faer`, so they are distinct dependency keys
-and distinct crate identities even though both declare `[lib] name = "faer"`. The
-two vendor arms cannot share a process (they own the same symbols), so a vendor
-arm is its own build, its own run and its own page.
+Four arms are compared at the library's own API: `colmat` (CSV engine `faer-fork`),
+upstream `faer` (`faer-upstream`), OpenBLAS and Intel oneAPI MKL. The Rust
+libraries are separate dependencies named `colmat` and `faer_upstream`; the
+upstream dependency selects package `faer`. Each vendor arm has its own binary.
+Historical pin paths (`pins/t4a-faer.rev`, `extern/t4a-faer`) and CSV engine names
+are retained so existing recordings and tooling keep their identities.
+
+For library-only diagnostics on a host without a vendor toolchain, the build
+script also accepts `--vendor none`. This links no vendor; use `--rows faer-fork`
+when running `fbench` for a colmat-only measurement. This diagnostic build option
+is separate from the recorder's two vendor arms and does not publish a dataset.
 
 ## Tooling
 

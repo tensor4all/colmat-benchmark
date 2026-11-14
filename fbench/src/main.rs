@@ -160,7 +160,7 @@ fn measure_row(
 ) -> Result<Vec<f64>, String> {
     #[cfg(feature = "fork-team")]
     if threads > 1 && row == "faer-fork" {
-        return faer_fork::team::with_team(threads, |par| {
+        return colmat::team::with_team(threads, |par| {
             let mut token = op::Token::Fork(par);
             timing::measure(ops, prime_ms, reps, &mut token)
         });
