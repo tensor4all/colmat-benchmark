@@ -18,73 +18,73 @@ revisions it measured. The current pages are in [INDEX.md](INDEX.md).
 
 | suite | profile | vendor | fork/upstream | version | date | coverage | status | page |
 |---|---|---|---|---|---|---|---|---|
-| `faer-kernels` | `zen5-cpu` | `mkl` | `71b25ffb7ae3/0539947ffb75` | 0.27.1 | 2026-11-01 | partial | unknown | [result/zen5-cpu/faer-kernels/71b25ffb7ae3-0539947ffb75-mkl-timing-v2.md](zen5-cpu/faer-kernels/71b25ffb7ae3-0539947ffb75-mkl-timing-v2.md) |
-| `faer-kernels` | `zen5-cpu` | `openblas` | `71b25ffb7ae3/0539947ffb75` | 0.27.1 | 2026-11-01 | partial | unknown | [result/zen5-cpu/faer-kernels/71b25ffb7ae3-0539947ffb75-openblas-timing-v2.md](zen5-cpu/faer-kernels/71b25ffb7ae3-0539947ffb75-openblas-timing-v2.md) |
-| `faer-kernels-large` | `zen5-cpu` | `mkl` | `71b25ffb7ae3/0539947ffb75` | 0.27.1 | 2026-11-01 | partial | unknown | [result/zen5-cpu/faer-kernels-large/71b25ffb7ae3-0539947ffb75-mkl-timing-v2.md](zen5-cpu/faer-kernels-large/71b25ffb7ae3-0539947ffb75-mkl-timing-v2.md) |
-| `faer-kernels-large` | `zen5-cpu` | `openblas` | `71b25ffb7ae3/0539947ffb75` | 0.27.1 | 2026-11-01 | partial | unknown | [result/zen5-cpu/faer-kernels-large/71b25ffb7ae3-0539947ffb75-openblas-timing-v2.md](zen5-cpu/faer-kernels-large/71b25ffb7ae3-0539947ffb75-openblas-timing-v2.md) |
+| `faer-kernels` | `zen5-cpu` | `mkl` | `71b25ffb7ae3/0539947ffb75` | 0.27.1 | 2026-11-01 | partial | 1 behind | [result/zen5-cpu/faer-kernels/71b25ffb7ae3-0539947ffb75-mkl-timing-v2.md](zen5-cpu/faer-kernels/71b25ffb7ae3-0539947ffb75-mkl-timing-v2.md) |
+| `faer-kernels` | `zen5-cpu` | `openblas` | `71b25ffb7ae3/0539947ffb75` | 0.27.1 | 2026-11-01 | partial | 1 behind | [result/zen5-cpu/faer-kernels/71b25ffb7ae3-0539947ffb75-openblas-timing-v2.md](zen5-cpu/faer-kernels/71b25ffb7ae3-0539947ffb75-openblas-timing-v2.md) |
+| `faer-kernels-large` | `zen5-cpu` | `mkl` | `71b25ffb7ae3/0539947ffb75` | 0.27.1 | 2026-11-01 | partial | 1 behind | [result/zen5-cpu/faer-kernels-large/71b25ffb7ae3-0539947ffb75-mkl-timing-v2.md](zen5-cpu/faer-kernels-large/71b25ffb7ae3-0539947ffb75-mkl-timing-v2.md) |
+| `faer-kernels-large` | `zen5-cpu` | `openblas` | `71b25ffb7ae3/0539947ffb75` | 0.27.1 | 2026-11-01 | partial | 1 behind | [result/zen5-cpu/faer-kernels-large/71b25ffb7ae3-0539947ffb75-openblas-timing-v2.md](zen5-cpu/faer-kernels-large/71b25ffb7ae3-0539947ffb75-openblas-timing-v2.md) |
 
 ### `0e15729ad011/0539947ffb75`: version 0.25.0, upstream faer-v0.24.4
 
 | suite | profile | vendor | fork/upstream | version | date | coverage | status | page |
 |---|---|---|---|---|---|---|---|---|
-| `faer-kernels` | `zen5-cpu` | `mkl` | `0e15729ad011/0539947ffb75` | 0.25.0 | 2026-10-27 | partial | unknown | [result/zen5-cpu/faer-kernels/0e15729ad011-0539947ffb75-mkl-timing-v2.md](zen5-cpu/faer-kernels/0e15729ad011-0539947ffb75-mkl-timing-v2.md) |
-| `faer-kernels` | `zen5-cpu` | `openblas` | `0e15729ad011/0539947ffb75` | 0.25.0 | 2026-10-27 | partial | unknown | [result/zen5-cpu/faer-kernels/0e15729ad011-0539947ffb75-openblas-timing-v2.md](zen5-cpu/faer-kernels/0e15729ad011-0539947ffb75-openblas-timing-v2.md) |
-| `faer-kernels-large` | `zen5-cpu` | `mkl` | `0e15729ad011/0539947ffb75` | 0.25.0 | 2026-10-26 | partial | unknown | [result/zen5-cpu/faer-kernels-large/0e15729ad011-0539947ffb75-mkl-timing-v2.md](zen5-cpu/faer-kernels-large/0e15729ad011-0539947ffb75-mkl-timing-v2.md) |
+| `faer-kernels` | `zen5-cpu` | `mkl` | `0e15729ad011/0539947ffb75` | 0.25.0 | 2026-10-27 | partial | stale | [result/zen5-cpu/faer-kernels/0e15729ad011-0539947ffb75-mkl-timing-v2.md](zen5-cpu/faer-kernels/0e15729ad011-0539947ffb75-mkl-timing-v2.md) |
+| `faer-kernels` | `zen5-cpu` | `openblas` | `0e15729ad011/0539947ffb75` | 0.25.0 | 2026-10-27 | partial | stale | [result/zen5-cpu/faer-kernels/0e15729ad011-0539947ffb75-openblas-timing-v2.md](zen5-cpu/faer-kernels/0e15729ad011-0539947ffb75-openblas-timing-v2.md) |
+| `faer-kernels-large` | `zen5-cpu` | `mkl` | `0e15729ad011/0539947ffb75` | 0.25.0 | 2026-10-26 | partial | stale | [result/zen5-cpu/faer-kernels-large/0e15729ad011-0539947ffb75-mkl-timing-v2.md](zen5-cpu/faer-kernels-large/0e15729ad011-0539947ffb75-mkl-timing-v2.md) |
 
 ### `50c2b989484f/0539947ffb75`: version 0.24.4, upstream faer-v0.24.4
 
 | suite | profile | vendor | fork/upstream | version | date | coverage | status | page |
 |---|---|---|---|---|---|---|---|---|
-| `faer-kernels` | `zen5-cpu` | `mkl` | `50c2b989484f/0539947ffb75` | 0.24.4 | 2026-10-20 | partial | unknown | [result/zen5-cpu/faer-kernels/50c2b989484f-0539947ffb75-mkl-timing-v2.md](zen5-cpu/faer-kernels/50c2b989484f-0539947ffb75-mkl-timing-v2.md) |
-| `faer-kernels` | `zen5-cpu` | `openblas` | `50c2b989484f/0539947ffb75` | 0.24.4 | 2026-10-20 | partial | unknown | [result/zen5-cpu/faer-kernels/50c2b989484f-0539947ffb75-openblas-timing-v2.md](zen5-cpu/faer-kernels/50c2b989484f-0539947ffb75-openblas-timing-v2.md) |
+| `faer-kernels` | `zen5-cpu` | `mkl` | `50c2b989484f/0539947ffb75` | 0.24.4 | 2026-10-20 | partial | stale | [result/zen5-cpu/faer-kernels/50c2b989484f-0539947ffb75-mkl-timing-v2.md](zen5-cpu/faer-kernels/50c2b989484f-0539947ffb75-mkl-timing-v2.md) |
+| `faer-kernels` | `zen5-cpu` | `openblas` | `50c2b989484f/0539947ffb75` | 0.24.4 | 2026-10-20 | partial | stale | [result/zen5-cpu/faer-kernels/50c2b989484f-0539947ffb75-openblas-timing-v2.md](zen5-cpu/faer-kernels/50c2b989484f-0539947ffb75-openblas-timing-v2.md) |
 
 ### `a5e6b7d23946/0539947ffb75`: version 0.24.4, upstream faer-v0.24.4
 
 | suite | profile | vendor | fork/upstream | version | date | coverage | status | page |
 |---|---|---|---|---|---|---|---|---|
-| `faer-kernels` | `zen5-cpu` | `mkl` | `a5e6b7d23946/0539947ffb75` | 0.24.4 | 2026-10-19 | partial | unknown | [result/zen5-cpu/faer-kernels/a5e6b7d23946-0539947ffb75-mkl-timing-v2.md](zen5-cpu/faer-kernels/a5e6b7d23946-0539947ffb75-mkl-timing-v2.md) |
-| `faer-kernels` | `zen5-cpu` | `openblas` | `a5e6b7d23946/0539947ffb75` | 0.24.4 | 2026-10-19 | partial | unknown | [result/zen5-cpu/faer-kernels/a5e6b7d23946-0539947ffb75-openblas-timing-v2.md](zen5-cpu/faer-kernels/a5e6b7d23946-0539947ffb75-openblas-timing-v2.md) |
-| `faer-kernels-large` | `zen5-cpu` | `mkl` | `a5e6b7d23946/0539947ffb75` | 0.24.4 | 2026-10-19 | partial | unknown | [result/zen5-cpu/faer-kernels-large/a5e6b7d23946-0539947ffb75-mkl-timing-v2.md](zen5-cpu/faer-kernels-large/a5e6b7d23946-0539947ffb75-mkl-timing-v2.md) |
-| `faer-kernels-large` | `zen5-cpu` | `openblas` | `a5e6b7d23946/0539947ffb75` | 0.24.4 | 2026-10-19 | partial | unknown | [result/zen5-cpu/faer-kernels-large/a5e6b7d23946-0539947ffb75-openblas-timing-v2.md](zen5-cpu/faer-kernels-large/a5e6b7d23946-0539947ffb75-openblas-timing-v2.md) |
+| `faer-kernels` | `zen5-cpu` | `mkl` | `a5e6b7d23946/0539947ffb75` | 0.24.4 | 2026-10-19 | partial | stale | [result/zen5-cpu/faer-kernels/a5e6b7d23946-0539947ffb75-mkl-timing-v2.md](zen5-cpu/faer-kernels/a5e6b7d23946-0539947ffb75-mkl-timing-v2.md) |
+| `faer-kernels` | `zen5-cpu` | `openblas` | `a5e6b7d23946/0539947ffb75` | 0.24.4 | 2026-10-19 | partial | stale | [result/zen5-cpu/faer-kernels/a5e6b7d23946-0539947ffb75-openblas-timing-v2.md](zen5-cpu/faer-kernels/a5e6b7d23946-0539947ffb75-openblas-timing-v2.md) |
+| `faer-kernels-large` | `zen5-cpu` | `mkl` | `a5e6b7d23946/0539947ffb75` | 0.24.4 | 2026-10-19 | partial | stale | [result/zen5-cpu/faer-kernels-large/a5e6b7d23946-0539947ffb75-mkl-timing-v2.md](zen5-cpu/faer-kernels-large/a5e6b7d23946-0539947ffb75-mkl-timing-v2.md) |
+| `faer-kernels-large` | `zen5-cpu` | `openblas` | `a5e6b7d23946/0539947ffb75` | 0.24.4 | 2026-10-19 | partial | stale | [result/zen5-cpu/faer-kernels-large/a5e6b7d23946-0539947ffb75-openblas-timing-v2.md](zen5-cpu/faer-kernels-large/a5e6b7d23946-0539947ffb75-openblas-timing-v2.md) |
 
 ### `2870062a7ee6/0539947ffb75`: version 0.24.4, upstream faer-v0.24.4
 
 | suite | profile | vendor | fork/upstream | version | date | coverage | status | page |
 |---|---|---|---|---|---|---|---|---|
-| `faer-kernels` | `zen5-cpu` | `mkl` | `2870062a7ee6/0539947ffb75` | 0.24.4 | 2026-10-18 | partial | unknown | [result/zen5-cpu/faer-kernels/2870062a7ee6-0539947ffb75-mkl-timing-v2.md](zen5-cpu/faer-kernels/2870062a7ee6-0539947ffb75-mkl-timing-v2.md) |
+| `faer-kernels` | `zen5-cpu` | `mkl` | `2870062a7ee6/0539947ffb75` | 0.24.4 | 2026-10-18 | partial | stale | [result/zen5-cpu/faer-kernels/2870062a7ee6-0539947ffb75-mkl-timing-v2.md](zen5-cpu/faer-kernels/2870062a7ee6-0539947ffb75-mkl-timing-v2.md) |
 
 ### `2240b076a030/0539947ffb75`: version 0.24.4, upstream faer-v0.24.4
 
 | suite | profile | vendor | fork/upstream | version | date | coverage | status | page |
 |---|---|---|---|---|---|---|---|---|
-| `faer-kernels` | `zen5-cpu` | `mkl` | `2240b076a030/0539947ffb75` | 0.24.4 | 2026-10-18 | partial | unknown | [result/zen5-cpu/faer-kernels/2240b076a030-0539947ffb75-mkl-timing-v2.md](zen5-cpu/faer-kernels/2240b076a030-0539947ffb75-mkl-timing-v2.md) |
-| `faer-kernels` | `zen5-cpu` | `openblas` | `2240b076a030/0539947ffb75` | 0.24.4 | 2026-10-18 | partial | unknown | [result/zen5-cpu/faer-kernels/2240b076a030-0539947ffb75-openblas-timing-v2.md](zen5-cpu/faer-kernels/2240b076a030-0539947ffb75-openblas-timing-v2.md) |
+| `faer-kernels` | `zen5-cpu` | `mkl` | `2240b076a030/0539947ffb75` | 0.24.4 | 2026-10-18 | partial | stale | [result/zen5-cpu/faer-kernels/2240b076a030-0539947ffb75-mkl-timing-v2.md](zen5-cpu/faer-kernels/2240b076a030-0539947ffb75-mkl-timing-v2.md) |
+| `faer-kernels` | `zen5-cpu` | `openblas` | `2240b076a030/0539947ffb75` | 0.24.4 | 2026-10-18 | partial | stale | [result/zen5-cpu/faer-kernels/2240b076a030-0539947ffb75-openblas-timing-v2.md](zen5-cpu/faer-kernels/2240b076a030-0539947ffb75-openblas-timing-v2.md) |
 
 ### `0627828d965b/0539947ffb75`: version 0.24.4, upstream faer-v0.24.4
 
 | suite | profile | vendor | fork/upstream | version | date | coverage | status | page |
 |---|---|---|---|---|---|---|---|---|
-| `faer-kernels` | `zen5-cpu` | `mkl` | `0627828d965b/0539947ffb75` | 0.24.4 | 2026-10-18 | partial | unknown | [result/zen5-cpu/faer-kernels/0627828d965b-0539947ffb75-mkl-timing-v2.md](zen5-cpu/faer-kernels/0627828d965b-0539947ffb75-mkl-timing-v2.md) |
+| `faer-kernels` | `zen5-cpu` | `mkl` | `0627828d965b/0539947ffb75` | 0.24.4 | 2026-10-18 | partial | stale | [result/zen5-cpu/faer-kernels/0627828d965b-0539947ffb75-mkl-timing-v2.md](zen5-cpu/faer-kernels/0627828d965b-0539947ffb75-mkl-timing-v2.md) |
 
 ### `52b113acd2e2/0539947ffb75`: version 0.24.4, upstream faer-v0.24.4
 
 | suite | profile | vendor | fork/upstream | version | date | coverage | status | page |
 |---|---|---|---|---|---|---|---|---|
-| `faer-kernels` | `zen5-cpu` | `mkl` | `52b113acd2e2/0539947ffb75` | 0.24.4 | 2026-10-18 | partial | unknown | [result/zen5-cpu/faer-kernels/52b113acd2e2-0539947ffb75-mkl-timing-v2.md](zen5-cpu/faer-kernels/52b113acd2e2-0539947ffb75-mkl-timing-v2.md) |
+| `faer-kernels` | `zen5-cpu` | `mkl` | `52b113acd2e2/0539947ffb75` | 0.24.4 | 2026-10-18 | partial | diverged | [result/zen5-cpu/faer-kernels/52b113acd2e2-0539947ffb75-mkl-timing-v2.md](zen5-cpu/faer-kernels/52b113acd2e2-0539947ffb75-mkl-timing-v2.md) |
 
 ### `5578ccc3df0d/0539947ffb75`: version 0.24.4, upstream faer-v0.24.4
 
 | suite | profile | vendor | fork/upstream | version | date | coverage | status | page |
 |---|---|---|---|---|---|---|---|---|
-| `faer-kernels` | `zen5-cpu` | `mkl` | `5578ccc3df0d/0539947ffb75` | 0.24.4 | 2026-10-18 | partial | unknown | [result/zen5-cpu/faer-kernels/5578ccc3df0d-0539947ffb75-mkl-timing-v2.md](zen5-cpu/faer-kernels/5578ccc3df0d-0539947ffb75-mkl-timing-v2.md) |
+| `faer-kernels` | `zen5-cpu` | `mkl` | `5578ccc3df0d/0539947ffb75` | 0.24.4 | 2026-10-18 | partial | stale | [result/zen5-cpu/faer-kernels/5578ccc3df0d-0539947ffb75-mkl-timing-v2.md](zen5-cpu/faer-kernels/5578ccc3df0d-0539947ffb75-mkl-timing-v2.md) |
 
 ### `bfe4041cd991/0539947ffb75`: version 0.24.4, upstream faer-v0.24.4
 
 | suite | profile | vendor | fork/upstream | version | date | coverage | status | page |
 |---|---|---|---|---|---|---|---|---|
-| `faer-kernels` | `zen5-cpu` | `mkl` | `bfe4041cd991/0539947ffb75` | 0.24.4 | 2026-10-15 | partial | unknown | [result/zen5-cpu/faer-kernels/bfe4041cd991-0539947ffb75-mkl-timing-v2.md](zen5-cpu/faer-kernels/bfe4041cd991-0539947ffb75-mkl-timing-v2.md) |
-| `faer-kernels` | `zen5-cpu` | `mkl` | `bfe4041cd991/0539947ffb75` | 0.24.4 | 2026-10-14 | declaration-changed | unknown | [result/zen5-cpu/faer-kernels/bfe4041cd991-0539947ffb75-mkl.md](zen5-cpu/faer-kernels/bfe4041cd991-0539947ffb75-mkl.md) |
-| `faer-kernels` | `zen5-cpu` | `openblas` | `bfe4041cd991/0539947ffb75` | 0.24.4 | 2026-10-15 | partial | unknown | [result/zen5-cpu/faer-kernels/bfe4041cd991-0539947ffb75-openblas-timing-v2.md](zen5-cpu/faer-kernels/bfe4041cd991-0539947ffb75-openblas-timing-v2.md) |
-| `faer-kernels` | `zen5-cpu` | `openblas` | `bfe4041cd991/0539947ffb75` | 0.24.4 | 2026-10-14 | declaration-changed | unknown | [result/zen5-cpu/faer-kernels/bfe4041cd991-0539947ffb75-openblas.md](zen5-cpu/faer-kernels/bfe4041cd991-0539947ffb75-openblas.md) |
-| `faer-kernels-large` | `zen5-cpu` | `mkl` | `bfe4041cd991/0539947ffb75` | 0.24.4 | 2026-10-16 | partial | unknown | [result/zen5-cpu/faer-kernels-large/bfe4041cd991-0539947ffb75-mkl-timing-v2.md](zen5-cpu/faer-kernels-large/bfe4041cd991-0539947ffb75-mkl-timing-v2.md) |
-| `faer-kernels-large` | `zen5-cpu` | `openblas` | `bfe4041cd991/0539947ffb75` | 0.24.4 | 2026-10-16 | partial | unknown | [result/zen5-cpu/faer-kernels-large/bfe4041cd991-0539947ffb75-openblas-timing-v2.md](zen5-cpu/faer-kernels-large/bfe4041cd991-0539947ffb75-openblas-timing-v2.md) |
+| `faer-kernels` | `zen5-cpu` | `mkl` | `bfe4041cd991/0539947ffb75` | 0.24.4 | 2026-10-15 | partial | stale | [result/zen5-cpu/faer-kernels/bfe4041cd991-0539947ffb75-mkl-timing-v2.md](zen5-cpu/faer-kernels/bfe4041cd991-0539947ffb75-mkl-timing-v2.md) |
+| `faer-kernels` | `zen5-cpu` | `mkl` | `bfe4041cd991/0539947ffb75` | 0.24.4 | 2026-10-14 | declaration-changed | stale | [result/zen5-cpu/faer-kernels/bfe4041cd991-0539947ffb75-mkl.md](zen5-cpu/faer-kernels/bfe4041cd991-0539947ffb75-mkl.md) |
+| `faer-kernels` | `zen5-cpu` | `openblas` | `bfe4041cd991/0539947ffb75` | 0.24.4 | 2026-10-15 | partial | stale | [result/zen5-cpu/faer-kernels/bfe4041cd991-0539947ffb75-openblas-timing-v2.md](zen5-cpu/faer-kernels/bfe4041cd991-0539947ffb75-openblas-timing-v2.md) |
+| `faer-kernels` | `zen5-cpu` | `openblas` | `bfe4041cd991/0539947ffb75` | 0.24.4 | 2026-10-14 | declaration-changed | stale | [result/zen5-cpu/faer-kernels/bfe4041cd991-0539947ffb75-openblas.md](zen5-cpu/faer-kernels/bfe4041cd991-0539947ffb75-openblas.md) |
+| `faer-kernels-large` | `zen5-cpu` | `mkl` | `bfe4041cd991/0539947ffb75` | 0.24.4 | 2026-10-16 | partial | stale | [result/zen5-cpu/faer-kernels-large/bfe4041cd991-0539947ffb75-mkl-timing-v2.md](zen5-cpu/faer-kernels-large/bfe4041cd991-0539947ffb75-mkl-timing-v2.md) |
+| `faer-kernels-large` | `zen5-cpu` | `openblas` | `bfe4041cd991/0539947ffb75` | 0.24.4 | 2026-10-16 | partial | stale | [result/zen5-cpu/faer-kernels-large/bfe4041cd991-0539947ffb75-openblas-timing-v2.md](zen5-cpu/faer-kernels-large/bfe4041cd991-0539947ffb75-openblas-timing-v2.md) |
