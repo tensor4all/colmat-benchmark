@@ -435,7 +435,9 @@ fn configure_threads(n: usize) -> Result<(), String> {
         .num_threads(n)
         .build_global()
         .map_err(|e| format!("cannot create the owned {n}-worker Rayon pool: {e}"))?;
-    vendor::set_threads(n)?;
+    if vendor::NAME != "none" {
+        vendor::set_threads(n)?;
+    }
     backend::fork::set_threads(n);
     backend::upstream::set_threads(n);
     require_threads(n)

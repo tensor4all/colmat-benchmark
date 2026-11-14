@@ -21,6 +21,7 @@
 set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 FORK_URL="https://github.com/tensor4all/colmat-rs"
+LEGACY_FORK_URL="https://github.com/tensor4all/t4a-faer"
 
 materialise() {  # <relative dest> <existing checkout or empty> <url>
     local dest="$PROJECT_DIR/$1" existing="${2:-}" url="$3"
@@ -41,6 +42,13 @@ materialise() {  # <relative dest> <existing checkout or empty> <url>
 
 materialise extern/t4a-faer "${1:-}" "$FORK_URL"
 materialise extern/upstream-faer "${2:-}" "$FORK_URL"
+
+# Pre-rename recordings include experimental heads retained only in the old
+# repository. Import its branches and PR heads into separate namespaces so the
+# validator can still resolve their recorded commits; do not change either pin.
+git -C "$PROJECT_DIR/extern/t4a-faer" fetch -q --no-tags "$LEGACY_FORK_URL" \
+    '+refs/heads/*:refs/remotes/legacy/*' \
+    '+refs/pull/*/head:refs/remotes/legacy-pr/*'
 
 REV="$(grep -v '^#' "$PROJECT_DIR/pins/t4a-faer.rev" | tr -d '[:space:]')"
 [[ -n "$REV" ]] || { echo "ERROR: pins/t4a-faer.rev is empty" >&2; exit 1; }
