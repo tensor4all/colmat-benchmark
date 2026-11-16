@@ -2,6 +2,77 @@
 
 Decisions, fixed failures and open items for this campaign. Newest first.
 
+## 2026-11-09 — one contract per ratio: the vendor row stops paying for the clock (#74)
+
+The pages put two different kinds of call in one ratio. The vendor row called LAPACKE's plain entry
+points, which copy the input, allocate the workspace and transpose a row-major buffer *inside* the
+call, while the faer row's prepared route did none of that — and the owning faer route, which does
+allocate inside its call, was the one divided against the vendor. A ratio could therefore be a
+difference between two harness choices rather than between two libraries
+([audit](measurement-audit-2026-11-06.md), sections 2 and 6).
+
+The rule is now structural, the same for every family and every row: **no primary row allocates,
+frees or converts layout inside its timed `run`**. `fbench`:
+
+- every LAPACK driver is called through its `_work` entry point, with a workspace the op owns and a
+  `lwork = -1` (plus `liwork`/`lrwork = -1`) query run when the op is built — outside the clock;
+  inputs, `ipiv`, `tau`, singular values/vectors and eigenpairs are prepared the same way;
+- a vendored driver family (`lu`, `solve`, `cholesky`, `qr_factor`, `qr`, `svd_values`, `svd_thin`,
+  `eigh`) is measured column-major only, because LAPACKE's row-major path allocates a transposed copy
+  and transposes in and out of it inside the call in every `_work` variant. Its C-order cell is
+  recorded `skipped` with that reason; `gemm` keeps both orders (CBLAS's row-major entry point moves
+  no data);
+- the faer rows keep their owning calls (`PartialPivLu::new`, `Llt::new`, owning `qr`, the
+  `gesdd`/`syevd` wrappers) but label them **`api-inclusive`**, and the allocation-free routes carry
+  an empty note. The report keys cells on `note`, so an `api-inclusive` row is a different cell and
+  is never divided against a vendor row: it is published as a labelled secondary table;
+- `qr` gained the same-contract vendor route (`geqrf_work` + `ormqr_work` into a prepared identity
+  block) beside a new allocation-free faer route (`qr_in_place` + the block-Householder apply into a
+  prepared `Q`). This **supersedes** the audit's fix-5 decision to leave `qr` without a vendor row:
+  the asymmetry that decision named is gone, so the comparison exists now.
+
+Regression guards, in `fbench`'s tests: `no_row_allocates_inside_run` (a counting
+`#[global_allocator]`, armed around `Op::run`, asserting 0 allocations and 0 frees),
+`vendor_drivers_are_column_major_only` (the C-order skip is the rule, not an accident) and
+`notes_pair_the_same_contract` (a faer row's owning route is labelled, the vendor row is never in the
+API-cost table). What they cannot see is declared where the claim is made: a library's own C-level
+`malloc` (`LAPACKE_malloc`) is invisible to a Rust allocator, and a promise to check it with
+`MKL_Mem_Stat` was withdrawn — that reports only the buffers oneMKL retains at the instant of the
+call, so it cannot see a per-run `malloc`/`free` and a check on it could not fail. The vendor side is
+enforced by construction (the `_work` entry points, an op-owned workspace, the column-major route).
+
+Docs moved with the code: `reliable-measurement.md` ("Allocation and the clock", "Route differences
+that remain"), `timing-policy.md` (version 2), the suite's `known_blind_spots`, the audit's section 7
+and `dataset-status.md`. **No page is regenerated here and no published number changes**: every cell
+already published stays `withdrawn pending re-measurement` under the new threshold (a harness at or
+after this commit), and the vendor ratios the previous entry allowed as "one-sided" are withdrawn
+with them, because after this change a like-for-like number exists for those families and the old one
+is not a lower bound — it is a number from a different contract. Re-measuring is a separate step on
+the recording machine.
+
+Reviews before the change landed: `ollama-cloud/glm-5.3-flash:high` (read-only) on the plan (two
+rounds, `CHANGES` -> all findings answered) and on the finished branch (`CHANGES`, no blocker: the
+`MKL_Mem_Stat` claim, one stale suite statement, one stale sentence in `timing-policy.md`, and the
+missing plan record — all four resolved as described above).
+
+The post-change review raised one more: a *published* page still printed the one-sided ratio, and
+this PR said it was withdrawn only in prose. The joined view now enforces what this file says.
+`scripts/gen_comparison.py` takes the recorded `harness.commit` of each arm and compares it with
+`FAIR_HARNESS` (the commit that carries this change): at or after it the ratio is printed, before it
+— or when the checkout cannot place the commit, such as a shallow clone — the vendor ratio cells of
+the families this contract changed print `withdrawn`, the recorded times stay, and those cells are
+left out of the median. The families are `WITHDRAWN_VENDOR_FAMILIES`, the complement of the audit's
+usable list (`gemm`, `triangular_solve`, `householder_apply`), so the page and
+`docs/dataset-status.md` cannot drift apart without one of them being edited; `scripts/gen_site.py`
+says the same on the landing page. The per-arm Markdown pages stay the toolkit's render — they are
+tied to their run's `report.md` byte for byte, so editing them here would fail
+`campaign-check-generated` — and `docs/dataset-status.md` remains their status of record. The same
+review found the `note`/cell-key pointer named a toolkit module instead of `scripts/gen_comparison.py`
+(`KEY`); that pointer is corrected here and in `fbench/src/op.rs`.
+
+`IMPLEMENTATION-PLAN.md` is not part of the diff (it stays untracked in the worktree): the plan is
+the record of the design round, and the diff is the change.
+
 ## 2026-11-13 — the repository is renamed `faer-benchmark` -> `colmat-benchmark`
 
 A GitHub rename, not a recreation: issues, PRs and history are kept, and `github.com/tensor4all/faer-benchmark`

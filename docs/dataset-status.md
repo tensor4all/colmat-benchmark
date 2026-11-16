@@ -8,9 +8,38 @@ No result page is edited: the numbers stay in the repository as history; this fi
 Terms are the ones of [docs/provisional-and-clean-datasets.md](../docs/provisional-and-clean-datasets.md)
 (**provisional**, **superseded**) and of the index (`partial`, `stale`). One term is added for cells:
 **withdrawn pending re-measurement** - the cell stays published, and must not be quoted until a page
-recorded by a harness at or after `7bb8105` (#49) replaces it.
+recorded by a harness at or after `7bb8105` (#49) replaces it; after #74 the bar is the commit of that
+change, see the section above.
 
-## 2026-11-06: pages recorded before #49
+## 2026-11-09: every vendor comparison is now one contract per ratio (#74)
+
+[#74](https://github.com/tensor4all/colmat-benchmark/issues/74) makes the rule enforceable rather than
+reviewable: a ratio is formed only between two rows of the **same contract**, and no primary row
+allocates, frees or converts layout inside its timed `run`. What changed in the harness:
+
+- the vendor row calls LAPACKE's `_work` entry points with a caller-owned workspace and prepared
+  outputs, so LAPACKE no longer allocates inside the clock;
+- a vendored driver family (`lu`, `solve`, `cholesky`, `qr_factor`, `qr`, `svd_values`, `svd_thin`,
+  `eigh`) is measured column-major only -- LAPACKE's row-major path allocates a transposed copy
+  inside the call in every `_work` variant -- and its C-order cell is recorded `skipped` with that
+  reason instead of carrying a conversion the faer row does not pay;
+- `qr` gained the same-contract vendor route (`geqrf_work` + `ormqr_work` into a prepared identity
+  block) beside a new allocation-free faer `qr` route, so `qr` now has a vendor ratio;
+- the faer rows' owning routes (the call a user makes, which allocates its outputs and scratch
+  inside the timed call) are kept but labelled **`api-inclusive`**, and the allocation-free routes
+  carry an empty note. The joined page keys cells on `note` (`KEY` in `scripts/gen_comparison.py`),
+  so an `api-inclusive` row is never divided against a vendor row; it belongs in
+  the labelled API-cost table only.
+
+**Consequence for the pages already published:** they were recorded by a harness before this change,
+so their `note` column does not distinguish the two faer contracts and their vendor cells carry the
+old tax. Every cell below stays **withdrawn pending re-measurement** on the terms of the next section,
+and the vendor-involving ratios that the previous section allowed as "one-sided" (`qr`, `qr_factor`
+other than `n64`, `svd_values`, `svd_thin`, `eigh`) are withdrawn with them: after #74 a like-for-like
+number for those families exists, so the old one is not a lower bound that can still be quoted, it is a
+number from a different contract. Closing this entry requires pages recorded by a harness at or after
+the commit of #74, on the machine that recorded the dataset.
+
 
 Every page below `result/` was recorded before [#49](https://github.com/tensor4all/colmat-benchmark/pull/49)
 (`7bb8105`, 2026-11-06): the newest harness commit among them is `eeeaa363` (page `71b25ffb`, recorded
@@ -48,14 +77,32 @@ Do not treat the examples as the list; the table is.
 |---|---|
 | `gemm`, `triangular_solve`, `householder_apply` (all arms, all shapes) | **usable**. Both faer rows and the vendor make the same kind of call (audit section 2); the `triangular_solve` 1.06-1.07x difference at n = 64/96 is not a harness difference the audit can see |
 | `qr_factor`, other than `n64`: fork vs upstream | **usable**. Both faer rows run the same in-place body |
-| `qr_factor` (other than `n64`), `qr`, `svd_values`, `svd_thin`, `eigh`: fork vs vendor | **one-sided**. The vendor row paid for a copy, workspace allocations and, for c order, transposes that the faer row did not, so "the fork is slower than MKL/OpenBLAS" stands as a lower bound on the gap, and "the fork is faster" is overstated. Quote only the first reading |
+| `qr_factor` (other than `n64`), `qr`, `svd_values`, `svd_thin`, `eigh`: fork vs vendor | **one-sided**. The vendor row paid for a copy, workspace allocations and, for c order, transposes that the faer row did not, so "the fork is slower than MKL/OpenBLAS" stands as a lower bound on the gap, and "the fork is faster" is overstated. Quote only the first reading. The joined view prints these cells as `withdrawn`, not as a ratio |
 | `qr`, `svd_values`, `svd_thin`, `eigh`: fork vs upstream | **usable with the audit's caveat**: the fork row is a hand-written mirror of the library route (audit section 2); the audit rates the effect low for these families but did not withdraw them |
 
 Nothing is withdrawn that the audit did not trace to a call; nothing the audit traced as unfair is left
 usable.
 
+### Where this status is enforced
+
+This file is prose a reader has to find. The machine-checked parts are:
+
+- `fbench/src/op.rs` fails the harness's own tests when a measured row allocates, frees or converts
+  layout inside the timed call, and when a vendored driver is measured in row order.
+- `scripts/gen_comparison.py` refuses to divide a page recorded before `FAIR_HARNESS` (the harness
+  that first charged both sides the same contract): those vendor ratio cells print `withdrawn` and
+  are left out of the median. The families are `WITHDRAWN_VENDOR_FAMILIES` -- the complement of the
+  usable list above -- so this table and the page cannot drift apart without one of them being edited.
+- `scripts/gen_site.py` says the same on the landing page while the current pages predate that
+  harness, because a reader who arrives there should not have to infer it from a column.
+- The per-arm Markdown pages under `result/` are the pinned toolkit's render of their run, tied to
+  `data/.../report.md` byte for byte by `campaign-check-generated`. They keep the numbers they always
+  had; this file is their status of record, and the joined view is where the comparison is withdrawn.
+
 ## Closing an entry
 
-Re-measure with a harness at or after `7bb8105` on the machine that recorded the dataset, publish
-through the usual recorder, and edit this file to say which pages replaced which. The old pages are not
-deleted.
+Re-measure with a harness at or after `0786e07` (the one that charges both sides the same contract) on
+the machine that recorded the dataset, publish through the usual recorder, and edit this file to say
+which pages replaced which. The old pages are not deleted. A new recording needs no edit to
+`scripts/gen_comparison.py`: its `harness.commit` is a descendant of `FAIR_HARNESS`, so the joined
+view prints the vendor ratios again.

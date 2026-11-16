@@ -22,10 +22,27 @@ It is a view over recorded data, not a new measurement: a cell that one arm does
 not carry is shown as a dash, and the per-arm Markdown pages plus their manifests
 stay authoritative for the control statement and the verification record.
 """
-import argparse, csv, html, pathlib, statistics, sys
+import argparse, csv, html, pathlib, statistics, subprocess, sys
 import yaml
 
 KEY = ('regime', 'family', 'dtype', 'order', 'm', 'n', 'k', 'batch', 'threads', 'note')
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+
+# The harness revision that first measured both sides of a vendor ratio on one contract: no
+# allocation and no layout conversion inside the timed run, the vendored drivers in column order
+# only, the owning faer routes labelled `api-inclusive` so they never pair with a vendor row
+# (`fbench/src/op.rs`, `benchmarks/suites/faer-kernels.yaml`). A page recorded before it holds
+# ratios in which the vendor row paid for a copy or a workspace the faer row did not, so those
+# cells are printed as withdrawn rather than as a current comparison.
+FAIR_HARNESS = '0786e074d7b30093c0e7116538b4f23e80cb58db'
+
+# The families whose vendor ratio a pre-fair harness could not measure on one contract. Its
+# complement is the audit's usable list -- `gemm` (CBLAS in row order moves no data),
+# `triangular_solve` and `householder_apply` called the same kind of primitive on both sides even
+# then -- so a family is withdrawn here or it is named usable in
+# `docs/measurement-audit-2026-11-06.md`, and the two cannot drift apart unnoticed.
+WITHDRAWN_VENDOR_FAMILIES = frozenset({'lu', 'full_piv_lu', 'solve', 'cholesky', 'qr_factor',
+                                       'qr', 'svd_values', 'svd_thin', 'eigh'})
 
 # What makes two runs "the same host". A ratio taken across hosts is not a vendor
 # comparison, so the identity is checked before anything is joined. Every published
@@ -330,6 +347,26 @@ def vendor_arm(label, run_dir):
                 manifest=manifest, cells=cells, skips=skips)
 
 
+def fair_harness(commit):
+    """Whether the harness that recorded an arm measured both sides of a vendor ratio on one contract.
+
+    At or after `FAIR_HARNESS` is fair. The question is put to this repository's history, because
+    every recorded `harness.commit` is a commit of it; when the history cannot answer -- a shallow
+    clone, or a commit it does not hold -- the answer is no, so a checkout that cannot tell withdraws
+    a ratio instead of printing a one-sided one as current.
+    """
+    if not commit:
+        return False
+    if commit == FAIR_HARNESS:
+        return True
+    try:
+        done = subprocess.run(['git', '-C', str(ROOT), 'merge-base', '--is-ancestor', FAIR_HARNESS,
+                               commit], capture_output=True)
+    except OSError:
+        return False
+    return done.returncode == 0
+
+
 def fmt(x):
     if x is None:
         return '-'
@@ -356,6 +393,13 @@ def cls(r):
     return ''
 
 
+def vendor_ratio_cell(r, field):
+    """A vendor ratio cell: the ratio, or `withdrawn` when the harness could not measure it fairly."""
+    if r['withdrawn']:
+        return '<td class="wd">withdrawn</td>'
+    return f'<td{cls(r[field])}>{fmt(r[field])}</td>'
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument('--mkl', required=True, help='run directory of the three-engine arm')
@@ -368,6 +412,10 @@ def main(argv=None):
     ctrl = control(args.control_mkl, args.mkl) if args.control_mkl else None
     ob = vendor_arm('openblas', args.openblas)
     identity = require_one_protocol([mkl, ob])
+    # One harness recorded both arms -- `require_one_protocol` refuses a pair that disagrees on the
+    # revision -- so whether these ratios were measured on one contract is asked once.
+    harness = (mkl['manifest'].get('harness') or {}).get('commit')
+    fair = fair_harness(harness)
 
     keys = sorted(set(mkl['cells']) | set(ob['cells']))
     rows = []
@@ -379,8 +427,14 @@ def main(argv=None):
         # `upstream/fork` and `MKL/fork` divide the fork the MKL arm measured, `OpenBLAS/fork` the
         # one the OpenBLAS arm measured. Dividing by a fork another arm measured would print a
         # ratio whose denominator the reader cannot see.
+        # A ratio the harness could not measure on one contract is not printed: the vendor row paid
+        # inside its timed call for work the faer row did not, so the two numbers are kept as
+        # recorded and the comparison between them is withdrawn.
+        withdrawn = not fair and key[1] in WITHDRAWN_VENDOR_FAMILIES
         rows.append(dict(key=key, fork_m=fork_m, fork_o=fork_o, up=up, mk=mk, obl=obl,
-                         r_up=ratio(up, fork_m), r_ob=ratio(obl, fork_o), r_mk=ratio(mk, fork_m)))
+                         r_up=ratio(up, fork_m), withdrawn=withdrawn,
+                         r_ob=None if withdrawn else ratio(obl, fork_o),
+                         r_mk=None if withdrawn else ratio(mk, fork_m)))
 
     # summary over the cells each arm carries: that is where its baseline row exists
     mkl_pairs = [r for r in rows if r['fork_m'] and r['up']]
@@ -388,6 +442,34 @@ def main(argv=None):
     med_up = statistics.median([r['up'] / r['fork_m'] for r in mkl_pairs]) if mkl_pairs else None
     med_ob = statistics.median([r['obl'] / r['fork_o'] for r in ob_pairs]) if ob_pairs else None
     unmeasured, unmeasured_families = unmeasured_cells([mkl, ob])
+    # The cells whose ratio is actually on the page: a family without a vendor row in this
+    # recording has no ratio to withdraw, and the note must not claim otherwise.
+    withdrawn_cells = [r for r in rows if r['withdrawn'] and (r['mk'] or r['obl'])]
+    ob_rows = [r for r in rows if r['fork_o'] and r['obl']]   # carries a vendor row, withdrawn or not
+    ob_families = sorted({r['key'][1] for r in ob_pairs})
+
+    withdrawn_html = ''
+    if withdrawn_cells:
+        families = sorted({r['key'][1] for r in withdrawn_cells})
+        withdrawn_html = (
+            '<p class="withdrawn"><strong>Withdrawn vendor comparison.</strong> These arms were '
+            f'recorded by harness <code>{html.escape(str(harness)[:12])}</code>, which is not at or '
+            f'after the harness that charged both sides of a vendor ratio the same contract '
+            f'(<code>{FAIR_HARNESS[:12]}</code>): it predates it, or this checkout cannot place it in '
+            f'the history. '
+            'The vendor ratio cells of '
+            f'<code>{html.escape(", ".join(families))}</code> say <em>withdrawn</em>: the vendor row '
+            'paid inside its timed call for a workspace, an output copy or a layout change that the '
+            'faer row did not, so dividing the two numbers measures the route, not the library. The '
+            'times stay as recorded and are left out of the median. '
+            '<a href="https://github.com/tensor4all/colmat-benchmark/blob/main/docs/dataset-status.md">'
+            'docs/dataset-status.md</a> is the status of record and '
+            '<code>docs/measurement-audit-2026-11-06.md</code> the finding-by-finding resolution; a '
+            'page recorded at or after the fairness harness prints these ratios again.</p>\n'
+            f'<p class="note">{len(withdrawn_cells)} of {len(rows)} cells carry a withdrawn vendor '
+            'ratio and are not in the OpenBLAS median below'
+            + (f', which covers <code>{html.escape(", ".join(ob_families))}</code>' if ob_families else '')
+            + '.</p>\n')
 
     control_html = ''
     if ctrl:
@@ -422,6 +504,7 @@ def main(argv=None):
  th {{ background: #f5f5f5; font-weight: 600; position: sticky; top: 0; }}
  td.k, th.k {{ text-align: left; }}
  td.win {{ background: #e7f6e7; }} td.loss {{ background: #fbe9e9; }}
+ td.wd {{ color: #888; font-style: italic; }} p.withdrawn {{ border-left: 3px solid #c80; background: #fdf7e8; padding: .5rem .8rem; max-width: 70rem; }}
  .note {{ color: #555; max-width: 70rem; }} code {{ background: #f2f2f2; padding: 0 .2rem; }}
 </style></head><body>
 <h1>{html.escape(title)}</h1>
@@ -444,6 +527,7 @@ the fork is faster; the cells outside 0.95-1.05 are tinted.</p>
  <li>recorded: <code>{library['timestamp']}</code> (MKL arm) and <code>{ob['manifest']['timestamp']}</code> (OpenBLAS arm)</li>
  <li>harness <code>{library['harness']['commit'][:12]}</code>, toolkit <code>{library['toolkit']['commit'][:12]}</code></li>
 </ul>
+{withdrawn_html}
 {control_html}
 <p class="note">The two arms are joined on one host under one measurement protocol: the host, the
 machine's power state, the idle guard, the timing policy, the CPU set of every thread budget each
@@ -464,8 +548,9 @@ timestamps differ by design and are not compared.</p>
         'row\'s ratio against a baseline run) lives in each arm\'s own page, and the verification record in its\n'
         'manifest. A dash means that arm did not carry the cell.</p>\n'
         f'<p class="note">Cells with a baseline row: {len(mkl_pairs)} against <code>faer-upstream</code>, '
-        f'{len(ob_pairs)} against <code>lapack-openblas</code>. Median baseline/fork ratio (above 1.00 '
-        f'means the fork is faster): upstream {fmt(med_up)}, OpenBLAS {fmt(med_ob)}.</p>\n')
+        f'{len(ob_rows)} against <code>lapack-openblas</code>. Median baseline/fork ratio (above 1.00 '
+        f'means the fork is faster): upstream {fmt(med_up)}, '
+        f'OpenBLAS {fmt(med_ob) if ob_pairs else "withdrawn" if withdrawn_cells else "-"}.</p>\n')
 
     by_regime = {}
     for r in rows:
@@ -489,8 +574,8 @@ timestamps differ by design and are not compared.</p>
                 f'<td class="k">{html.escape(shape)}{html.escape(label)}</td>'
                 f'<td>{key[2]}</td><td>{key[3]}</td><td>{key[8]}</td>'
                 f'<td>{fmt(r["fork_m"])}</td><td>{fmt(r["up"])}</td><td{cls(r["r_up"])}>{fmt(r["r_up"])}</td>'
-                f'<td>{fmt(r["fork_o"])}</td><td>{fmt(r["obl"])}</td><td{cls(r["r_ob"])}>{fmt(r["r_ob"])}</td>'
-                f'<td>{fmt(r["mk"])}</td><td{cls(r["r_mk"])}>{fmt(r["r_mk"])}</td></tr>')
+                f'<td>{fmt(r["fork_o"])}</td><td>{fmt(r["obl"])}</td>{vendor_ratio_cell(r, "r_ob")}'
+                f'<td>{fmt(r["mk"])}</td>{vendor_ratio_cell(r, "r_mk")}</tr>')
         parts.append('</tbody></table>')
 
     parts.append('</body></html>\n')

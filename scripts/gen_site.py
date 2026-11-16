@@ -102,6 +102,24 @@ is preserved locally and explicitly excluded from this publication. One rejected
 </section>'''
     extra += f'<p><strong>Release caveat:</strong> {html.escape(CAVEAT)}</p>\n'
     extra += f'<p><strong>Known limitation:</strong> {html.escape(LIMITATION)}</p>\n'
+    # The pages below were recorded by a harness that charged the vendor arms for work the faer arms
+    # avoided (#74), so their vendor ratios are not library comparisons. The joined view withdraws
+    # those cells (gen_comparison.FAIR_HARNESS); a reader who lands here must not have to infer it
+    # from a column, so the landing page says it too -- and stops saying it once the current pages
+    # were recorded by a fair harness.
+    arms, _control = current_arms()
+    if any(not gen_comparison.fair_harness(load(arm / 'run.yaml').get('harness', {}).get('commit'))
+           for arm in arms.values()):
+        extra += (
+            '<h2>Vendor comparisons are withdrawn</h2>\n'
+            '<p>The harness that recorded these pages charged the vendor arms more than the faer arms:\n'
+            'a LAPACKE workspace, output copies and layout transposes inside the timed call, where the\n'
+            'faer rows ran prepared. A <code>MKL/fork</code> or <code>OpenBLAS/fork</code> cell on these\n'
+            'pages is therefore not a library comparison. The four-way view marks those cells\n'
+            '<em>withdrawn</em>; <a href="https://github.com/tensor4all/colmat-benchmark/blob/main/'
+            'docs/dataset-status.md">docs/dataset-status.md</a> is the status of record; the harness\n'
+            'now charges both sides the same contract, so the next recording prints these ratios\n'
+            'again.</p>\n')
     if comparison is not None:
         cells = len(re.findall(r'<tr><td class="k">', comparison.read_text()))
         rel = comparison.relative_to(index.parent)

@@ -271,7 +271,10 @@ macro_rules! define_backend {
                 match family {
                     "gemm" => Ok(vec![gemm_op::<T>(m, case.k.unwrap_or(m), n, batch, order)?]),
                     "qr_factor" => Ok(vec![qr_factor_op::<T>(m, n, batch, order)?]),
-                    "qr" => Ok(vec![qr_op::<T>(m, n, batch, order)?]),
+                    "qr" => Ok(vec![
+                        qr_op::<T>(m, n, batch, order)?,
+                        qr_in_place_op::<T>(m, n, batch, order)?,
+                    ]),
                     // The LU factors are defined for a rectangular matrix too:
                     // `dgetrf` takes any shape and faer's `lu_in_place` does as
                     // well, with `min(m, n)` pivots and a trapezoidal `L` or
@@ -719,15 +722,142 @@ macro_rules! define_backend {
 
             // ------------------------------------------- in_place routes (one body, both faer rows)
 
-            // `lu`, `cholesky` and `solve` are timed twice on each faer row. The op with an empty
-            // note is the owning route (`PartialPivLu::new`, `Llt::new`, `partial_piv_lu().solve()`
-            // upstream; the fork's composite rebuild of them). The op noted `in_place` is this text,
-            // expanded identically for both crates: the matrix (and right-hand side), the
-            // permutations and a `MemStack` sized by the library's own `*_scratch` are allocated
-            // once, before the clock; `prepare` restores the input into them; the timed call is the
-            // in-place factorization (and solve) alone, on the input's own layout (a row-major
-            // input is factored where it is). The vendor row's `lu`, `cholesky` and `solve` are the
-            // same kind of call. See docs/reliable-measurement.md, "Allocation and the clock".
+            // `lu`, `cholesky`, `solve`, `full_piv_lu`, `qr`, `svd_values`, `svd_thin` and `eigh`
+            // are timed twice on each faer row. The op with an EMPTY note is the allocation-free
+            // route -- this text, expanded identically for both crates: the matrix (and
+            // right-hand side), the permutations, the outputs and a `MemStack` sized by the
+            // library's own `*_scratch` are allocated once, before the clock; `prepare` restores
+            // the input into them; the timed call is the in-place factorization (and solve, and
+            // output formation) alone, on the input's own layout (a row-major input is factored
+            // where it is). The op noted `api-inclusive` is the owning route
+            // (`PartialPivLu::new`, `Llt::new`, `partial_piv_lu().solve()` upstream; the fork's
+            // composite rebuild of them): the library allocates its outputs and its scratch
+            // inside the timed call, so that row is API cost, not kernel cost, and it is a
+            // labelled secondary row -- never divided against a vendor row. The vendor row's
+            // `lu`, `cholesky`, `solve`, `qr`, `svd_*` and `eigh` are the empty-note kind of call
+            // (prepared workspace, prepared outputs). See docs/reliable-measurement.md,
+            // "Allocation and the clock".
+
+            /// `qr` through the allocation-free route: the factorisation on a prepared buffer, then
+            /// the block-Householder sequence applied to a prepared `Q`. `R` is the factor buffer's
+            /// upper trapezoid, which the apply only reads, so both are the direct outputs of the
+            /// two calls -- the same contract the vendor row times (`geqrf_work`, then
+            /// `ormqr_work` into a prepared identity block).
+            fn qr_in_place_op<T: Scalar + ComplexField>(
+                m: usize,
+                n: usize,
+                batch: usize,
+                order: Order,
+            ) -> Result<Op, String> {
+                let size = m.min(n);
+                let block_size = qrf::recommended_block_size::<T>(m, n);
+                let a0 = fill_seeded::<T>(m * n * batch, seed(m, n, 3));
+                let par = cfg_par();
+                let scratch = StackReq::all_of(&[
+                    qrf::qr_in_place_scratch::<T>(m, n, block_size, parmod::shape(par), Default::default()),
+                    householder::apply_block_householder_sequence_on_the_left_in_place_scratch::<T>(
+                        m,
+                        size,
+                        size,
+                    ),
+                ]);
+                struct S<T> {
+                    a: Vec<T>,
+                    a0: Vec<T>,
+                    q: Vec<T>,
+                    qc: Vec<T>,
+                    mem: MemBuffer,
+                    m: usize,
+                    n: usize,
+                    block_size: usize,
+                    size: usize,
+                    batch: usize,
+                    order: Order,
+                    par: ParCfg,
+                }
+                let state = S {
+                    a: a0.clone(),
+                    a0,
+                    q: vec![T::zero(); m * size * batch],
+                    qc: vec![T::zero(); block_size * size * batch],
+                    mem: MemBuffer::new(scratch),
+                    m,
+                    n,
+                    block_size,
+                    size,
+                    batch,
+                    order,
+                    par,
+                };
+                Ok(op_from(
+                    state,
+                    String::new(),
+                    |s| {
+                        s.a.copy_from_slice(&s.a0);
+                        s.qc.fill(T::zero());
+                        s.q.fill(T::zero());
+                        for bi in 0..s.batch {
+                            let q = &mut s.q[bi * s.m * s.size..(bi + 1) * s.m * s.size];
+                            for i in 0..s.size {
+                                q[idx(i, i, s.m, s.size, s.order)] = T::one();
+                            }
+                        }
+                        Ok(())
+                    },
+                    |s, mut tk| {
+                        for bi in 0..s.batch {
+                            let a = mmut(&mut s.a[bi * s.m * s.n..], s.m, s.n, s.order);
+                            let qc = mmut(
+                                &mut s.qc[bi * s.block_size * s.size..],
+                                s.block_size,
+                                s.size,
+                                Order::F,
+                            );
+                            let q = mmut(
+                                &mut s.q[bi * s.m * s.size..],
+                                s.m,
+                                s.size,
+                                s.order,
+                            );
+                            qrf::qr_in_place(
+                                a,
+                                qc,
+                                parmod::mk_from(&mut tk, s.par),
+                                MemStack::new(&mut s.mem),
+                                Default::default(),
+                            );
+                            householder::apply_block_householder_sequence_on_the_left_in_place_with_conj(
+                                mref(&s.a[bi * s.m * s.n..], s.m, s.n, s.order).get(.., ..s.size),
+                                mref(&s.qc[bi * s.block_size * s.size..], s.block_size, s.size, Order::F),
+                                Conj::No,
+                                q,
+                                parmod::mk_from(&mut tk, s.par),
+                                MemStack::new(&mut s.mem),
+                            );
+                        }
+                        Ok(())
+                    },
+                    |s| {
+                        for bi in 0..s.batch {
+                            let a0 = &s.a0[bi * s.m * s.n..(bi + 1) * s.m * s.n];
+                            let a = &s.a[bi * s.m * s.n..(bi + 1) * s.m * s.n];
+                            let q = &s.q[bi * s.m * s.size..(bi + 1) * s.m * s.size];
+                            let mut r = vec![T::zero(); s.size * s.n];
+                            for i in 0..s.size {
+                                for j in i..s.n {
+                                    r[idx(i, j, s.size, s.n, s.order)] =
+                                        a[idx(i, j, s.m, s.n, s.order)];
+                                }
+                            }
+                            let mut recon = vec![T::zero(); s.m * s.n];
+                            mul(s.m, s.size, s.n, s.order, q, &r, &mut recon);
+                            within::<T>(max_diff(a0, &recon), frob(a0), s.n.max(s.m), "qr")?;
+                            within::<T>(gram_residual(q, s.m, s.size, s.order), 1.0, s.m, "qr Q")?;
+                        }
+                        Ok(())
+                    },
+                ))
+            }
 
             /// `(L, U)` of a packed LU, built element by element for the check (outside the clock).
             fn check_split_lu<T: ComplexField>(lu: MatRef<'_, T>) -> (fk::Mat<T>, fk::Mat<T>) {
@@ -802,7 +932,7 @@ macro_rules! define_backend {
                 };
                 Ok(op_from(
                     state,
-                    "in_place".to_owned(),
+                    String::new(),
                     |s| {
                         s.a.copy_from_slice(&s.a0);
                         for (fwd, bwd) in &mut s.perms {
@@ -861,7 +991,7 @@ macro_rules! define_backend {
                 let state = S { a: a0.clone(), a0, mem: MemBuffer::new(req), n, batch, order, par };
                 Ok(op_from(
                     state,
-                    "in_place".to_owned(),
+                    String::new(),
                     |s| {
                         s.a.copy_from_slice(&s.a0);
                         Ok(())
@@ -941,7 +1071,7 @@ macro_rules! define_backend {
                 };
                 Ok(op_from(
                     state,
-                    "in_place".to_owned(),
+                    String::new(),
                     |s| {
                         s.a.copy_from_slice(&s.a0);
                         s.b.copy_from_slice(&s.b0);
@@ -1052,7 +1182,7 @@ macro_rules! define_backend {
                 };
                 Ok(op_from(
                     state,
-                    "in_place".to_owned(),
+                    String::new(),
                     |s| {
                         s.a.copy_from_slice(&s.a0);
                         for p in &mut s.perms {
@@ -1138,7 +1268,7 @@ macro_rules! define_backend {
                 };
                 Ok(op_from(
                     state,
-                    "in_place".to_owned(),
+                    String::new(),
                     |s| {
                         for d in &mut s.sv {
                             d.as_mut().column_vector_mut().fill(T::zero_impl());
@@ -1232,7 +1362,7 @@ macro_rules! define_backend {
                 };
                 Ok(op_from(
                     state,
-                    "in_place".to_owned(),
+                    String::new(),
                     |s| {
                         for d in &mut s.sv {
                             d.as_mut().column_vector_mut().fill(T::zero_impl());
@@ -1319,7 +1449,7 @@ macro_rules! highlevel_ops {
                 };
                 Ok(op_from(
                     state,
-                    String::new(),
+                    "api-inclusive".to_owned(),
                     |s| {
                         s.stash.append(&mut s.outputs);
                         Ok(())
@@ -1391,7 +1521,7 @@ macro_rules! highlevel_ops {
                 };
                 Ok(op_from(
                     state,
-                    String::new(),
+                    "api-inclusive".to_owned(),
                     |s| {
                         s.stash.append(&mut s.lus);
                         Ok(())
@@ -1445,7 +1575,7 @@ macro_rules! highlevel_ops {
                 };
                 Ok(op_from(
                     state,
-                    String::new(),
+                    "api-inclusive".to_owned(),
                     |s| {
                         s.stash.append(&mut s.lus);
                         Ok(())
@@ -1501,7 +1631,7 @@ macro_rules! highlevel_ops {
                 };
                 Ok(op_from(
                     state,
-                    String::new(),
+                    "api-inclusive".to_owned(),
                     |s| { s.stash.append(&mut s.outputs); Ok(()) },
                     |s, _tk| {
                         s.stash.clear(); // the previous call's outputs are freed inside the clock
@@ -1550,7 +1680,7 @@ macro_rules! highlevel_ops {
                 };
                 Ok(op_from(
                     state,
-                    String::new(),
+                    "api-inclusive".to_owned(),
                     |s| {
                         s.b.copy_from_slice(&s.b0);
                         Ok(())
@@ -1668,7 +1798,7 @@ macro_rules! highlevel_ops {
                 };
                 Ok(op_from(
                     state,
-                    String::new(),
+                    "api-inclusive".to_owned(),
                     |s| { s.stash.append(&mut s.outputs); Ok(()) },
                     |s, _tk| {
                         s.stash.clear(); // the previous call's outputs are freed inside the clock
@@ -1749,7 +1879,7 @@ macro_rules! highlevel_ops {
                 };
                 Ok(op_from(
                     state,
-                    String::new(),
+                    "api-inclusive".to_owned(),
                     |s| { s.stash.append(&mut s.outputs); Ok(()) },
                     |s, _tk| {
                         s.stash.clear(); // the previous call's outputs are freed inside the clock
@@ -1806,7 +1936,7 @@ macro_rules! highlevel_ops {
                 };
                 Ok(op_from(
                     state,
-                    String::new(),
+                    "api-inclusive".to_owned(),
                     |s| { s.stash.append(&mut s.outputs); Ok(()) },
                     |s, _tk| {
                         s.stash.clear(); // the previous call's outputs are freed inside the clock
@@ -1959,7 +2089,7 @@ macro_rules! explicit_ops {
             };
             Ok(op_from(
                 state,
-                String::new(),
+                "api-inclusive".to_owned(),
                 |s| {
                     s.stash.append(&mut s.outputs);
                     Ok(())
@@ -2051,7 +2181,7 @@ macro_rules! explicit_ops {
             };
             Ok(op_from(
                 state,
-                String::new(),
+                "api-inclusive".to_owned(),
                 |s| {
                     s.stash.append(&mut s.lus);
                     Ok(())
@@ -2119,7 +2249,7 @@ macro_rules! explicit_ops {
             };
             Ok(op_from(
                 state,
-                String::new(),
+                "api-inclusive".to_owned(),
                 |s| {
                     s.stash.append(&mut s.lus);
                     Ok(())
@@ -2208,7 +2338,7 @@ macro_rules! explicit_ops {
             };
             Ok(op_from(
                 state,
-                String::new(),
+                "api-inclusive".to_owned(),
                 |s| {
                     s.stash.append(&mut s.outputs);
                     Ok(())
@@ -2297,7 +2427,7 @@ macro_rules! explicit_ops {
             };
             Ok(op_from(
                 state,
-                String::new(),
+                "api-inclusive".to_owned(),
                 |s| {
                     s.b.copy_from_slice(&s.b0);
                     Ok(())
@@ -2429,7 +2559,7 @@ macro_rules! explicit_ops {
             };
             Ok(op_from(
                 state,
-                String::new(),
+                "api-inclusive".to_owned(),
                 |s| {
                     s.stash.append(&mut s.outputs);
                     Ok(())
@@ -2505,7 +2635,7 @@ macro_rules! explicit_ops {
             };
             Ok(op_from(
                 state,
-                String::new(),
+                "api-inclusive".to_owned(),
                 |s| {
                     s.stash.append(&mut s.outputs);
                     Ok(())
@@ -2588,7 +2718,7 @@ macro_rules! explicit_ops {
             };
             Ok(op_from(
                 state,
-                String::new(),
+                "api-inclusive".to_owned(),
                 |s| {
                     s.stash.append(&mut s.outputs);
                     Ok(())

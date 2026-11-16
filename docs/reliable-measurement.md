@@ -93,54 +93,64 @@ and one coefficient block; multi-panel sequences are not covered.
 
 ## Allocation and the clock
 
-Every buffer the harness owns is allocated before the clock, once per op, and reused by every
-priming and timed call: inputs and their references, the caller buffers a vendor routine works in
-(`ipiv`, `tau`, singular values and vectors, eigenvalues, the explicit `R`), the faer `in_place`
-routes' matrix, right-hand side, permutations and `MemStack` (sized by the library's own
-`*_scratch`), and the comparison arms' buffers. For `lu`, `cholesky` and `solve` every row makes
-the same kind of call: `prepare` restores the input into the prepared buffer, outside the clock,
-and the timed call is the in-place factorization (and solve) alone - `getrf`/`potrf`/`gesv` on
-the vendor row, and on both faer rows one shared body (`define_backend!`, noted `in_place`) calling
-`lu_in_place`, `cholesky_in_place` and `solve_in_place_with_conj` on the input's own layout. The
-vendor row turns LAPACKE's input NaN scan off (`LAPACKE_set_nancheck(0)`, checked at startup);
-what LAPACKE still does for itself, such as a row-major transpose and its workspace, is the
-vendor's cost and stays inside. The owning faer routes (the op with an empty `note`:
-`PartialPivLu::new`, `Llt::new`, `partial_piv_lu().solve()` upstream and the fork's composite
-rebuild of them) are kept as the call a user makes; what they allocate is the library's cost and is
-never hoisted, so those cells move with the allocator's state (a 16 MB heap trim at n = 1024 is
-about 3 ms) and are not the comparison with the vendor row; their previous outputs are freed
-inside the clock, so a call is charged for the free that its allocation implies. The faer
-`in_place` routes exist for `full_piv_lu`, `svd_values`, `svd_thin` and `eigh` as well, written
-once in `define_backend!` for both faer rows: the matrix and permutations (`full_piv_lu`) or the
-outputs `S`, `U`, `V` (`svd`, `eigh`) and the `MemStack` sized by the library's own `*_scratch` are
-allocated before the clock, and the decompositions run straight on the input, which they read
-without modifying. The vendor row's `gesdd` and `syevd`/`heevd` overwrite their input, so `prepare`
-restores it into a prepared buffer and the timed call is the driver alone. No row keeps an input
-copy inside the clock except an owning faer route, whose copy is the library's. Because buffers are
-reused, `prepare` restores or spoils each
-retained result, so a check can only pass on what the timed call wrote. No case may depend on the
-allocator's adaptive behaviour: a measurement is not repaired with `MALLOC_*` or any other
-allocator setting, and a cell that moves with process history is traced to the allocation inside
-its clock. Numbers recorded before this rule are not comparable for these cells.
+**No primary row allocates, frees or converts layout inside its timed `run`** (rule from
+`docs/measurement-audit-2026-11-06.md` fix 7, enforced by `fbench`'s `no_row_allocates_inside_run`
+and `vendor_drivers_are_column_major_only`). One rule for every family and every arm, so a ratio
+is never the difference between two harness choices:
+
+- Every buffer is allocated before the clock, once per op, and reused by every priming and timed
+  call: inputs and their references, the caller workspace a vendor driver works in (`LAPACKE_*_work`,
+  sized by a `lwork = -1` query at op construction, plus `ipiv`/`tau`/`iwork`/`rwork`), the outputs
+  a driver writes (`S`, `U`, `Vt`, eigenvalues, eigenvectors, the explicit `Q`), the faer in-place
+  routes' matrix, right-hand side, permutations and `MemStack` (sized by the library's own
+  `*_scratch`), and both arms' reference buffers.
+- For `lu`, `cholesky`, `solve`, `qr`, `svd_values`, `svd_thin` and `eigh` every row makes the same
+  kind of call: `prepare` restores the input into the prepared buffer, outside the clock, and the
+  timed call is the decomposition (and solve, and output formation) alone -- `getrf_work`,
+  `potrf_work`, `gesv_work`, `geqrf_work` + `ormqr_work`, `gesdd_work`, `syevd_work`/`heevd_work` on
+  the vendor row; on both faer rows one shared body (`define_backend!`) calling `lu_in_place`,
+  `cholesky_in_place`, `solve_in_place_with_conj`, `full_piv_lu_in_place`, `qr_in_place` +
+  `apply_block_householder_sequence_on_the_left_in_place`, `self_adjoint_evd` and the thin SVD's
+  in-place route, each on the input's own layout. The harness converts nothing; a copy a *library*
+  makes inside its call is its own cost (the fork's row-major LU factors into a column-major copy it
+  allocates, `lu/partial_pivoting/factor.rs:396-418`), and it is never divided against a vendor row:
+  a row-major cell of a vendored driver family is a `skipped` cell.
+- The vendor row turns LAPACKE's input NaN scan off (`LAPACKE_set_nancheck(0)`, checked at startup),
+  and a vendored driver family is measured column-major only: LAPACKE's row-major path allocates a
+  transposed copy and transposes in and out of it inside the call in every `_work` variant, so a
+  C-order cell of such a family is `skipped` with that reason instead of being charged a conversion
+  the faer row does not pay. `gemm` keeps both orders (CBLAS's row-major entry point moves no data).
+- The owning faer routes (`PartialPivLu::new`, `Llt::new`, `qr`'s owning Q and R, the `gesdd`/
+  `syevd` wrappers, `partial_piv_lu().solve()` upstream, and the fork's composite rebuild of them)
+  are kept as the call a user makes, but labelled **`api-inclusive`**: the library allocates the
+  outputs and its scratch inside the timed call, so that row is API cost, not kernel cost. The
+  joined page keys its cells on `note` (`KEY` in `scripts/gen_comparison.py`), so an `api-inclusive`
+  row is never put in the same ratio as an empty-note row; it is published as a labelled secondary
+  table and never headline a vendor ratio. The allocation-free rows carry an empty `note`.
+- Because buffers are reused, `prepare` restores or spoils each retained result, so a check can only
+  pass on what the timed call wrote. No case may depend on the allocator's adaptive behaviour: a
+  measurement is not repaired with `MALLOC_*` or any other allocator setting, and a cell that moves
+  with process history is traced to the allocation inside its clock. Numbers recorded before this
+  rule are not comparable for these cells.
 
 ### Route differences that remain
 
-- **`qr` (explicit Q and R) has no vendor row.** The faer rows return an owning Q and R, which is what
-  the family declares and a legitimate contract; a vendor row can be made to pay the same only by
-  preparing Q and R on one side and letting the library allocate on the other, which compares two
-  harness choices rather than two libraries. The decision is to record the difference, not to bend an
-  arm: the vendor row reports `qr` as `skipped` with that reason, no `qr` ratio against `lapack-*`
-  is claimed, and `qr_factor` (`geqrf` against `qr_in_place`, both on prepared buffers) is the
-  like-for-like QR comparison. The two faer rows are still compared with each other on `qr`, both
-  owning.
-- **Row-major input on the vendor row.** For C order, LAPACKE allocates a work copy and transposes in and
-  out of it inside the call (reference `_work.c`; MKL's LAPACKE was not inspected, so that is unverified
-  for MKL). That cost is intrinsic to the row-major entry point, stays inside the clock and is not
-  present for F order. A C-order vendor ratio therefore includes a cost the F-order one does not; the
-  faer rows factor a row-major input where it is.
+- **`f32`/`c32`**: the vendor arm has a `gemm` route in those two dtypes only, and reports the
+  LAPACK families as `skipped` for them; the faer rows have no such gap.
+- **Families with no vendor route** (`triangular_solve`, `full_piv_lu`, `householder_apply`,
+  `upgrade_factor`, `eig`) are recorded as `skipped` with that reason and carry no `lapack-*` ratio.
+  The difference is a property of the libraries, and the harness does not invent a vendor call to
+  make the rows line up.
 - **A route difference between arms is a property to record, not to fix away.** When two arms make
   different kinds of call, the page says so (note, skip reason, this section) and the ratio is read
   with it; the harness does not add or remove work on one arm until the numbers agree.
+- **A page recorded before this rule does not print the ratios it could not measure fairly.** The
+  joined view (`scripts/gen_comparison.py`) compares each arm's recorded `harness.commit` with
+  `FAIR_HARNESS`, the harness that first charged both sides of a vendor ratio the same contract: at
+  or after it the ratios are printed, before it (or when the checkout cannot place the commit) the
+  vendor ratio cells of the families this contract changed say `withdrawn`, the numbers stay as
+  recorded, and they are left out of the median. The per-arm Markdown pages are the toolkit's render
+  of their run and are not edited by hand; `docs/dataset-status.md` is their status of record.
 
 ## Adoption gate
 
