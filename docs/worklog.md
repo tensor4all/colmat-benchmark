@@ -55,6 +55,24 @@ rounds, `CHANGES` -> all findings answered) and on the finished branch (`CHANGES
 `MKL_Mem_Stat` claim, one stale suite statement, one stale sentence in `timing-policy.md`, and the
 missing plan record — all four resolved as described above).
 
+The post-change review raised one more: a *published* page still printed the one-sided ratio, and
+this PR said it was withdrawn only in prose. The joined view now enforces what this file says.
+`scripts/gen_comparison.py` takes the recorded `harness.commit` of each arm and compares it with
+`FAIR_HARNESS` (the commit that carries this change): at or after it the ratio is printed, before it
+— or when the checkout cannot place the commit, such as a shallow clone — the vendor ratio cells of
+the families this contract changed print `withdrawn`, the recorded times stay, and those cells are
+left out of the median. The families are `WITHDRAWN_VENDOR_FAMILIES`, the complement of the audit's
+usable list (`gemm`, `triangular_solve`, `householder_apply`), so the page and
+`docs/dataset-status.md` cannot drift apart without one of them being edited; `scripts/gen_site.py`
+says the same on the landing page. The per-arm Markdown pages stay the toolkit's render — they are
+tied to their run's `report.md` byte for byte, so editing them here would fail
+`campaign-check-generated` — and `docs/dataset-status.md` remains their status of record. The same
+review found the `note`/cell-key pointer named a toolkit module instead of `scripts/gen_comparison.py`
+(`KEY`); that pointer is corrected here and in `fbench/src/op.rs`.
+
+`IMPLEMENTATION-PLAN.md` is not part of the diff (it stays untracked in the worktree): the plan is
+the record of the design round, and the diff is the change.
+
 ## 2026-11-13 — the repository is renamed `faer-benchmark` -> `colmat-benchmark`
 
 A GitHub rename, not a recreation: issues, PRs and history are kept, and `github.com/tensor4all/faer-benchmark`

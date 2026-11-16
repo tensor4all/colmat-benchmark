@@ -18,9 +18,9 @@ a `MemStack` sized by the library's own `*_scratch`. A faer row that times only 
 own-in-the-API call (`PartialPivLu::new`, `Llt::new`, owning `qr`, the `gesdd`/`syevd`
 wrappers) carries the `api-inclusive` note: those rows are API cost, they are
 published as a labelled secondary table, and they are never divided against a
-vendor row. The report keys cells on `note`, so a note mismatch is a different
-cell and not a ratio. LAPACKE's row-major path allocates a transposed copy inside
-the call, so a vendored driver family is measured column-major only and its
+vendor row. The joined page keys cells on `note`, so a note mismatch is a
+different cell and not a ratio. LAPACKE's row-major path allocates a transposed copy inside the call, so a
+vendored driver family is measured column-major only and its
 C-order cell is `skipped` with the reason; `gemm` keeps both orders. `fbench`
 enforces the harness half with `no_row_allocates_inside_run` (a counting
 allocator armed around `Op::run`) and the vendor half with

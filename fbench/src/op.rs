@@ -505,9 +505,9 @@ mod tests {
         }
     }
 
-    /// **The page divides like with like.** The report's cell key includes the `note`
-    /// (`campaign_toolkit/timing_evidence.py`, `report_run.py`), so the note is what decides
-    /// whether two rows are put in one ratio. Two rules follow and are checked here:
+    /// **The page divides like with like.** The joined page's cell key includes the `note`
+    /// (`KEY` in `scripts/gen_comparison.py`), so the note is what decides whether two rows are put
+    /// in one ratio. Two rules follow and are checked here:
     ///
     /// * a faer row that times two routes emits the owning one as `api-inclusive` and the
     ///   allocation-free one with an EMPTY note, so the vendor row (empty note) can only pair with

@@ -111,7 +111,10 @@ is never the difference between two harness choices:
   the vendor row; on both faer rows one shared body (`define_backend!`) calling `lu_in_place`,
   `cholesky_in_place`, `solve_in_place_with_conj`, `full_piv_lu_in_place`, `qr_in_place` +
   `apply_block_householder_sequence_on_the_left_in_place`, `self_adjoint_evd` and the thin SVD's
-  in-place route, each on the input's own layout (a row-major input is factored where it is).
+  in-place route, each on the input's own layout. The harness converts nothing; a copy a *library*
+  makes inside its call is its own cost (the fork's row-major LU factors into a column-major copy it
+  allocates, `lu/partial_pivoting/factor.rs:396-418`), and it is never divided against a vendor row:
+  a row-major cell of a vendored driver family is a `skipped` cell.
 - The vendor row turns LAPACKE's input NaN scan off (`LAPACKE_set_nancheck(0)`, checked at startup),
   and a vendored driver family is measured column-major only: LAPACKE's row-major path allocates a
   transposed copy and transposes in and out of it inside the call in every `_work` variant, so a
@@ -121,10 +124,9 @@ is never the difference between two harness choices:
   `syevd` wrappers, `partial_piv_lu().solve()` upstream, and the fork's composite rebuild of them)
   are kept as the call a user makes, but labelled **`api-inclusive`**: the library allocates the
   outputs and its scratch inside the timed call, so that row is API cost, not kernel cost. The
-  report keys its cells on `note` (`campaign_toolkit/timing_evidence.py`, `report_run.py`), so an
-  `api-inclusive` row is never put in the same ratio as an empty-note row; it is published as a
-  labelled secondary table and never headline a vendor ratio. The allocation-free rows carry an
-  empty `note`.
+  joined page keys its cells on `note` (`KEY` in `scripts/gen_comparison.py`), so an `api-inclusive`
+  row is never put in the same ratio as an empty-note row; it is published as a labelled secondary
+  table and never headline a vendor ratio. The allocation-free rows carry an empty `note`.
 - Because buffers are reused, `prepare` restores or spoils each retained result, so a check can only
   pass on what the timed call wrote. No case may depend on the allocator's adaptive behaviour: a
   measurement is not repaired with `MALLOC_*` or any other allocator setting, and a cell that moves
@@ -142,6 +144,13 @@ is never the difference between two harness choices:
 - **A route difference between arms is a property to record, not to fix away.** When two arms make
   different kinds of call, the page says so (note, skip reason, this section) and the ratio is read
   with it; the harness does not add or remove work on one arm until the numbers agree.
+- **A page recorded before this rule does not print the ratios it could not measure fairly.** The
+  joined view (`scripts/gen_comparison.py`) compares each arm's recorded `harness.commit` with
+  `FAIR_HARNESS`, the harness that first charged both sides of a vendor ratio the same contract: at
+  or after it the ratios are printed, before it (or when the checkout cannot place the commit) the
+  vendor ratio cells of the families this contract changed say `withdrawn`, the numbers stay as
+  recorded, and they are left out of the median. The per-arm Markdown pages are the toolkit's render
+  of their run and are not edited by hand; `docs/dataset-status.md` is their status of record.
 
 ## Adoption gate
 

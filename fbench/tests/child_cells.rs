@@ -172,7 +172,7 @@ fn a_finished_run_writes_one_ok_row_per_variant() {
 /// builds anything, and it says what it ended up with.
 ///
 /// The registry arm this repository builds in CI links no vendor library, so `--threads 2` is
-/// refused outright (by the parent too, before this change); a vendor arm reports `vendor=Some(2)`.
+/// refused outright (by the parent too, before this change); a vendor arm reports `vendor=Some(1)`.
 /// The vendor field is asserted either way, because a `link-*` build is not the CI arm and this test
 /// is not the place to pin which binary it was handed.
 #[test]

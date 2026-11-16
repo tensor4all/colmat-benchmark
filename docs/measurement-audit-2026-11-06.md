@@ -231,3 +231,13 @@ single-threaded probe (`benchmarks/suites/faer-kernels.yaml`, `known_blind_spots
 Numbers published before this change are **not** re-interpreted: the cells this audit withdrew
 (`docs/dataset-status.md`) stay withdrawn until the page is regenerated from fresh raw data, and
 that regeneration is a separate step, not part of the harness change.
+
+One thing the harness change cannot do by itself is stop an *already published* page from printing
+the old ratio. The joined view does not wait for a re-recording: `scripts/gen_comparison.py`
+compares each arm's recorded `harness.commit` with `FAIR_HARNESS` (this change) and, for a page
+recorded before it, prints `withdrawn` in the vendor ratio cells of the families above and keeps
+them out of the median -- the times stay as recorded, the division that measured the route is not
+shown as current. The per-arm Markdown pages are the pinned toolkit's render of their run, tied to
+`data/.../report.md` byte for byte by `campaign-check-generated`, so they are not rewritten here;
+`docs/dataset-status.md` is their status of record, and the landing page says the same in prose
+(`scripts/gen_site.py`).

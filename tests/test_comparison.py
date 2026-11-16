@@ -8,6 +8,7 @@ import contextlib
 import io
 import pathlib
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -28,6 +29,8 @@ HOST = {'hostname': 'EVO-X2', 'cpu': 'AMD RYZEN AI MAX+ 395', 'os': 'Linux 6.17'
         'arch': 'x86_64', 'logical_cpus': 32, 'power': dict(POWER)}
 COMMIT = '2b87010cb82efbe0a90eceeb51931a833e1de8e6'
 UPSTREAM = '0539947ffb757a739d7e703a7d2fa0c792a909c1'
+# The harness of the recording this change answers (#74).
+PRE_FAIR_HARNESS = '7bb8105cae25186ef3108745cc7a626532d8981d'
 
 
 def manifest(vendor, host=None, result_files=(), **overrides):
@@ -42,7 +45,10 @@ def manifest(vendor, host=None, result_files=(), **overrides):
         'upstream': {'commit': UPSTREAM, 'ref': 'faer-v0.24.4', 'version': '0.24.4'},
         'vendor': {'name': vendor, 'linkage': 'shared',
                    'version': '2026.2' if vendor == 'mkl' else '0.3.32'},
-        'harness': {'commit': '7bb8105cae25186ef3108745cc7a626532d8981d', 'dirty': False},
+        # The fixture's default harness is the one that first charged both sides of a vendor ratio
+        # the same contract, so a test that says nothing about the harness sees ratios. A test about
+        # withdrawal overrides it with a pre-fair revision.
+        'harness': {'commit': gen_comparison.FAIR_HARNESS, 'dirty': False},
         'toolkit': {'commit': 'c2e98df904d3987888c0d66353c18c095fbcbd35', 'dirty': False},
         'host': dict(host or HOST),
         'threads': {'cpu_sets': {'1': '8', '8': '8-15'},
@@ -102,9 +108,12 @@ class ComparisonTest(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def generate(self, mkl_rows, ob_rows, extra=(), **ob_overrides):
-        mkl = write_run(self.dir / 'mkl', 'mkl', mkl_rows)
-        ob = write_run(self.dir / 'openblas', 'openblas', ob_rows, **ob_overrides)
+    def generate(self, mkl_rows, ob_rows, extra=(), harness=None, **ob_overrides):
+        # `harness` is the revision both arms record; it decides whether this page may print a
+        # vendor ratio at all (see gen_comparison.fair_harness).
+        overrides = {} if harness is None else {'harness': {'commit': harness}}
+        mkl = write_run(self.dir / 'mkl', 'mkl', mkl_rows, **overrides)
+        ob = write_run(self.dir / 'openblas', 'openblas', ob_rows, **{**overrides, **ob_overrides})
         self.log = io.StringIO()
         with contextlib.redirect_stdout(self.log):
             self.assertEqual(gen_comparison.main(['--mkl', str(mkl), '--openblas', str(ob),
@@ -363,6 +372,56 @@ class ComparisonTest(unittest.TestCase):
         self.assertIn('one host', str(raised.exception))
         self.assertIn('some-other-host', str(raised.exception))
         self.assertFalse(self.out.exists())
+
+    def test_a_pre_fair_harness_withdraws_the_vendor_ratios_it_could_not_measure_fairly(self):
+        # Recorded by a harness that charged the vendor row for a workspace and an output copy the
+        # faer row did not: the times stay, the division does not, and the OpenBLAS median is not
+        # taken over cells whose two numbers are not one contract.
+        page = self.generate(mkl_set(10.0, 12.0, 100.0),
+                             [cell('lu', 'faer-fork', 10.0), cell('lu', 'lapack-openblas', 50.0),
+                              cell('cholesky', 'faer-fork', 10.0, order='f'),
+                              cell('cholesky', 'lapack-openblas', 50.0, order='f')],
+                             harness=PRE_FAIR_HARNESS)
+        self.assertIn('Withdrawn vendor comparison', page)
+        self.assertIn('<td class="wd">withdrawn</td>', page)
+        self.assertIn('<td>50.00</td>', page)         # the recorded vendor time is kept
+        self.assertNotIn('>5.000<', page)             # 50/10 is not printed
+        self.assertIn('Median baseline/fork ratio (above 1.00 means the fork is faster): upstream '
+                      '1.200, OpenBLAS withdrawn', page)
+        self.assertIn('docs/dataset-status.md', page)
+
+    def test_a_pre_fair_harness_keeps_the_families_it_measured_on_one_contract(self):
+        # gemm in row order moves no data on either side, so its vendor ratio was already the same
+        # contract and the withdrawal is per family, not a blanket silence on the page.
+        page = self.generate([cell('gemm', 'faer-fork', 10.0), cell('gemm', 'faer-upstream', 12.0),
+                              cell('gemm', 'lapack-mkl', 20.0)],
+                             [cell('gemm', 'faer-fork', 10.0),
+                              cell('gemm', 'lapack-openblas', 30.0)],
+                             harness=PRE_FAIR_HARNESS)
+        self.assertNotIn('Withdrawn vendor comparison', page)
+        self.assertNotIn('class="wd"', page)
+        self.assertIn('>3.000<', page)
+        self.assertIn('OpenBLAS 3.000', page)
+
+    def test_a_harness_the_history_cannot_place_is_not_certified(self):
+        # A checkout that cannot answer the ancestry question (a shallow clone, an unknown object)
+        # withdraws the ratio instead of printing a one-sided one as current.
+        page = self.generate(mkl_set(10.0, 12.0, 100.0),
+                             [cell('lu', 'faer-fork', 10.0), cell('lu', 'lapack-openblas', 50.0)],
+                             harness='0' * 40)
+        self.assertIn('Withdrawn vendor comparison', page)
+        self.assertIn('<td class="wd">withdrawn</td>', page)
+
+    def test_the_certified_harness_is_a_commit_of_this_repository(self):
+        # The equality shortcut and the fail-closed fallback mean a mistyped FAIR_HARNESS would
+        # withdraw every page and keep this suite green: ask git that the constant resolves, and
+        # that the fixture's pre-fair harness sits on the other side of it.
+        resolved = subprocess.run(['git', '-C', str(ROOT), 'cat-file', '-e',
+                                   gen_comparison.FAIR_HARNESS + '^{commit}'], capture_output=True)
+        self.assertEqual(resolved.returncode, 0,
+                         f'{gen_comparison.FAIR_HARNESS} is not a commit of this repository')
+        self.assertTrue(gen_comparison.fair_harness(gen_comparison.FAIR_HARNESS))
+        self.assertFalse(gen_comparison.fair_harness(PRE_FAIR_HARNESS))
 
     def test_the_table_body_is_pinned(self):
         # The body for the two runs below, byte for byte. It is the guard that a ratio cannot
