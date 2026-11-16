@@ -73,6 +73,22 @@ review found the `note`/cell-key pointer named a toolkit module instead of `scri
 `IMPLEMENTATION-PLAN.md` is not part of the diff (it stays untracked in the worktree): the plan is
 the record of the design round, and the diff is the change.
 
+A third review found two more, and the first of them was real the moment the branch landed. The gate
+keys on `FAIR_HARNESS`, a SHA the branch adds; #75 was **squashed** (`695232b`), so the point the
+constant named never reached `main`'s history. Nothing printed a wrong ratio -- the gate fails closed
+-- but a page recorded at or after the fairness harness would have been withdrawn forever, and the
+deploy log carried the `WARNING` on every run. The constant is re-pinned to `695232b`, and the rule is
+now the observable one rather than an assumption about the merge strategy: **`FAIR_HARNESS` is a
+commit of `main`**, re-pinned to the landed commit whenever the change carrying it lands by squash;
+`tests/test_comparison.py` fails when it is not on `main`'s history, the generator warns on stderr when
+the commit is missing from the checkout, and `docs/dataset-status.md`, `docs/reliable-measurement.md`
+and the audit's section 7 say the same. A capability marker recorded in `run.yaml` was rejected: the
+manifest that would carry it is the recorder's (the toolkit's, not this repository's), the
+already-recorded manifests have none, and writing one by hand would fabricate a record. The other
+finding was a lost heading: `docs/dataset-status.md` had dropped `## 2026-11-06: pages recorded before
+#49` when the #74 section was inserted above it, leaving a "see the next section" pointer at nothing;
+it is restored, newest first, and the cross-reference now names the tables instead of a direction.
+
 ## 2026-11-13 — the repository is renamed `faer-benchmark` -> `colmat-benchmark`
 
 A GitHub rename, not a recreation: issues, PRs and history are kept, and `github.com/tensor4all/faer-benchmark`

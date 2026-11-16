@@ -34,7 +34,14 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 # (`fbench/src/op.rs`, `benchmarks/suites/faer-kernels.yaml`). A page recorded before it holds
 # ratios in which the vendor row paid for a copy or a workspace the faer row did not, so those
 # cells are printed as withdrawn rather than as a current comparison.
-FAIR_HARNESS = '0786e074d7b30093c0e7116538b4f23e80cb58db'
+#
+# It must be a commit of `main`, not of a branch: a squash rewrites the SHAs of the landed change
+# (#75 landed as 695232b), and a constant left on a branch-only commit orphans it -- then no recorded
+# harness can be placed after it and every vendor ratio is withdrawn. So the constant is re-pinned to
+# the landed commit whenever the change that carries it lands by squash, `fair_harness` says so on
+# stderr when the commit is not in the checkout, and `tests/test_comparison.py` fails when it is not
+# on `main`'s history. Stated publicly in `docs/dataset-status.md` and `docs/reliable-measurement.md`.
+FAIR_HARNESS = '695232be7c1dc43b56e518ae1b7ce813e045e005'
 
 # The families whose vendor ratio a pre-fair harness could not measure on one contract. Its
 # complement is the audit's usable list -- `gemm` (CBLAS in row order moves no data),
@@ -347,24 +354,36 @@ def vendor_arm(label, run_dir):
                 manifest=manifest, cells=cells, skips=skips)
 
 
+def git(*args):
+    """The return code of one git question, or None when this host cannot ask it."""
+    try:
+        return subprocess.run(['git', '-C', str(ROOT), *args], capture_output=True).returncode
+    except OSError:
+        return None
+
+
 def fair_harness(commit):
     """Whether the harness that recorded an arm measured both sides of a vendor ratio on one contract.
 
     At or after `FAIR_HARNESS` is fair. The question is put to this repository's history, because
     every recorded `harness.commit` is a commit of it; when the history cannot answer -- a shallow
     clone, or a commit it does not hold -- the answer is no, so a checkout that cannot tell withdraws
-    a ratio instead of printing a one-sided one as current.
+    a ratio instead of printing a one-sided one as current. `FAIR_HARNESS` itself has to be on that
+    history -- it is a commit of `main`, re-pinned to the landed commit when the campaign squashes the
+    change that carries it; when it is not, nothing can be certified and the withdrawal is stated on
+    stderr with the one-line fix, so an orphaned constant does not turn into a silent withdrawal.
     """
     if not commit:
         return False
     if commit == FAIR_HARNESS:
         return True
-    try:
-        done = subprocess.run(['git', '-C', str(ROOT), 'merge-base', '--is-ancestor', FAIR_HARNESS,
-                               commit], capture_output=True)
-    except OSError:
+    if git('cat-file', '-e', FAIR_HARNESS + '^{commit}') != 0:
+        print(f'WARNING: {FAIR_HARNESS} (FAIR_HARNESS) is not a commit this checkout holds -- a '
+              'shallow clone, or the fairness change was squashed or rebased away. Every vendor ratio '
+              'is withdrawn. Keep that commit on the history of main, or re-pin FAIR_HARNESS to the '
+              'landed commit.', file=sys.stderr)
         return False
-    return done.returncode == 0
+    return git('merge-base', '--is-ancestor', FAIR_HARNESS, commit) == 0
 
 
 def fmt(x):
