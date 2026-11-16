@@ -7,6 +7,25 @@
 //! layout argument, so the `order` axis is a native route, not a transpose the
 //! harness performs.
 //!
+//! # No allocation and no layout conversion inside the clock
+//!
+//! The measured call must not allocate (docs/reliable-measurement.md,
+//! "Allocation and the clock"): every driver is called through its `_work` entry
+//! point with a workspace this module owns, sized once at op construction and
+//! stored in the op's state. The non-`_work` wrappers allocate that workspace per
+//! call (`lapacke_dgesdd.c`, `lapacke_dsyevd.c`, `lapacke_dgeqrf.c`), which is
+//! exactly the tax the comparison must not contain.
+//!
+//! The LAPACK drivers also run **column-major only**, because LAPACKE's row-major
+//! path allocates a transposed copy and transposes in and out of it *inside* the
+//! call — in every `_work` variant (reference `lapacke_dgeqrf_work.c:70-92`), so
+//! no argument removes it. A C-order cell of a driver family therefore has no
+//! route that leaves the clock allocation- and conversion-free, and it is
+//! reported as `skipped` with that reason instead of as a number: the faer rows
+//! factor a row-major input where it is, so a C-order vendor number would charge
+//! a copy to one side only. `gemm` keeps both orders: CBLAS's row-major entry
+//! point reorders its operands and moves no data.
+//!
 //! The complex ABI is the one flat 16-byte `{re, im}` struct MKL documents as
 //! `lapack_complex_double`/`MKL_Complex16`; `num_complex::Complex64` is that
 //! layout. (An OpenBLAS built with C99 `double complex` would differ, which is
@@ -29,6 +48,8 @@ mod imp {
     const JOB_S: c_char = b'S' as c_char;
     const JOB_V: c_char = b'V' as c_char;
     const UPLO_L: c_char = b'L' as c_char;
+    const SIDE_L: c_char = b'L' as c_char;
+    const TRANS_N: c_char = b'N' as c_char;
     const CBLAS_NO_TRANS: i32 = 111;
 
     unsafe extern "C" {
@@ -96,17 +117,30 @@ mod imp {
             c: *mut c_void,
             ldc: i32,
         );
-        fn LAPACKE_dgeqrf(layout: i32, m: i32, n: i32, a: *mut f64, lda: i32, tau: *mut f64)
-            -> i32;
-        fn LAPACKE_zgeqrf(
+        // The `_work` entry points: the caller owns the workspace. Prototypes are
+        // MKL's `mkl_lapacke.h` and the vendored netlib `lapacke.h`, which agree
+        // on every one of them except that only the complex `gesdd` takes `rwork`.
+        fn LAPACKE_dgeqrf_work(
+            layout: i32,
+            m: i32,
+            n: i32,
+            a: *mut f64,
+            lda: i32,
+            tau: *mut f64,
+            work: *mut f64,
+            lwork: i32,
+        ) -> i32;
+        fn LAPACKE_zgeqrf_work(
             layout: i32,
             m: i32,
             n: i32,
             a: *mut Complex64,
             lda: i32,
             tau: *mut Complex64,
+            work: *mut Complex64,
+            lwork: i32,
         ) -> i32;
-        fn LAPACKE_dorgqr(
+        fn LAPACKE_dorgqr_work(
             layout: i32,
             m: i32,
             n: i32,
@@ -114,8 +148,10 @@ mod imp {
             a: *mut f64,
             lda: i32,
             tau: *const f64,
+            work: *mut f64,
+            lwork: i32,
         ) -> i32;
-        fn LAPACKE_zungqr(
+        fn LAPACKE_zungqr_work(
             layout: i32,
             m: i32,
             n: i32,
@@ -123,8 +159,42 @@ mod imp {
             a: *mut Complex64,
             lda: i32,
             tau: *const Complex64,
+            work: *mut Complex64,
+            lwork: i32,
         ) -> i32;
-        fn LAPACKE_dgetrf(
+        #[allow(clippy::too_many_arguments)]
+        fn LAPACKE_dormqr_work(
+            layout: i32,
+            side: c_char,
+            trans: c_char,
+            m: i32,
+            n: i32,
+            k: i32,
+            a: *const f64,
+            lda: i32,
+            tau: *const f64,
+            c: *mut f64,
+            ldc: i32,
+            work: *mut f64,
+            lwork: i32,
+        ) -> i32;
+        #[allow(clippy::too_many_arguments)]
+        fn LAPACKE_zunmqr_work(
+            layout: i32,
+            side: c_char,
+            trans: c_char,
+            m: i32,
+            n: i32,
+            k: i32,
+            a: *const Complex64,
+            lda: i32,
+            tau: *const Complex64,
+            c: *mut Complex64,
+            ldc: i32,
+            work: *mut Complex64,
+            lwork: i32,
+        ) -> i32;
+        fn LAPACKE_dgetrf_work(
             layout: i32,
             m: i32,
             n: i32,
@@ -132,7 +202,7 @@ mod imp {
             lda: i32,
             ipiv: *mut i32,
         ) -> i32;
-        fn LAPACKE_zgetrf(
+        fn LAPACKE_zgetrf_work(
             layout: i32,
             m: i32,
             n: i32,
@@ -140,31 +210,16 @@ mod imp {
             lda: i32,
             ipiv: *mut i32,
         ) -> i32;
-        fn LAPACKE_dgetrs(
+        fn LAPACKE_dpotrf_work(layout: i32, uplo: c_char, n: i32, a: *mut f64, lda: i32) -> i32;
+        fn LAPACKE_zpotrf_work(
             layout: i32,
-            trans: c_char,
+            uplo: c_char,
             n: i32,
-            nrhs: i32,
-            a: *const f64,
+            a: *mut Complex64,
             lda: i32,
-            ipiv: *const i32,
-            b: *mut f64,
-            ldb: i32,
         ) -> i32;
-        fn LAPACKE_zgetrs(
-            layout: i32,
-            trans: c_char,
-            n: i32,
-            nrhs: i32,
-            a: *const Complex64,
-            lda: i32,
-            ipiv: *const i32,
-            b: *mut Complex64,
-            ldb: i32,
-        ) -> i32;
-        fn LAPACKE_dpotrf(layout: i32, uplo: c_char, n: i32, a: *mut f64, lda: i32) -> i32;
-        fn LAPACKE_zpotrf(layout: i32, uplo: c_char, n: i32, a: *mut Complex64, lda: i32) -> i32;
-        fn LAPACKE_dgesdd(
+        #[allow(clippy::too_many_arguments)]
+        fn LAPACKE_dgesdd_work(
             layout: i32,
             jobz: c_char,
             m: i32,
@@ -176,8 +231,12 @@ mod imp {
             ldu: i32,
             vt: *mut f64,
             ldvt: i32,
+            work: *mut f64,
+            lwork: i32,
+            iwork: *mut i32,
         ) -> i32;
-        fn LAPACKE_zgesdd(
+        #[allow(clippy::too_many_arguments)]
+        fn LAPACKE_zgesdd_work(
             layout: i32,
             jobz: c_char,
             m: i32,
@@ -189,8 +248,13 @@ mod imp {
             ldu: i32,
             vt: *mut Complex64,
             ldvt: i32,
+            work: *mut Complex64,
+            lwork: i32,
+            rwork: *mut f64,
+            iwork: *mut i32,
         ) -> i32;
-        fn LAPACKE_dsyevd(
+        #[allow(clippy::too_many_arguments)]
+        fn LAPACKE_dsyevd_work(
             layout: i32,
             jobz: c_char,
             uplo: c_char,
@@ -198,8 +262,13 @@ mod imp {
             a: *mut f64,
             lda: i32,
             w: *mut f64,
+            work: *mut f64,
+            lwork: i32,
+            iwork: *mut i32,
+            liwork: i32,
         ) -> i32;
-        fn LAPACKE_zheevd(
+        #[allow(clippy::too_many_arguments)]
+        fn LAPACKE_zheevd_work(
             layout: i32,
             jobz: c_char,
             uplo: c_char,
@@ -207,8 +276,14 @@ mod imp {
             a: *mut Complex64,
             lda: i32,
             w: *mut f64,
+            work: *mut Complex64,
+            lwork: i32,
+            rwork: *mut f64,
+            lrwork: i32,
+            iwork: *mut i32,
+            liwork: i32,
         ) -> i32;
-        fn LAPACKE_dgesv(
+        fn LAPACKE_dgesv_work(
             layout: i32,
             n: i32,
             nrhs: i32,
@@ -218,7 +293,7 @@ mod imp {
             b: *mut f64,
             ldb: i32,
         ) -> i32;
-        fn LAPACKE_zgesv(
+        fn LAPACKE_zgesv_work(
             layout: i32,
             n: i32,
             nrhs: i32,
@@ -250,8 +325,14 @@ mod imp {
         );
     }
 
-    /// The vendor's LAPACK drivers.
+    /// The vendor's LAPACK drivers, every one through its `_work` entry point.
+    ///
+    /// `work`/`rwork`/`iwork` are the caller's: they are sized once, outside the
+    /// clock, by the `*_lwork`/`*_scratch` queries below and stored in the op.
     trait LapackScalar: LapackGemm {
+        /// The optimum a `lwork = -1` query returned, as an element count.
+        fn as_len(self) -> usize;
+
         fn geqrf(
             layout: i32,
             m: usize,
@@ -259,6 +340,7 @@ mod imp {
             a: &mut [Self],
             lda: i32,
             tau: &mut [Self],
+            work: &mut [Self],
         ) -> i32;
         fn orgqr(
             layout: i32,
@@ -268,6 +350,21 @@ mod imp {
             a: &mut [Self],
             lda: i32,
             tau: &[Self],
+            work: &mut [Self],
+        ) -> i32;
+        /// `C <- Q C` with the `k` Householder reflectors `geqrf` left in `a`.
+        #[allow(clippy::too_many_arguments)]
+        fn ormqr(
+            layout: i32,
+            m: usize,
+            ncols: usize,
+            k: usize,
+            a: &[Self],
+            lda: i32,
+            tau: &[Self],
+            c: &mut [Self],
+            ldc: i32,
+            work: &mut [Self],
         ) -> i32;
         fn getrf(
             layout: i32,
@@ -277,16 +374,16 @@ mod imp {
             lda: i32,
             ipiv: &mut [i32],
         ) -> i32;
-        fn getrs(
+        fn potrf(layout: i32, n: usize, a: &mut [Self], lda: i32) -> i32;
+        fn gesv(
             layout: i32,
             n: usize,
-            a: &[Self],
+            a: &mut [Self],
             lda: i32,
-            ipiv: &[i32],
+            ipiv: &mut [i32],
             b: &mut [Self],
             ldb: i32,
         ) -> i32;
-        fn potrf(layout: i32, n: usize, a: &mut [Self], lda: i32) -> i32;
         #[allow(clippy::too_many_arguments)]
         fn gesdd(
             layout: i32,
@@ -300,18 +397,30 @@ mod imp {
             ldu: i32,
             vt: &mut [Self],
             ldvt: i32,
+            work: &mut [Self],
+            rwork: &mut [f64],
+            iwork: &mut [i32],
         ) -> i32;
-        fn evd(layout: i32, jobz: c_char, n: usize, a: &mut [Self], lda: i32, w: &mut [f64])
-            -> i32;
-        fn gesv(
+        fn evd(
             layout: i32,
+            jobz: c_char,
             n: usize,
             a: &mut [Self],
             lda: i32,
-            ipiv: &mut [i32],
-            b: &mut [Self],
-            ldb: i32,
+            w: &mut [f64],
+            work: &mut [Self],
+            rwork: &mut [f64],
+            iwork: &mut [i32],
         ) -> i32;
+
+        /// The workspace sizes the reference wrapper would have allocated for itself.
+        fn geqrf_scratch(m: usize, n: usize) -> usize;
+        fn orgqr_scratch(m: usize, n: usize, k: usize) -> usize;
+        fn ormqr_scratch(m: usize, ncols: usize, k: usize) -> usize;
+        /// `(work, rwork, iwork)` for `gesdd`.
+        fn gesdd_scratch(m: usize, n: usize, thin: bool) -> (usize, usize, usize);
+        /// `(work, rwork, iwork)` for `syevd`/`heevd`.
+        fn evd_scratch(n: usize) -> (usize, usize, usize);
     }
 
     impl LapackGemm for f64 {
@@ -351,15 +460,29 @@ mod imp {
     }
 
     impl LapackScalar for f64 {
-        fn geqrf(layout: i32, m: usize, n: usize, a: &mut [f64], lda: i32, tau: &mut [f64]) -> i32 {
+        fn as_len(self) -> usize {
+            self as usize
+        }
+
+        fn geqrf(
+            layout: i32,
+            m: usize,
+            n: usize,
+            a: &mut [f64],
+            lda: i32,
+            tau: &mut [f64],
+            work: &mut [f64],
+        ) -> i32 {
             unsafe {
-                LAPACKE_dgeqrf(
+                LAPACKE_dgeqrf_work(
                     layout,
                     m as i32,
                     n as i32,
                     a.as_mut_ptr(),
                     lda,
                     tau.as_mut_ptr(),
+                    work.as_mut_ptr(),
+                    work.len() as i32,
                 )
             }
         }
@@ -371,9 +494,10 @@ mod imp {
             a: &mut [f64],
             lda: i32,
             tau: &[f64],
+            work: &mut [f64],
         ) -> i32 {
             unsafe {
-                LAPACKE_dorgqr(
+                LAPACKE_dorgqr_work(
                     layout,
                     m as i32,
                     n as i32,
@@ -381,6 +505,38 @@ mod imp {
                     a.as_mut_ptr(),
                     lda,
                     tau.as_ptr(),
+                    work.as_mut_ptr(),
+                    work.len() as i32,
+                )
+            }
+        }
+        fn ormqr(
+            layout: i32,
+            m: usize,
+            ncols: usize,
+            k: usize,
+            a: &[f64],
+            lda: i32,
+            tau: &[f64],
+            c: &mut [f64],
+            ldc: i32,
+            work: &mut [f64],
+        ) -> i32 {
+            unsafe {
+                LAPACKE_dormqr_work(
+                    layout,
+                    SIDE_L,
+                    TRANS_N,
+                    m as i32,
+                    ncols as i32,
+                    k as i32,
+                    a.as_ptr(),
+                    lda,
+                    tau.as_ptr(),
+                    c.as_mut_ptr(),
+                    ldc,
+                    work.as_mut_ptr(),
+                    work.len() as i32,
                 )
             }
         }
@@ -393,7 +549,7 @@ mod imp {
             ipiv: &mut [i32],
         ) -> i32 {
             unsafe {
-                LAPACKE_dgetrf(
+                LAPACKE_dgetrf_work(
                     layout,
                     m as i32,
                     n as i32,
@@ -403,31 +559,30 @@ mod imp {
                 )
             }
         }
-        fn getrs(
+        fn potrf(layout: i32, n: usize, a: &mut [f64], lda: i32) -> i32 {
+            unsafe { LAPACKE_dpotrf_work(layout, UPLO_L, n as i32, a.as_mut_ptr(), lda) }
+        }
+        fn gesv(
             layout: i32,
             n: usize,
-            a: &[f64],
+            a: &mut [f64],
             lda: i32,
-            ipiv: &[i32],
+            ipiv: &mut [i32],
             b: &mut [f64],
             ldb: i32,
         ) -> i32 {
             unsafe {
-                LAPACKE_dgetrs(
+                LAPACKE_dgesv_work(
                     layout,
-                    JOB_N,
                     n as i32,
                     1,
-                    a.as_ptr(),
+                    a.as_mut_ptr(),
                     lda,
-                    ipiv.as_ptr(),
+                    ipiv.as_mut_ptr(),
                     b.as_mut_ptr(),
                     ldb,
                 )
             }
-        }
-        fn potrf(layout: i32, n: usize, a: &mut [f64], lda: i32) -> i32 {
-            unsafe { LAPACKE_dpotrf(layout, UPLO_L, n as i32, a.as_mut_ptr(), lda) }
         }
         #[allow(clippy::too_many_arguments)]
         fn gesdd(
@@ -442,9 +597,12 @@ mod imp {
             ldu: i32,
             vt: &mut [f64],
             ldvt: i32,
+            work: &mut [f64],
+            _rwork: &mut [f64],
+            iwork: &mut [i32],
         ) -> i32 {
             unsafe {
-                LAPACKE_dgesdd(
+                LAPACKE_dgesdd_work(
                     layout,
                     jobz,
                     m as i32,
@@ -456,12 +614,25 @@ mod imp {
                     ldu,
                     vt.as_mut_ptr(),
                     ldvt,
+                    work.as_mut_ptr(),
+                    work.len() as i32,
+                    iwork.as_mut_ptr(),
                 )
             }
         }
-        fn evd(layout: i32, jobz: c_char, n: usize, a: &mut [f64], lda: i32, w: &mut [f64]) -> i32 {
+        fn evd(
+            layout: i32,
+            jobz: c_char,
+            n: usize,
+            a: &mut [f64],
+            lda: i32,
+            w: &mut [f64],
+            work: &mut [f64],
+            _rwork: &mut [f64],
+            iwork: &mut [i32],
+        ) -> i32 {
             unsafe {
-                LAPACKE_dsyevd(
+                LAPACKE_dsyevd_work(
                     layout,
                     jobz,
                     UPLO_L,
@@ -469,30 +640,137 @@ mod imp {
                     a.as_mut_ptr(),
                     lda,
                     w.as_mut_ptr(),
+                    work.as_mut_ptr(),
+                    work.len() as i32,
+                    iwork.as_mut_ptr(),
+                    iwork.len() as i32,
                 )
             }
         }
-        fn gesv(
-            layout: i32,
-            n: usize,
-            a: &mut [f64],
-            lda: i32,
-            ipiv: &mut [i32],
-            b: &mut [f64],
-            ldb: i32,
-        ) -> i32 {
-            unsafe {
-                LAPACKE_dgesv(
-                    layout,
+
+        fn geqrf_scratch(m: usize, n: usize) -> usize {
+            let mut a = vec![0.0f64; m * n];
+            let mut tau = vec![0.0f64; m.min(n)];
+            let mut work = [0.0f64; 1];
+            // SAFETY: `lwork = -1` is the documented size query; it writes the
+            // optimum into `work[0]` and touches nothing else.
+            let info = unsafe {
+                LAPACKE_dgeqrf_work(
+                    COL_MAJOR,
+                    m as i32,
                     n as i32,
-                    1,
                     a.as_mut_ptr(),
-                    lda,
-                    ipiv.as_mut_ptr(),
-                    b.as_mut_ptr(),
-                    ldb,
+                    leading(m, n, Order::F),
+                    tau.as_mut_ptr(),
+                    work.as_mut_ptr(),
+                    -1,
                 )
-            }
+            };
+            debug_assert_eq!(info, 0, "geqrf size query failed");
+            work[0].as_len()
+        }
+        fn orgqr_scratch(m: usize, n: usize, k: usize) -> usize {
+            let mut a = vec![0.0f64; m * n];
+            let tau = vec![0.0f64; k];
+            let mut work = [0.0f64; 1];
+            let info = unsafe {
+                LAPACKE_dorgqr_work(
+                    COL_MAJOR,
+                    m as i32,
+                    n as i32,
+                    k as i32,
+                    a.as_mut_ptr(),
+                    leading(m, n, Order::F),
+                    tau.as_ptr(),
+                    work.as_mut_ptr(),
+                    -1,
+                )
+            };
+            debug_assert_eq!(info, 0, "orgqr size query failed");
+            work[0].as_len()
+        }
+        fn ormqr_scratch(m: usize, ncols: usize, k: usize) -> usize {
+            let a = vec![0.0f64; m * k];
+            let tau = vec![0.0f64; k];
+            let mut c = vec![0.0f64; m * ncols];
+            let mut work = [0.0f64; 1];
+            let info = unsafe {
+                LAPACKE_dormqr_work(
+                    COL_MAJOR,
+                    SIDE_L,
+                    TRANS_N,
+                    m as i32,
+                    ncols as i32,
+                    k as i32,
+                    a.as_ptr(),
+                    leading(m, k, Order::F),
+                    tau.as_ptr(),
+                    c.as_mut_ptr(),
+                    leading(m, ncols, Order::F),
+                    work.as_mut_ptr(),
+                    -1,
+                )
+            };
+            debug_assert_eq!(info, 0, "ormqr size query failed");
+            work[0].as_len()
+        }
+        fn gesdd_scratch(m: usize, n: usize, thin: bool) -> (usize, usize, usize) {
+            let r = m.min(n);
+            let mut a = vec![0.0f64; m * n];
+            let mut s = vec![0.0f64; r];
+            let (mut u, mut vt) = if thin {
+                (vec![0.0f64; m * r], vec![0.0f64; r * n])
+            } else {
+                (vec![0.0f64; 1], vec![0.0f64; 1])
+            };
+            // `gesdd` has no `liwork` parameter: the reference wrapper sizes `iwork`
+            // by formula and has no `rwork` at all for the real dtype.
+            let mut iwork = vec![0i32; 8 * r.max(1)];
+            let mut work = [0.0f64; 1];
+            let jobz = if thin { JOB_S } else { JOB_N };
+            let info = unsafe {
+                LAPACKE_dgesdd_work(
+                    COL_MAJOR,
+                    jobz,
+                    m as i32,
+                    n as i32,
+                    a.as_mut_ptr(),
+                    leading(m, n, Order::F),
+                    s.as_mut_ptr(),
+                    u.as_mut_ptr(),
+                    ld_u(m, r, Order::F),
+                    vt.as_mut_ptr(),
+                    ld_vt(r, n, Order::F),
+                    work.as_mut_ptr(),
+                    -1,
+                    iwork.as_mut_ptr(),
+                )
+            };
+            debug_assert_eq!(info, 0, "gesdd size query failed");
+            (work[0].as_len(), 0, iwork.len())
+        }
+        fn evd_scratch(n: usize) -> (usize, usize, usize) {
+            let mut a = vec![0.0f64; n * n];
+            let mut w = vec![0.0f64; n];
+            let mut work = [0.0f64; 1];
+            let mut iwork = [0i32; 1];
+            let info = unsafe {
+                LAPACKE_dsyevd_work(
+                    COL_MAJOR,
+                    JOB_V,
+                    UPLO_L,
+                    n as i32,
+                    a.as_mut_ptr(),
+                    leading(n, n, Order::F),
+                    w.as_mut_ptr(),
+                    work.as_mut_ptr(),
+                    -1,
+                    iwork.as_mut_ptr(),
+                    -1,
+                )
+            };
+            debug_assert_eq!(info, 0, "syevd size query failed");
+            (work[0].as_len(), 0, iwork[0].max(1) as usize)
         }
     }
 
@@ -569,6 +847,340 @@ mod imp {
         }
     }
 
+    impl LapackScalar for Complex64 {
+        fn as_len(self) -> usize {
+            self.re as usize
+        }
+
+        fn geqrf(
+            layout: i32,
+            m: usize,
+            n: usize,
+            a: &mut [Complex64],
+            lda: i32,
+            tau: &mut [Complex64],
+            work: &mut [Complex64],
+        ) -> i32 {
+            unsafe {
+                LAPACKE_zgeqrf_work(
+                    layout,
+                    m as i32,
+                    n as i32,
+                    a.as_mut_ptr(),
+                    lda,
+                    tau.as_mut_ptr(),
+                    work.as_mut_ptr(),
+                    work.len() as i32,
+                )
+            }
+        }
+        fn orgqr(
+            layout: i32,
+            m: usize,
+            n: usize,
+            k: usize,
+            a: &mut [Complex64],
+            lda: i32,
+            tau: &[Complex64],
+            work: &mut [Complex64],
+        ) -> i32 {
+            unsafe {
+                LAPACKE_zungqr_work(
+                    layout,
+                    m as i32,
+                    n as i32,
+                    k as i32,
+                    a.as_mut_ptr(),
+                    lda,
+                    tau.as_ptr(),
+                    work.as_mut_ptr(),
+                    work.len() as i32,
+                )
+            }
+        }
+        fn ormqr(
+            layout: i32,
+            m: usize,
+            ncols: usize,
+            k: usize,
+            a: &[Complex64],
+            lda: i32,
+            tau: &[Complex64],
+            c: &mut [Complex64],
+            ldc: i32,
+            work: &mut [Complex64],
+        ) -> i32 {
+            unsafe {
+                LAPACKE_zunmqr_work(
+                    layout,
+                    SIDE_L,
+                    TRANS_N,
+                    m as i32,
+                    ncols as i32,
+                    k as i32,
+                    a.as_ptr(),
+                    lda,
+                    tau.as_ptr(),
+                    c.as_mut_ptr(),
+                    ldc,
+                    work.as_mut_ptr(),
+                    work.len() as i32,
+                )
+            }
+        }
+        fn getrf(
+            layout: i32,
+            m: usize,
+            n: usize,
+            a: &mut [Complex64],
+            lda: i32,
+            ipiv: &mut [i32],
+        ) -> i32 {
+            unsafe {
+                LAPACKE_zgetrf_work(
+                    layout,
+                    m as i32,
+                    n as i32,
+                    a.as_mut_ptr(),
+                    lda,
+                    ipiv.as_mut_ptr(),
+                )
+            }
+        }
+        fn potrf(layout: i32, n: usize, a: &mut [Complex64], lda: i32) -> i32 {
+            unsafe { LAPACKE_zpotrf_work(layout, UPLO_L, n as i32, a.as_mut_ptr(), lda) }
+        }
+        fn gesv(
+            layout: i32,
+            n: usize,
+            a: &mut [Complex64],
+            lda: i32,
+            ipiv: &mut [i32],
+            b: &mut [Complex64],
+            ldb: i32,
+        ) -> i32 {
+            unsafe {
+                LAPACKE_zgesv_work(
+                    layout,
+                    n as i32,
+                    1,
+                    a.as_mut_ptr(),
+                    lda,
+                    ipiv.as_mut_ptr(),
+                    b.as_mut_ptr(),
+                    ldb,
+                )
+            }
+        }
+        #[allow(clippy::too_many_arguments)]
+        fn gesdd(
+            layout: i32,
+            jobz: c_char,
+            m: usize,
+            n: usize,
+            a: &mut [Complex64],
+            lda: i32,
+            s: &mut [f64],
+            u: &mut [Complex64],
+            ldu: i32,
+            vt: &mut [Complex64],
+            ldvt: i32,
+            work: &mut [Complex64],
+            rwork: &mut [f64],
+            iwork: &mut [i32],
+        ) -> i32 {
+            unsafe {
+                LAPACKE_zgesdd_work(
+                    layout,
+                    jobz,
+                    m as i32,
+                    n as i32,
+                    a.as_mut_ptr(),
+                    lda,
+                    s.as_mut_ptr(),
+                    u.as_mut_ptr(),
+                    ldu,
+                    vt.as_mut_ptr(),
+                    ldvt,
+                    work.as_mut_ptr(),
+                    work.len() as i32,
+                    rwork.as_mut_ptr(),
+                    iwork.as_mut_ptr(),
+                )
+            }
+        }
+        fn evd(
+            layout: i32,
+            jobz: c_char,
+            n: usize,
+            a: &mut [Complex64],
+            lda: i32,
+            w: &mut [f64],
+            work: &mut [Complex64],
+            rwork: &mut [f64],
+            iwork: &mut [i32],
+        ) -> i32 {
+            unsafe {
+                LAPACKE_zheevd_work(
+                    layout,
+                    jobz,
+                    UPLO_L,
+                    n as i32,
+                    a.as_mut_ptr(),
+                    lda,
+                    w.as_mut_ptr(),
+                    work.as_mut_ptr(),
+                    work.len() as i32,
+                    rwork.as_mut_ptr(),
+                    rwork.len() as i32,
+                    iwork.as_mut_ptr(),
+                    iwork.len() as i32,
+                )
+            }
+        }
+
+        fn geqrf_scratch(m: usize, n: usize) -> usize {
+            let mut a = vec![Complex64::zero(); m * n];
+            let mut tau = vec![Complex64::zero(); m.min(n)];
+            let mut work = [Complex64::zero(); 1];
+            let info = unsafe {
+                LAPACKE_zgeqrf_work(
+                    COL_MAJOR,
+                    m as i32,
+                    n as i32,
+                    a.as_mut_ptr(),
+                    leading(m, n, Order::F),
+                    tau.as_mut_ptr(),
+                    work.as_mut_ptr(),
+                    -1,
+                )
+            };
+            debug_assert_eq!(info, 0, "geqrf size query failed");
+            work[0].as_len()
+        }
+        fn orgqr_scratch(m: usize, n: usize, k: usize) -> usize {
+            let mut a = vec![Complex64::zero(); m * n];
+            let tau = vec![Complex64::zero(); k];
+            let mut work = [Complex64::zero(); 1];
+            let info = unsafe {
+                LAPACKE_zungqr_work(
+                    COL_MAJOR,
+                    m as i32,
+                    n as i32,
+                    k as i32,
+                    a.as_mut_ptr(),
+                    leading(m, n, Order::F),
+                    tau.as_ptr(),
+                    work.as_mut_ptr(),
+                    -1,
+                )
+            };
+            debug_assert_eq!(info, 0, "ungqr size query failed");
+            work[0].as_len()
+        }
+        fn ormqr_scratch(m: usize, ncols: usize, k: usize) -> usize {
+            let a = vec![Complex64::zero(); m * k];
+            let tau = vec![Complex64::zero(); k];
+            let mut c = vec![Complex64::zero(); m * ncols];
+            let mut work = [Complex64::zero(); 1];
+            let info = unsafe {
+                LAPACKE_zunmqr_work(
+                    COL_MAJOR,
+                    SIDE_L,
+                    TRANS_N,
+                    m as i32,
+                    ncols as i32,
+                    k as i32,
+                    a.as_ptr(),
+                    leading(m, k, Order::F),
+                    tau.as_ptr(),
+                    c.as_mut_ptr(),
+                    leading(m, ncols, Order::F),
+                    work.as_mut_ptr(),
+                    -1,
+                )
+            };
+            debug_assert_eq!(info, 0, "unmqr size query failed");
+            work[0].as_len()
+        }
+        fn gesdd_scratch(m: usize, n: usize, thin: bool) -> (usize, usize, usize) {
+            let r = m.min(n);
+            let mut a = vec![Complex64::zero(); m * n];
+            let mut s = vec![0.0f64; r];
+            let (mut u, mut vt) = if thin {
+                (
+                    vec![Complex64::zero(); m * r],
+                    vec![Complex64::zero(); r * n],
+                )
+            } else {
+                (vec![Complex64::zero(); 1], vec![Complex64::zero(); 1])
+            };
+            // `gesdd` has no `liwork` parameter, and the complex driver needs an
+            // `rwork` the `lwork = -1` query does not report: the reference wrapper
+            // sizes both by formula (`lapacke_zgesdd.c:53-57, 66-72`), and so does this.
+            let mut iwork = vec![0i32; 8 * r.max(1)];
+            let lrwork = if thin {
+                (r.max(1) * (5 * r + 7).max(2 * m.max(n) + 2 * r + 1)).max(1)
+            } else {
+                (7 * r).max(1)
+            };
+            let mut rwork = vec![0.0f64; lrwork];
+            let mut work = [Complex64::zero(); 1];
+            let jobz = if thin { JOB_S } else { JOB_N };
+            let info = unsafe {
+                LAPACKE_zgesdd_work(
+                    COL_MAJOR,
+                    jobz,
+                    m as i32,
+                    n as i32,
+                    a.as_mut_ptr(),
+                    leading(m, n, Order::F),
+                    s.as_mut_ptr(),
+                    u.as_mut_ptr(),
+                    ld_u(m, r, Order::F),
+                    vt.as_mut_ptr(),
+                    ld_vt(r, n, Order::F),
+                    work.as_mut_ptr(),
+                    -1,
+                    rwork.as_mut_ptr(),
+                    iwork.as_mut_ptr(),
+                )
+            };
+            debug_assert_eq!(info, 0, "gesdd size query failed");
+            (work[0].as_len(), rwork.len(), iwork.len())
+        }
+        fn evd_scratch(n: usize) -> (usize, usize, usize) {
+            let mut a = vec![Complex64::zero(); n * n];
+            let mut w = vec![0.0f64; n];
+            let mut work = [Complex64::zero(); 1];
+            let mut rwork = [0.0f64; 1];
+            let mut iwork = [0i32; 1];
+            let info = unsafe {
+                LAPACKE_zheevd_work(
+                    COL_MAJOR,
+                    JOB_V,
+                    UPLO_L,
+                    n as i32,
+                    a.as_mut_ptr(),
+                    leading(n, n, Order::F),
+                    w.as_mut_ptr(),
+                    work.as_mut_ptr(),
+                    -1,
+                    rwork.as_mut_ptr(),
+                    -1,
+                    iwork.as_mut_ptr(),
+                    -1,
+                )
+            };
+            debug_assert_eq!(info, 0, "heevd size query failed");
+            (
+                work[0].as_len(),
+                rwork[0] as usize,
+                iwork[0].max(1) as usize,
+            )
+        }
+    }
+
     impl LapackGemm for num_complex::Complex32 {
         fn gemm(
             layout: i32,
@@ -606,166 +1218,6 @@ mod imp {
         }
     }
 
-    impl LapackScalar for Complex64 {
-        fn geqrf(
-            layout: i32,
-            m: usize,
-            n: usize,
-            a: &mut [Complex64],
-            lda: i32,
-            tau: &mut [Complex64],
-        ) -> i32 {
-            unsafe {
-                LAPACKE_zgeqrf(
-                    layout,
-                    m as i32,
-                    n as i32,
-                    a.as_mut_ptr(),
-                    lda,
-                    tau.as_mut_ptr(),
-                )
-            }
-        }
-        fn orgqr(
-            layout: i32,
-            m: usize,
-            n: usize,
-            k: usize,
-            a: &mut [Complex64],
-            lda: i32,
-            tau: &[Complex64],
-        ) -> i32 {
-            unsafe {
-                LAPACKE_zungqr(
-                    layout,
-                    m as i32,
-                    n as i32,
-                    k as i32,
-                    a.as_mut_ptr(),
-                    lda,
-                    tau.as_ptr(),
-                )
-            }
-        }
-        fn getrf(
-            layout: i32,
-            m: usize,
-            n: usize,
-            a: &mut [Complex64],
-            lda: i32,
-            ipiv: &mut [i32],
-        ) -> i32 {
-            unsafe {
-                LAPACKE_zgetrf(
-                    layout,
-                    m as i32,
-                    n as i32,
-                    a.as_mut_ptr(),
-                    lda,
-                    ipiv.as_mut_ptr(),
-                )
-            }
-        }
-        fn getrs(
-            layout: i32,
-            n: usize,
-            a: &[Complex64],
-            lda: i32,
-            ipiv: &[i32],
-            b: &mut [Complex64],
-            ldb: i32,
-        ) -> i32 {
-            unsafe {
-                LAPACKE_zgetrs(
-                    layout,
-                    JOB_N,
-                    n as i32,
-                    1,
-                    a.as_ptr(),
-                    lda,
-                    ipiv.as_ptr(),
-                    b.as_mut_ptr(),
-                    ldb,
-                )
-            }
-        }
-        fn potrf(layout: i32, n: usize, a: &mut [Complex64], lda: i32) -> i32 {
-            unsafe { LAPACKE_zpotrf(layout, UPLO_L, n as i32, a.as_mut_ptr(), lda) }
-        }
-        #[allow(clippy::too_many_arguments)]
-        fn gesdd(
-            layout: i32,
-            jobz: c_char,
-            m: usize,
-            n: usize,
-            a: &mut [Complex64],
-            lda: i32,
-            s: &mut [f64],
-            u: &mut [Complex64],
-            ldu: i32,
-            vt: &mut [Complex64],
-            ldvt: i32,
-        ) -> i32 {
-            unsafe {
-                LAPACKE_zgesdd(
-                    layout,
-                    jobz,
-                    m as i32,
-                    n as i32,
-                    a.as_mut_ptr(),
-                    lda,
-                    s.as_mut_ptr(),
-                    u.as_mut_ptr(),
-                    ldu,
-                    vt.as_mut_ptr(),
-                    ldvt,
-                )
-            }
-        }
-        fn evd(
-            layout: i32,
-            jobz: c_char,
-            n: usize,
-            a: &mut [Complex64],
-            lda: i32,
-            w: &mut [f64],
-        ) -> i32 {
-            unsafe {
-                LAPACKE_zheevd(
-                    layout,
-                    jobz,
-                    UPLO_L,
-                    n as i32,
-                    a.as_mut_ptr(),
-                    lda,
-                    w.as_mut_ptr(),
-                )
-            }
-        }
-        fn gesv(
-            layout: i32,
-            n: usize,
-            a: &mut [Complex64],
-            lda: i32,
-            ipiv: &mut [i32],
-            b: &mut [Complex64],
-            ldb: i32,
-        ) -> i32 {
-            unsafe {
-                LAPACKE_zgesv(
-                    layout,
-                    n as i32,
-                    1,
-                    a.as_mut_ptr(),
-                    lda,
-                    ipiv.as_mut_ptr(),
-                    b.as_mut_ptr(),
-                    ldb,
-                )
-            }
-        }
-    }
-
     /// The row name the CSV carries: derived from what was linked, not requested.
     pub fn row_name() -> &'static str {
         if cfg!(feature = "link-mkl") {
@@ -782,6 +1234,18 @@ mod imp {
         }
     }
 
+    /// The layout a LAPACK driver is called with. Column-major only: LAPACKE's
+    /// row-major path copies and transposes inside the call, so it is not a route
+    /// this campaign measures (see the module comment, and `driver_cell`).
+    fn driver_layout(order: Order) -> i32 {
+        debug_assert_eq!(
+            order,
+            Order::F,
+            "a vendor LAPACK driver is called column-major only"
+        );
+        COL_MAJOR
+    }
+
     /// The leading dimension of an `m x n` buffer stored in `order`.
     fn leading(m: usize, n: usize, order: Order) -> i32 {
         match order {
@@ -789,6 +1253,20 @@ mod imp {
             Order::F => m as i32,
         }
     }
+
+    /// The families whose vendor route is a LAPACK driver, i.e. the ones that are
+    /// column-major only. `gemm` is not one: CBLAS's row-major entry point moves
+    /// no data and allocates nothing.
+    const DRIVER_FAMILIES: &[&str] = &[
+        "qr_factor",
+        "qr",
+        "lu",
+        "cholesky",
+        "solve",
+        "svd_values",
+        "svd_thin",
+        "eigh",
+    ];
 
     fn within<T: Scalar>(residual: f64, scale: f64, size: usize, what: &str) -> Result<(), String> {
         let tol = tol_of::<T>(size) * scale.max(1.0);
@@ -843,27 +1321,39 @@ mod imp {
         }
     }
 
+    /// A C-order driver cell has no route that leaves the clock free of allocation
+    /// and layout conversion: LAPACKE's row-major path allocates a transposed copy
+    /// and transposes in and out of it inside the call, in every `_work` variant.
+    /// The faer rows factor a row-major input where it is, so a C-order vendor
+    /// number would charge that conversion to one side only. It is recorded as a
+    /// skip with this reason, never as a number.
+    fn driver_cell(family: &str) -> String {
+        format!(
+            "{family} in c order has no vendor route that leaves the clock free of allocation \
+             and layout conversion: LAPACKE's row-major path allocates a transposed copy and \
+             transposes in and out of it inside the call. The vendor row is measured in f \
+             order, where both arms run column-major"
+        )
+    }
+
     fn ops_typed<T: LapackScalar>(
         family: &str,
         case: Case,
         order: Order,
     ) -> Result<Vec<Op>, String> {
+        if order == Order::C && DRIVER_FAMILIES.contains(&family) {
+            return Err(driver_cell(family));
+        }
         let m = case.m;
         let n = case.n;
         let batch = case.batch;
         match family {
             "gemm" => Ok(vec![gemm_op::<T>(m, case.k.unwrap_or(m), n, batch, order)?]),
-            "qr_factor" => Ok(vec![qr_op::<T>(m, n, batch, order)?]),
-            // Decided, not missing: `qr` returns an explicit Q and R, and the faer rows' owning
-            // contract (the library allocates and returns them) is legitimate for that family. A
-            // vendor row can only be made to pay the same by bending it (prepared Q and R on one
-            // side, library-allocated on the other), so no ratio is claimed; `qr_factor` is the
-            // like-for-like QR comparison. docs/reliable-measurement.md, "Route differences".
-            "qr" => Err(
-                "qr (explicit Q and R, the faer rows' owning contract) is not compared with a \
-                 vendor row; qr_factor is the like-for-like QR comparison"
-                    .to_owned(),
-            ),
+            "qr_factor" => Ok(vec![qr_factor_op::<T>(m, n, batch, order)?]),
+            // The composite `qr` (explicit Q) is "factor in place, form Q into a
+            // prepared buffer" on both arms: `geqrf` + `ormqr` here,
+            // `qr_in_place` + the block-Householder apply on the faer rows.
+            "qr" => Ok(vec![qr_op::<T>(m, n, batch, order)?]),
             "lu" => Ok(vec![lu_op::<T>(m, n, batch, order)?]),
             "cholesky" => {
                 square(case, family)?;
@@ -963,15 +1453,69 @@ mod imp {
         ))
     }
 
-    /// `qr_factor` times `geqrf` on the prepared buffer. The check derives Q with `orgqr` from the
-    /// ACTUAL compact factors (outside the clock) and reconstructs `A = Q R`. The composite `qr`
-    /// (explicit Q and R returned) has no vendor route: see `ops_typed`.
-    fn qr_op<T: LapackScalar>(m: usize, n: usize, batch: usize, order: Order) -> Result<Op, String> {
+    /// The `m x r` `Q` of a compact `geqrf` factor, built outside the clock.
+    fn thin_q<T: LapackScalar>(
+        factor: &[T],
+        tau: &[T],
+        m: usize,
+        n: usize,
+        order: Order,
+        work: &mut [T],
+    ) -> Result<Vec<T>, String> {
+        let r = m.min(n);
+        let mut a = factor.to_vec();
+        // Q is m x r with r = min(m, n) columns; asking orgqr for more columns than Q
+        // has (n > m on a wide shape) is invalid and MKL rejects it.
+        let info = T::orgqr(
+            driver_layout(order),
+            m,
+            r,
+            r,
+            &mut a,
+            leading(m, n, order),
+            tau,
+            work,
+        );
+        if info != 0 {
+            return Err(format!("orgqr returned {info}"));
+        }
+        let mut qmat = vec![T::zero(); m * r];
+        for i in 0..m {
+            for j in 0..r {
+                qmat[idx(i, j, m, r, order)] = a[idx(i, j, m, n, order)];
+            }
+        }
+        Ok(qmat)
+    }
+
+    /// The `r x n` `R` of a compact factor: its upper trapezoid.
+    fn upper_r<T: Scalar>(factor: &[T], m: usize, n: usize, order: Order) -> Vec<T> {
+        let r = m.min(n);
+        let mut rmat = vec![T::zero(); r * n];
+        for i in 0..r {
+            for j in i..n {
+                rmat[idx(i, j, r, n, order)] = factor[idx(i, j, m, n, order)];
+            }
+        }
+        rmat
+    }
+
+    /// `qr_factor` times `geqrf_work` on the prepared buffer. The check derives Q with
+    /// `orgqr` from the ACTUAL compact factors (outside the clock) and reconstructs
+    /// `A = Q R`.
+    fn qr_factor_op<T: LapackScalar>(
+        m: usize,
+        n: usize,
+        batch: usize,
+        order: Order,
+    ) -> Result<Op, String> {
         let a0 = fill_seeded::<T>(m * n * batch, seed(m, n, m.min(n)));
+        let lwork = T::geqrf_scratch(m, n).max(T::orgqr_scratch(m, n, m.min(n)));
         struct S<T> {
             a0: Vec<T>,
             a: Vec<Vec<T>>,
             tau: Vec<Vec<T>>,
+            work: Vec<T>,
             m: usize,
             n: usize,
             batch: usize,
@@ -982,6 +1526,7 @@ mod imp {
         let state = S {
             a: a0.chunks_exact(m * n).map(|a| a.to_vec()).collect(),
             tau: vec![vec![T::zero(); m.min(n)]; batch],
+            work: vec![T::zero(); lwork.max(1)],
             a0,
             m,
             n,
@@ -1003,12 +1548,13 @@ mod imp {
             |s, _tk| {
                 for bi in 0..s.batch {
                     let info = T::geqrf(
-                        layout(s.order),
+                        driver_layout(s.order),
                         s.m,
                         s.n,
                         &mut s.a[bi],
                         leading(s.m, s.n, s.order),
                         &mut s.tau[bi],
+                        &mut s.work,
                     );
                     if info != 0 {
                         return Err(format!("geqrf returned {info}"));
@@ -1017,47 +1563,126 @@ mod imp {
                 Ok(())
             },
             |s| {
-                let r = s.m.min(s.n);
                 for bi in 0..s.batch {
                     let a0 = &s.a0[bi * s.m * s.n..(bi + 1) * s.m * s.n];
-                    let mut a = s.a[bi].clone();
-                    let mut rmat = vec![T::zero(); r * s.n];
-                    for i in 0..r {
-                        for j in i..s.n {
-                            rmat[idx(i, j, r, s.n, s.order)] = a[idx(i, j, s.m, s.n, s.order)];
-                        }
-                    }
-                    // Q is m x r with r = min(m, n) columns; asking orgqr for more columns than Q
-                    // has (n > m on a wide shape) is invalid and MKL rejects it.
-                    let info = T::orgqr(
-                        layout(s.order),
-                        s.m,
-                        r,
-                        r,
-                        &mut a,
-                        leading(s.m, s.n, s.order),
-                        &s.tau[bi],
-                    );
-                    if info != 0 {
-                        return Err(format!("orgqr returned {info}"));
-                    }
-                    let mut qmat = vec![T::zero(); s.m * r];
-                    for i in 0..s.m {
-                        for j in 0..r {
-                            qmat[idx(i, j, s.m, r, s.order)] = a[idx(i, j, s.m, s.n, s.order)];
-                        }
-                    }
+                    let rmat = upper_r(&s.a[bi], s.m, s.n, s.order);
+                    let qmat = thin_q(&s.a[bi], &s.tau[bi], s.m, s.n, s.order, &mut s.work)?;
                     let mut recon = vec![T::zero(); s.m * s.n];
-                    mul(s.m, r, s.n, s.order, &qmat, &rmat, &mut recon);
-                    within::<T>(max_diff(a0, &recon), frob(a0), s.n.max(s.m), "qr")?;
-                    within::<T>(gram_residual(&qmat, s.m, r, s.order), 1.0, s.m, "qr Q")?;
+                    mul(s.m, s.m.min(s.n), s.n, s.order, &qmat, &rmat, &mut recon);
+                    within::<T>(max_diff(a0, &recon), frob(a0), s.n.max(s.m), "qr_factor")?;
+                    within::<T>(
+                        gram_residual(&qmat, s.m, s.m.min(s.n), s.order),
+                        1.0,
+                        s.m,
+                        "qr_factor Q",
+                    )?;
                 }
                 Ok(())
             },
         ))
     }
 
-    /// `lu` times `getrf`; the check rebuilds `L` and `U` from the factors and
+    /// `qr` times `geqrf_work` followed by `ormqr_work`: the factorisation in place,
+    /// then `Q` formed into a prepared `m x min(m, n)` buffer. `R` is the factor
+    /// buffer's upper trapezoid, which `ormqr` only reads, so both are the direct
+    /// outputs of the two calls — the same contract the faer rows time
+    /// (`qr_in_place` plus the block-Householder apply into a prepared `Q`).
+    fn qr_op<T: LapackScalar>(
+        m: usize,
+        n: usize,
+        batch: usize,
+        order: Order,
+    ) -> Result<Op, String> {
+        let r = m.min(n);
+        let a0 = fill_seeded::<T>(m * n * batch, seed(m, n, 3));
+        let lwork = T::geqrf_scratch(m, n).max(T::ormqr_scratch(m, r, r));
+        struct S<T> {
+            a0: Vec<T>,
+            a: Vec<Vec<T>>,
+            tau: Vec<Vec<T>>,
+            q: Vec<Vec<T>>,
+            work: Vec<T>,
+            m: usize,
+            n: usize,
+            size: usize,
+            batch: usize,
+            order: Order,
+        }
+        let state = S {
+            a: a0.chunks_exact(m * n).map(|a| a.to_vec()).collect(),
+            tau: vec![vec![T::zero(); r]; batch],
+            q: vec![vec![T::zero(); m * r]; batch],
+            work: vec![T::zero(); lwork.max(1)],
+            a0,
+            m,
+            n,
+            size: r,
+            batch,
+            order,
+        };
+        Ok(op_from(
+            state,
+            String::new(),
+            |s| {
+                for bi in 0..s.batch {
+                    s.a[bi].copy_from_slice(&s.a0[bi * s.m * s.n..(bi + 1) * s.m * s.n]);
+                    s.tau[bi].fill(T::zero());
+                    s.q[bi].fill(T::zero());
+                    for i in 0..s.size {
+                        s.q[bi][idx(i, i, s.m, s.size, s.order)] = T::one();
+                    }
+                }
+                Ok(())
+            },
+            |s, _tk| {
+                for bi in 0..s.batch {
+                    let info = T::geqrf(
+                        driver_layout(s.order),
+                        s.m,
+                        s.n,
+                        &mut s.a[bi],
+                        leading(s.m, s.n, s.order),
+                        &mut s.tau[bi],
+                        &mut s.work,
+                    );
+                    if info != 0 {
+                        return Err(format!("geqrf returned {info}"));
+                    }
+                    // Q = (the k reflectors) applied to the prepared identity block.
+                    let info = T::ormqr(
+                        driver_layout(s.order),
+                        s.m,
+                        s.size,
+                        s.size,
+                        &s.a[bi],
+                        leading(s.m, s.n, s.order),
+                        &s.tau[bi],
+                        &mut s.q[bi],
+                        leading(s.m, s.size, s.order),
+                        &mut s.work,
+                    );
+                    if info != 0 {
+                        return Err(format!("ormqr returned {info}"));
+                    }
+                }
+                Ok(())
+            },
+            |s| {
+                for bi in 0..s.batch {
+                    let a0 = &s.a0[bi * s.m * s.n..(bi + 1) * s.m * s.n];
+                    let rmat = upper_r(&s.a[bi], s.m, s.n, s.order);
+                    let qmat = &s.q[bi];
+                    let mut recon = vec![T::zero(); s.m * s.n];
+                    mul(s.m, s.size, s.n, s.order, qmat, &rmat, &mut recon);
+                    within::<T>(max_diff(a0, &recon), frob(a0), s.n.max(s.m), "qr")?;
+                    within::<T>(gram_residual(qmat, s.m, s.size, s.order), 1.0, s.m, "qr Q")?;
+                }
+                Ok(())
+            },
+        ))
+    }
+
+    /// `lu` times `getrf_work`; the check rebuilds `L` and `U` from the factors and
     /// compares `P A` against `L U`, which is the factorization's own contract
     /// for any shape (`L` is `m x min(m, n)` unit-lower trapezoidal, `U` is
     /// `min(m, n) x n` upper trapezoidal).
@@ -1079,7 +1704,9 @@ mod imp {
             order: Order,
         }
         let state = S {
-            outputs: (0..batch).map(|_| (vec![T::zero(); m * n], vec![0i32; size])).collect(),
+            outputs: (0..batch)
+                .map(|_| (vec![T::zero(); m * n], vec![0i32; size]))
+                .collect(),
             a0,
             m,
             n,
@@ -1103,7 +1730,7 @@ mod imp {
                 for bi in 0..s.batch {
                     let (a, ipiv) = &mut s.outputs[bi];
                     let info = T::getrf(
-                        layout(s.order),
+                        driver_layout(s.order),
                         s.m,
                         s.n,
                         a,
@@ -1192,7 +1819,7 @@ mod imp {
             |s, _tk| {
                 for bi in 0..s.batch {
                     let a = &mut s.outputs[bi];
-                    let info = T::potrf(layout(s.order), s.n, a, leading(s.n, s.n, s.order));
+                    let info = T::potrf(driver_layout(s.order), s.n, a, leading(s.n, s.n, s.order));
                     if info != 0 {
                         return Err(format!("potrf returned {info}"));
                     }
@@ -1233,7 +1860,9 @@ mod imp {
             order: Order,
         }
         let state = S {
-            work: (0..batch).map(|_| (vec![T::zero(); n * n], vec![0i32; n])).collect(),
+            work: (0..batch)
+                .map(|_| (vec![T::zero(); n * n], vec![0i32; n]))
+                .collect(),
             a0,
             b0: b0.clone(),
             b: b0.clone(),
@@ -1257,7 +1886,7 @@ mod imp {
                 for bi in 0..s.batch {
                     let (a, ipiv) = &mut s.work[bi];
                     let info = T::gesv(
-                        layout(s.order),
+                        driver_layout(s.order),
                         s.n,
                         a,
                         leading(s.n, s.n, s.order),
@@ -1286,7 +1915,7 @@ mod imp {
         ))
     }
 
-    /// `svd_values` times `gesdd` with `jobz='N'`; `svd_thin` with `jobz='S'`.
+    /// `svd_values` times `gesdd_work` with `jobz='N'`; `svd_thin` with `jobz='S'`.
     fn svd_op<T: LapackScalar>(
         m: usize,
         n: usize,
@@ -1295,10 +1924,14 @@ mod imp {
         thin: bool,
     ) -> Result<Op, String> {
         let a0 = fill_seeded::<T>(m * n * batch, seed(m, n, if thin { 31 } else { 29 }));
+        let (lwork, lrwork, liwork) = T::gesdd_scratch(m, n, thin);
         struct S<T> {
             a0: Vec<T>,
             work: Vec<Vec<T>>,
             outputs: Vec<(Vec<f64>, Vec<T>, Vec<T>)>,
+            ws: Vec<T>,
+            rwork: Vec<f64>,
+            iwork: Vec<i32>,
             m: usize,
             n: usize,
             batch: usize,
@@ -1314,6 +1947,9 @@ mod imp {
                     (vec![0.0f64; r], vec![T::zero(); u], vec![T::zero(); vt])
                 })
                 .collect(),
+            ws: vec![T::zero(); lwork.max(1)],
+            rwork: vec![0.0f64; lrwork.max(1)],
+            iwork: vec![0i32; liwork.max(1)],
             a0,
             m,
             n,
@@ -1338,6 +1974,9 @@ mod imp {
                         *x = T::from_f64(1e30);
                     }
                 }
+                for v in &mut s.iwork {
+                    *v = 0;
+                }
                 Ok(())
             },
             |s, _tk| {
@@ -1349,7 +1988,7 @@ mod imp {
                     let mut dummy_vt = [T::zero()];
                     let jobz = if s.thin { JOB_S } else { JOB_N };
                     let info = T::gesdd(
-                        layout(s.order),
+                        driver_layout(s.order),
                         jobz,
                         s.m,
                         s.n,
@@ -1370,6 +2009,9 @@ mod imp {
                             &mut dummy_vt
                         },
                         ld_vt(r, s.n, s.order),
+                        &mut s.ws,
+                        &mut s.rwork,
+                        &mut s.iwork,
                     );
                     if info != 0 {
                         return Err(format!("gesdd returned {info}"));
@@ -1438,15 +2080,24 @@ mod imp {
     fn eigh_op<T: LapackScalar>(n: usize, batch: usize, order: Order) -> Result<Op, String> {
         let a0 = hermitian::<T>(n, order, seed(n, n, 37));
         let a0 = replicate(&a0, batch);
+        let (lwork, lrwork, liwork) = T::evd_scratch(n);
         struct S<T> {
             a0: Vec<T>,
             outputs: Vec<(Vec<T>, Vec<f64>)>,
+            ws: Vec<T>,
+            rwork: Vec<f64>,
+            iwork: Vec<i32>,
             n: usize,
             batch: usize,
             order: Order,
         }
         let state = S {
-            outputs: (0..batch).map(|_| (vec![T::zero(); n * n], vec![0.0f64; n])).collect(),
+            outputs: (0..batch)
+                .map(|_| (vec![T::zero(); n * n], vec![0.0f64; n]))
+                .collect(),
+            ws: vec![T::zero(); lwork.max(1)],
+            rwork: vec![0.0f64; lrwork.max(1)],
+            iwork: vec![0i32; liwork.max(1)],
             a0,
             n,
             batch,
@@ -1471,12 +2122,15 @@ mod imp {
                 for bi in 0..s.batch {
                     let (a, w) = &mut s.outputs[bi];
                     let info = T::evd(
-                        layout(s.order),
+                        driver_layout(s.order),
                         JOB_V,
                         s.n,
                         a,
                         leading(s.n, s.n, s.order),
                         w,
+                        &mut s.ws,
+                        &mut s.rwork,
+                        &mut s.iwork,
                     );
                     if info != 0 {
                         return Err(format!("syevd/heevd returned {info}"));
@@ -1489,11 +2143,11 @@ mod imp {
                     let a0 = &s.a0[bi * s.n * s.n..(bi + 1) * s.n * s.n];
                     let (u, w) = &s.outputs[bi];
                     let scale = frob(a0);
-                    within::<T>(gram_residual(&u, s.n, s.n, s.order), 1.0, s.n, "eigh U")?;
+                    within::<T>(gram_residual(u, s.n, s.n, s.order), 1.0, s.n, "eigh U")?;
                     let ws = w.iter().map(|x| T::from_f64(*x)).collect::<Vec<_>>();
                     let mut au = vec![T::zero(); s.n * s.n];
-                    mul(s.n, s.n, s.n, s.order, a0, &u, &mut au);
-                    let us = scale_cols(&u, s.n, s.n, &ws, s.order);
+                    mul(s.n, s.n, s.n, s.order, a0, u, &mut au);
+                    let us = scale_cols(u, s.n, s.n, &ws, s.order);
                     within::<T>(max_diff(&au, &us), scale, s.n, "eigh")?;
                 }
                 Ok(())

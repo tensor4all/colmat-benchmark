@@ -204,3 +204,30 @@ those values were not read number by number.
 
 I did not read the other orders, thread counts or dtypes number by number; the trace applies to those
 cells too, but their published values were not checked here.
+
+## 7. Resolution: one contract per ratio (#74)
+
+The rule this audit asked for is now the harness's, and it is the same rule for every family and
+every row: **no primary row allocates, frees or converts layout inside its timed `run`**, and a
+ratio is formed only between two rows of the same contract (`docs/reliable-measurement.md`,
+"Allocation and the clock"; `docs/timing-policy.md`, version 2).
+
+| what the audit found | what the harness does now |
+|---|---|
+| vendor closures copied the input (`to_vec`) inside the clock (`L:1018,1147,1235,1294,1363,1492` at `c333615`) | `prepare` restores into a buffer the op owns; `run` is the driver alone |
+| `ipiv`/`sigma`/`w` allocated inside the clock (`L:1148,1364,1493`) | allocated once at op construction, reused by every priming and timed call |
+| LAPACKE's non-`_work` wrappers allocated the workspace inside the call | every driver is called through its `_work` entry point, with a workspace the op owns: sized by a `lwork = -1` (and `liwork`/`lrwork = -1`) query when the op is built, before the clock |
+| LAPACKE's row-major path copied and transposed inside the call, and only the vendor row paid it | a vendored driver family is measured column-major only; its C-order cell is `skipped` with the reason, never a number with an extra cost |
+| faer's owning rows were divided against the vendor's prepared rows | the faer row times both routes; the owning one carries the `api-inclusive` note and is published as a labelled secondary table, the allocation-free one carries an empty note and is the primary row |
+| `qr` had no vendor row because the two sides made different calls | the vendor row is `geqrf_work` + `ormqr_work` into a prepared identity block, the faer rows are `qr_in_place` + the block-Householder apply into a prepared `Q`: `qr` now has a same-contract vendor ratio, which supersedes the fix-5 decision above |
+| nothing stopped a regression | `fbench` tests: `no_row_allocates_inside_run` (counting allocator armed around `Op::run`), `vendor_drivers_are_column_major_only`, `notes_pair_the_same_contract` |
+
+What the tests cannot see is stated where the claim is made: a library's own allocation in C
+(`LAPACKE_malloc` → libc `malloc`) is invisible to the Rust allocator, so the vendor side is
+enforced by construction (the `_work` entry points, a caller-owned workspace, the column-major
+assert) and by the C-order skip, and a library's threaded-path allocation is outside the
+single-threaded probe (`benchmarks/suites/faer-kernels.yaml`, `known_blind_spots`).
+
+Numbers published before this change are **not** re-interpreted: the cells this audit withdrew
+(`docs/dataset-status.md`) stay withdrawn until the page is regenerated from fresh raw data, and
+that regeneration is a separate step, not part of the harness change.

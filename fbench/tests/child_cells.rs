@@ -172,15 +172,20 @@ fn a_finished_run_writes_one_ok_row_per_variant() {
 /// builds anything, and it says what it ended up with.
 ///
 /// The registry arm this repository builds in CI links no vendor library, so `--threads 2` is
-/// refused outright (by the parent too, before this change); a vendor arm would also assert
-/// `vendor=Some(2)` here.
+/// refused outright (by the parent too, before this change); a vendor arm reports `vendor=Some(2)`.
+/// The vendor field is asserted either way, because a `link-*` build is not the CI arm and this test
+/// is not the place to pin which binary it was handed.
 #[test]
 fn the_child_measures_with_the_threads_it_was_given() {
     let run = run("threads", None, &["--cell-timeout", "60"]);
     assert_eq!(run.code, Some(0), "{}", run.stderr);
     assert_eq!(statuses(&run), ["ok", "ok"], "{:?}", run.csv);
+    let configured = run.stderr.contains("CELL child threads=1 rayon=1 vendor=None")
+        || run
+            .stderr
+            .contains("CELL child threads=1 rayon=1 vendor=Some(1)");
     assert!(
-        run.stderr.contains("CELL child threads=1 rayon=1 vendor=None"),
+        configured,
         "the child must configure --threads and check it before it builds: {}",
         run.stderr
     );

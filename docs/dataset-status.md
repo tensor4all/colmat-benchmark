@@ -8,9 +8,37 @@ No result page is edited: the numbers stay in the repository as history; this fi
 Terms are the ones of [docs/provisional-and-clean-datasets.md](../docs/provisional-and-clean-datasets.md)
 (**provisional**, **superseded**) and of the index (`partial`, `stale`). One term is added for cells:
 **withdrawn pending re-measurement** - the cell stays published, and must not be quoted until a page
-recorded by a harness at or after `7bb8105` (#49) replaces it.
+recorded by a harness at or after `7bb8105` (#49) replaces it; after #74 the bar is the commit of that
+change, see the section above.
 
-## 2026-11-06: pages recorded before #49
+## 2026-11-09: every vendor comparison is now one contract per ratio (#74)
+
+[#74](https://github.com/tensor4all/colmat-benchmark/issues/74) makes the rule enforceable rather than
+reviewable: a ratio is formed only between two rows of the **same contract**, and no primary row
+allocates, frees or converts layout inside its timed `run`. What changed in the harness:
+
+- the vendor row calls LAPACKE's `_work` entry points with a caller-owned workspace and prepared
+  outputs, so LAPACKE no longer allocates inside the clock;
+- a vendored driver family (`lu`, `solve`, `cholesky`, `qr_factor`, `qr`, `svd_values`, `svd_thin`,
+  `eigh`) is measured column-major only -- LAPACKE's row-major path allocates a transposed copy
+  inside the call in every `_work` variant -- and its C-order cell is recorded `skipped` with that
+  reason instead of carrying a conversion the faer row does not pay;
+- `qr` gained the same-contract vendor route (`geqrf_work` + `ormqr_work` into a prepared identity
+  block) beside a new allocation-free faer `qr` route, so `qr` now has a vendor ratio;
+- the faer rows' owning routes (the call a user makes, which allocates its outputs and scratch
+  inside the timed call) are kept but labelled **`api-inclusive`**, and the allocation-free routes
+  carry an empty note. The report keys cells on `note`, so an `api-inclusive` row is never divided
+  against a vendor row; it belongs in the labelled API-cost table only.
+
+**Consequence for the pages already published:** they were recorded by a harness before this change,
+so their `note` column does not distinguish the two faer contracts and their vendor cells carry the
+old tax. Every cell below stays **withdrawn pending re-measurement** on the terms of the next section,
+and the vendor-involving ratios that the previous section allowed as "one-sided" (`qr`, `qr_factor`
+other than `n64`, `svd_values`, `svd_thin`, `eigh`) are withdrawn with them: after #74 a like-for-like
+number for those families exists, so the old one is not a lower bound that can still be quoted, it is a
+number from a different contract. Closing this entry requires pages recorded by a harness at or after
+the commit of #74, on the machine that recorded the dataset.
+
 
 Every page below `result/` was recorded before [#49](https://github.com/tensor4all/colmat-benchmark/pull/49)
 (`7bb8105`, 2026-11-06): the newest harness commit among them is `eeeaa363` (page `71b25ffb`, recorded

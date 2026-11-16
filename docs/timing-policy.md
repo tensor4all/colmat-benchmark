@@ -9,6 +9,26 @@ sets, and reports median-of-process-medians with distinct within/between SD.
 Representative controls must freeze the budgets before the full re-record; the
 old GEMM pilot alone does not establish a universal priming duration.
 
+**Fair comparison (rule 7 of the 2026-11-06 audit).** A ratio between two engine
+rows compares the same contract on both sides. The primary rows exclude allocation
+and layout conversion on **both** sides: the vendor row calls LAPACKE's `_work`
+entry points with a workspace and outputs prepared before the clock, and the faer
+rows call their in-place/`*_into` routes on a prepared matrix, prepared rights and
+a `MemStack` sized by the library's own `*_scratch`. A faer row that times only the
+own-in-the-API call (`PartialPivLu::new`, `Llt::new`, owning `qr`, the `gesdd`/`syevd`
+wrappers) carries the `api-inclusive` note: those rows are API cost, they are
+published as a labelled secondary table, and they are never divided against a
+vendor row. The report keys cells on `note`, so a note mismatch is a different
+cell and not a ratio. LAPACKE's row-major path allocates a transposed copy inside
+the call, so a vendored driver family is measured column-major only and its
+C-order cell is `skipped` with the reason; `gemm` keeps both orders. `fbench`
+enforces the harness half with `no_row_allocates_inside_run` (a counting
+allocator armed around `Op::run`) and the vendor half with
+`vendor_drivers_are_column_major_only`; the declarations of what those cannot see
+(a library's own C-level `malloc`) are in
+[reliable-measurement.md](reliable-measurement.md) and the suite's
+`known_blind_spots`.
+
 Historical numerical pages remain version 1. The new policy does not retroactively
 repair those measurements or support comparing ratios across timing versions.
 
@@ -22,21 +42,27 @@ earlier version's numbers to assess a later library revision.
 
 The common loop clocks `Op::run`; `Op::prepare`, fixture construction, and
 `Op::check` are outside it. GEMM uses preallocated input/output buffers and restores
-the output outside timing. Composite families allocate through their public API
-inside `run`, and their local outputs are also destroyed before `run` returns;
-that destruction is timed. In particular, the historical vendor `qr_factor` also copied input and
-allocated tau inside `run`, whereas faer's low-level route prepared buffers
-outside it: these were not equivalent factorization-only measurements.
+the output outside timing. From timing version 2 on, no primary row allocates or
+converts layout inside `run` (see the fair-comparison rule above); before it, the
+vendor `qr_factor` copied its input and allocated `tau`, `ipiv` and LAPACKE's
+workspace inside `run` while faer's low-level route prepared those buffers outside
+it: those were not equivalent factorization-only measurements. The owning faer
+routes still allocate inside `run`, by design of their API, and are labelled
+`api-inclusive` for that reason. A timed call that returns an owning result does not
+destroy its previous outputs either: `prepare` moves them to a retained stash before
+the clock, so no deallocation is timed on any row.
 Common timer code alone is not evidence of equivalent work or steady state.
 Several composite checks refactor input instead of inspecting the timed result;
 a successful check there does not validate the exact result that was timed.
 Upstream faer's own bench page (`faer/examples/bench.rs` + `bench.toml`) restores
 inputs inside the clock. Compare only after auditing the actual API boundary.
 
-**Allocation performed inside the measured call stays inside the clock.** The
-fork's two row splits allocate their partial buffers inside the public call, and
-the public scratch function does not expose them. The campaign reports that as it
-is instead of changing faer's API to make the boundary look cleaner.
+**Allocation performed inside the measured call stays inside the clock**, and the
+rows that do it are the `api-inclusive` ones. The fork's two row splits allocate
+their partial buffers inside the public call and the public scratch function does
+not expose them; the campaign reports that as it is instead of changing faer's
+API to make the boundary look cleaner, and keeps those rows out of the primary
+ratios.
 
 Tensor construction, dtype dispatch, tlinalg batching/packing and tenferro
 session entry are other repositories' work and are not in any number here.

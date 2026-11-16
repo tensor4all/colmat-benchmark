@@ -11,12 +11,16 @@ description: >-
   of the same family measure the same work:
   `gemm` is `linalg::matmul::matmul` into a caller-prepared destination with
   `Accum::Replace`; `qr_factor` is the compact `qr_in_place`; `qr` is the
-  composite returning explicit Q and R (the faer rows' owning contract), with Q
-  the compact `m x min(m, n)` factor that this suite's own check consumes -- not
-  the full `m x m` completion, which on a tall shape is eight times the work and
-  is not what either row would be buying. The vendor row has no `qr` route (it is
-  recorded `skipped`): `qr_factor` is the QR comparison with a vendor, see
-  `docs/reliable-measurement.md`, "Route differences that remain";
+  composite returning explicit Q and R on both sides: the faer rows time
+  `qr_in_place` followed by the block-Householder apply into a prepared `Q`, and
+  the vendor row times `geqrf_work` followed by `ormqr_work` into a prepared
+  identity block, so `R` is the factor buffer's upper trapezoid and `Q` is the
+  compact `m x min(m, n)` factor that this suite's own check consumes -- not the
+  full `m x m` completion, which on a tall shape is eight times the work and is
+  not what either row would be buying. The faer rows also keep the owning call
+  (`qr`, returning owned Q and R) as a labelled `api-inclusive` row: it is the
+  call a user makes, and it is published beside the primary rows, never divided
+  against a vendor row;
   `upgrade_factor` is the public but
   `#[doc(hidden)]` `upgrade_householder_factor`; `householder_apply` is the
   block apply and the one-block sequence form, as two rows, with basis width
@@ -89,10 +93,12 @@ workloads:
     rerun is reproducible.
   known_blind_spots:
     - "Only the faer entry points are measured. tlinalg's packing, batch loop and lane policy, tenferro's tensor construction and dtype dispatch, and the small-`m` decode-projection shapes are other repositories' rows (tlinalg-benchmark, tenferro-benchmark)."
-    - "Vendor C-order cells use CBLAS/LAPACKE row-major entry points. Workspace allocation or layout conversion internal to those APIs remains timed; these are not prepared-column-major or transpose measurements. LAPACKE's row-major work copy and transposes are intrinsic to the C-order route and are absent for F order, so a C-order vendor ratio carries a cost the F-order one does not."
+    - "No row allocates inside its timed `run`: the vendor row calls LAPACKE's `_work` entry points with a workspace the op allocated in `prepare`, and the faer rows call their in-place/`*_into` routes on a prepared matrix, prepared rights and a `MemStack` sized by the library's own `*_scratch`. A vendored driver family is measured column-major only, because LAPACKE's row-major path allocates a transposed copy and transposes in and out of it inside the call in every `_work` variant; a C-order cell of such a family is recorded `skipped` with that reason rather than charged a conversion the faer row does not pay. `gemm` keeps both orders (CBLAS's row-major entry point moves no data)."
+    - "The owning faer routes (`PartialPivLu::new`, `Llt::new`, `qr`, `gesdd`/`syevd` wrappers, `partial_piv_lu().solve()`) allocate their outputs and their scratch inside the timed call. They are kept, as the call a user makes, but labelled `api-inclusive` and published as a separate secondary table: an `api-inclusive` row is never divided against a vendor row, whose route is the prepared one."
+    - "A library's own allocation inside a timed call is not visible to the harness's allocator probe when it happens in C: LAPACKE's non-`_work` wrappers reach libc `malloc` through `LAPACKE_malloc`. That route is not used by this harness (the probe would not see it), so the `_work` entry points are enforced by construction and by the column-major rule, not by the probe."
     - "`gemm` covers the tall class's two Householder legs (a 16-wide basis and a 240-column target over 4096 rows: the reduction and the write-back) beside a vendor `?gemm` on the same leg. A single leg beside a vendor gemm is a diagnostic reference, not the equivalent implementation of the whole update, and the row is labelled accordingly."
     - "`householder_apply` measures block apply and the one-block sequence form as two distinct rows, labelled with basis width min(m,n) and target width n. QR fixture preparation is outside timing. Independently varied basis/target widths and multi-panel sequences are not covered."
-    - "Allocation performed inside the measured call stays inside the clock. The fork's two row splits allocate their partial buffers inside the public call, and the public scratch function does not expose them; the campaign reports that as it is instead of changing faer's API to make the boundary look cleaner."
+    - "Allocation performed inside the measured call stays inside the clock, and no _primary_ row does it. The fork's two row splits allocate their partial buffers inside the public call and the public scratch function does not expose them; that is the fork's cost, charged to the fork, and the owning routes that pay it are published as `api-inclusive` rows rather than divided against a vendor row."
     - "`cholesky`, `eigh`, `solve` and `triangular_solve` are measured on square shapes only: the matrix they factor or solve with is square by definition (self-adjoint for the first two, a triangular factor for the last). `lu` and `full_piv_lu` are not gated that way -- they take the declared rectangular shapes too, with `min(m, n)` pivots and a trapezoidal `L` or `U`, which is what `dgetrf` does as well -- so a rectangular LU cell is measured in both orders beside its square one."
     - "`f32`/`c32` are declared and measured as of `docs/harness-dtype-axis.md`; the vendor arm has a route for `gemm` in those two dtypes and reports the LAPACK families as skipped for them. The large regime's 1024 shapes, BLIS, sparse, iterative and GPU arms are later declarations, not machinery built now."
     - "A vendor arm records the library it linked. Only OpenBLAS reports the kernel its runtime dispatched to; MKL names no kernel and no processor count, so its manifest leaves both empty rather than inferring them."
