@@ -422,6 +422,32 @@ class ComparisonTest(unittest.TestCase):
                          f'{gen_comparison.FAIR_HARNESS} is not a commit of this repository')
         self.assertTrue(gen_comparison.fair_harness(gen_comparison.FAIR_HARNESS))
         self.assertFalse(gen_comparison.fair_harness(PRE_FAIR_HARNESS))
+        # And that it is on `main`, not only on a branch: #75 landed as a squash, which left the
+        # constant pointing at a commit no `main` checkout holds -- the gate then withdraws every
+        # page recorded at or after the fairness harness, forever, and keeps saying so on stderr.
+        if subprocess.run(['git', '-C', str(ROOT), 'rev-parse', '--verify', '--quiet',
+                           'origin/main'], capture_output=True).returncode != 0:
+            self.skipTest('no origin/main in this checkout to test the constant against')
+        landed = subprocess.run(['git', '-C', str(ROOT), 'merge-base', '--is-ancestor',
+                                 gen_comparison.FAIR_HARNESS, 'origin/main'], capture_output=True)
+        self.assertEqual(landed.returncode, 0,
+                         f'{gen_comparison.FAIR_HARNESS} is not on main\'s history; re-pin FAIR_HARNESS '
+                         'to the commit that landed')
+
+    def test_an_orphaned_fair_harness_is_said_on_stderr(self):
+        # A squash or rebase that drops the fairness commit from main's history leaves nothing to
+        # certify against: every vendor ratio is withdrawn, and the log says so with the fix instead
+        # of leaving a silently withdrawn site.
+        stderr = io.StringIO()
+        saved = gen_comparison.FAIR_HARNESS
+        gen_comparison.FAIR_HARNESS = '0' * 40
+        try:
+            with contextlib.redirect_stderr(stderr):
+                self.assertFalse(gen_comparison.fair_harness(PRE_FAIR_HARNESS))
+        finally:
+            gen_comparison.FAIR_HARNESS = saved
+        self.assertIn('is not a commit this checkout holds', stderr.getvalue())
+        self.assertIn('re-pin FAIR_HARNESS', stderr.getvalue())
 
     def test_the_table_body_is_pinned(self):
         # The body for the two runs below, byte for byte. It is the guard that a ratio cannot

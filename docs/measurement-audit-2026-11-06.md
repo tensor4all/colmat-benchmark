@@ -240,4 +240,7 @@ them out of the median -- the times stay as recorded, the division that measured
 shown as current. The per-arm Markdown pages are the pinned toolkit's render of their run, tied to
 `data/.../report.md` byte for byte by `campaign-check-generated`, so they are not rewritten here;
 `docs/dataset-status.md` is their status of record, and the landing page says the same in prose
-(`scripts/gen_site.py`).
+(`scripts/gen_site.py`). `FAIR_HARNESS` has to be a commit of `main` -- #75 landed as a squash
+(`695232b`), so the constant added on its branch was re-pinned in the follow-up change -- and if it is
+ever orphaned the gate fails closed (everything withdrawn, a warning on stderr) instead of printing a
+ratio it cannot certify.

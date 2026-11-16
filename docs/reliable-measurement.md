@@ -149,8 +149,13 @@ is never the difference between two harness choices:
   `FAIR_HARNESS`, the harness that first charged both sides of a vendor ratio the same contract: at
   or after it the ratios are printed, before it (or when the checkout cannot place the commit) the
   vendor ratio cells of the families this contract changed say `withdrawn`, the numbers stay as
-  recorded, and they are left out of the median. The per-arm Markdown pages are the toolkit's render
-  of their run and are not edited by hand; `docs/dataset-status.md` is their status of record.
+  recorded, and they are left out of the median. `FAIR_HARNESS` has to be a commit of `main`: a
+  squash rewrites the SHAs of the landed change, so the constant is re-pinned to the landed commit
+  when that happens (this campaign does both) and a test fails if it is not on `main`'s history. If
+  it is ever orphaned the gate fails closed -- every vendor ratio withdrawn, never a one-sided one
+  printed -- and the generator warns on stderr with the fix. The per-arm Markdown pages are the
+  toolkit's render of their run and are not edited by hand; `docs/dataset-status.md` is their status
+  of record.
 
 ## Adoption gate
 

@@ -34,12 +34,13 @@ allocates, frees or converts layout inside its timed `run`. What changed in the 
 **Consequence for the pages already published:** they were recorded by a harness before this change,
 so their `note` column does not distinguish the two faer contracts and their vendor cells carry the
 old tax. Every cell below stays **withdrawn pending re-measurement** on the terms of the next section,
-and the vendor-involving ratios that the previous section allowed as "one-sided" (`qr`, `qr_factor`
+and the vendor-involving ratios that the next section's tables allow as "one-sided" (`qr`, `qr_factor`
 other than `n64`, `svd_values`, `svd_thin`, `eigh`) are withdrawn with them: after #74 a like-for-like
 number for those families exists, so the old one is not a lower bound that can still be quoted, it is a
 number from a different contract. Closing this entry requires pages recorded by a harness at or after
 the commit of #74, on the machine that recorded the dataset.
 
+## 2026-11-06: pages recorded before #49
 
 Every page below `result/` was recorded before [#49](https://github.com/tensor4all/colmat-benchmark/pull/49)
 (`7bb8105`, 2026-11-06): the newest harness commit among them is `eeeaa363` (page `71b25ffb`, recorded
@@ -93,6 +94,13 @@ This file is prose a reader has to find. The machine-checked parts are:
   that first charged both sides the same contract): those vendor ratio cells print `withdrawn` and
   are left out of the median. The families are `WITHDRAWN_VENDOR_FAMILIES` -- the complement of the
   usable list above -- so this table and the page cannot drift apart without one of them being edited.
+  `FAIR_HARNESS` must be a commit of **`main`**, not of a branch: this campaign lands changes with
+  squash merges as well as merge commits, and a squash rewrites the SHAs (the #74 change was
+  `0786e074` on its branch and is `695232b` on `main`). When a change that carries the constant
+  lands by squash, the constant is re-pinned to the landed commit; `tests/test_comparison.py` fails
+  if it is not on `main`'s history. If it is ever orphaned anyway, the gate fails closed -- no page
+  can be certified, every vendor ratio is withdrawn -- and the generator writes a `WARNING` on
+  stderr naming the one-line fix. The gate never fails open towards a one-sided ratio.
 - `scripts/gen_site.py` says the same on the landing page while the current pages predate that
   harness, because a reader who arrives there should not have to infer it from a column.
 - The per-arm Markdown pages under `result/` are the pinned toolkit's render of their run, tied to
