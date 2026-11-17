@@ -1510,7 +1510,14 @@ mod imp {
         order: Order,
     ) -> Result<Op, String> {
         let a0 = fill_seeded::<T>(m * n * batch, seed(m, n, m.min(n)));
-        let lwork = T::geqrf_scratch(m, n).max(T::orgqr_scratch(m, n, m.min(n)));
+        // Q is m x r with r = min(m, n) columns, and `orgqr` requires `n <= m`: the size query has
+        // to ask for Q's own shape, the same rule `thin_q` follows for the call itself. Asking it
+        // for the factor's full column count is invalid on a wide shape, and the vendor answers a
+        // rejected query by printing a diagnostic to stdout (MKL: `Parameter 2 was incorrect on
+        // entry to DORGQR`; OpenBLAS: its xerbla line), which the cell child's protocol rejects as
+        // a line it does not define -- the row is then recorded `failed` on a correct measurement.
+        let r = m.min(n);
+        let lwork = T::geqrf_scratch(m, n).max(T::orgqr_scratch(m, r, r));
         struct S<T> {
             a0: Vec<T>,
             a: Vec<Vec<T>>,
