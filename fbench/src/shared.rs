@@ -296,33 +296,57 @@ pub fn fill_seeded<T: Scalar>(len: usize, seed: u64) -> Vec<T> {
         .collect()
 }
 
+/// Blocking of [`mm`], in elements. `JBLK` columns of `c` are accumulated at once, so `a`'s block is
+/// streamed once per `JBLK` columns rather than once per column; `IBLK` rows of `c` and `KBLK` terms
+/// of `p` are what stay resident in L1/L2 while that stream runs.
+const IBLK: usize = 256;
+const JBLK: usize = 8;
+const KBLK: usize = 256;
+
+/// `c = a * b` for column-major `a` (`l x k`), `b` (`k x n`) and `c` (`l x n`).
+///
+/// Cache-blocked, and only *tiled*: `c[i, j]` is still the sum over `p` in ascending order starting
+/// from zero, so every element is bit-identical to the textbook triple loop (kept as the test
+/// reference, `tests::naive_mul`) and no residual can move because the product got faster.
+fn mm<T: Scalar>(l: usize, k: usize, n: usize, a: &[T], b: &[T], c: &mut [T]) {
+    c.fill(T::zero());
+    let mut jb = 0;
+    while jb < n {
+        let jw = JBLK.min(n - jb);
+        let mut ib = 0;
+        while ib < l {
+            let iw = IBLK.min(l - ib);
+            let mut pb = 0;
+            while pb < k {
+                let pw = KBLK.min(k - pb);
+                for p in pb..pb + pw {
+                    let acol = &a[p * l + ib..][..iw];
+                    for jj in 0..jw {
+                        let bv = b[p + (jb + jj) * k];
+                        let ccol = &mut c[(jb + jj) * l + ib..][..iw];
+                        for i in 0..iw {
+                            ccol[i].add_assign(acol[i].mul(bv));
+                        }
+                    }
+                }
+                pb += pw;
+            }
+            ib += iw;
+        }
+        jb += jw;
+    }
+}
+
 /// `c = a * b` with `a` `m x k` and `b` `k x n`, all in the same `order`.
 pub fn mul<T: Scalar>(m: usize, k: usize, n: usize, order: Order, a: &[T], b: &[T], c: &mut [T]) {
-    if order == Order::F {
-        // Column-major: accumulate down contiguous columns. Each `c[i, j]` is still the sum over `p` in
-        // ascending order starting from zero, so the result is bit-identical to the loop below; only the
-        // memory access is cache friendly (the strided loop took minutes at n = 2048).
-        for j in 0..n {
-            let col = &mut c[j * m..(j + 1) * m];
-            col.fill(T::zero());
-            for p in 0..k {
-                let bpj = b[p + j * k];
-                let acol = &a[p * m..(p + 1) * m];
-                for i in 0..m {
-                    col[i].add_assign(acol[i].mul(bpj));
-                }
-            }
-        }
-        return;
-    }
-    for j in 0..n {
-        for i in 0..m {
-            let mut acc = T::zero();
-            for p in 0..k {
-                acc.add_assign(a[idx(i, p, m, k, order)].mul(b[idx(p, j, k, n, order)]));
-            }
-            c[idx(i, j, m, n, order)] = acc;
-        }
+    // A row-major buffer is the column-major transpose of the same matrix, and a product's transpose
+    // is the product of the transposes in reverse order (`(a b)^T = b^T a^T`), so the row-major route
+    // is [`mm`] on the same two buffers with the operands swapped: nothing is copied, and the only
+    // difference is that each element is formed as `b * a` rather than `a * b`, which is the same
+    // IEEE products in the same order for both real and complex scalars.
+    match order {
+        Order::F => mm(m, k, n, a, b, c),
+        Order::C => mm(n, k, m, b, a, c),
     }
 }
 
@@ -336,64 +360,67 @@ pub fn mul_adj_b<T: Scalar>(
     b: &[T],
     c: &mut [T],
 ) {
-    if order == Order::F {
-        // as in `mul`: same per-element summation order, contiguous access
-        for j in 0..n {
-            let col = &mut c[j * m..(j + 1) * m];
-            col.fill(T::zero());
-            for p in 0..k {
-                let bjp = b[j + p * n].conj();
-                let acol = &a[p * m..(p + 1) * m];
-                for i in 0..m {
-                    col[i].add_assign(acol[i].mul(bjp));
+    // The adjoint side is the one operand that has to be materialised, in the layout the kernel
+    // walks. Column-major that is `b^H` (`k x n`) and `mm` runs as it stands; row-major the kernel
+    // computes `c^T = (a b^H)^T = conj(b) a^T`, so it is `conj(b)` (`n x k`) with the operands
+    // swapped, exactly as in `mul`. Either way the pass is O(nk) against a product that is O(nkm).
+    match order {
+        Order::F => {
+            let mut bh = vec![T::zero(); k * n];
+            for j in 0..n {
+                for p in 0..k {
+                    bh[p + j * k] = b[j + p * n].conj();
                 }
             }
+            mm(m, k, n, a, &bh, c);
         }
-        return;
-    }
-    for j in 0..n {
-        for i in 0..m {
-            let mut acc = T::zero();
-            for p in 0..k {
-                acc.add_assign(a[idx(i, p, m, k, order)].mul(b[idx(j, p, n, k, order)].conj()));
+        Order::C => {
+            let mut cb = vec![T::zero(); n * k];
+            for j in 0..n {
+                for p in 0..k {
+                    cb[j + p * n] = b[j * k + p].conj();
+                }
             }
-            c[idx(i, j, m, n, order)] = acc;
+            mm(n, k, m, &cb, a, c);
         }
     }
 }
 
-/// The largest modulus of `q^H q - I` for an `m x n` `q`, an orthonormality check.
-pub fn gram_residual<T: Scalar>(q: &[T], m: usize, n: usize, order: Order) -> f64 {
-    let mut worst = 0.0_f64;
-    for i in 0..n {
-        for j in 0..n {
-            let mut acc = T::zero();
-            for p in 0..m {
-                acc.add_assign(
-                    q[idx(p, i, m, n, order)]
-                        .conj()
-                        .mul(q[idx(p, j, m, n, order)]),
-                );
-            }
-            let target = if i == j { T::one() } else { T::zero() };
-            worst = residual_max(worst, acc.sub(target).abs());
+/// `src^H` (`cols x rows`) of an `rows x cols` `src`, in the same `order`.
+fn adjoint<T: Scalar>(src: &[T], rows: usize, cols: usize, order: Order) -> Vec<T> {
+    let mut out = vec![T::zero(); cols * rows];
+    for i in 0..cols {
+        for j in 0..rows {
+            out[idx(i, j, cols, rows, order)] = src[idx(j, i, rows, cols, order)].conj();
         }
     }
-    worst
+    out
+}
+
+/// The largest modulus of `q^H q - I` for an `m x n` `q`, an orthonormality check.
+pub fn gram_residual<T: Scalar>(q: &[T], m: usize, n: usize, order: Order) -> f64 {
+    // `q^H q` is `q^H (q^H)^H`, i.e. `mul_adj_b` on the adjoint of `q`.
+    let qh = adjoint(q, m, n, order);
+    let mut gram = vec![T::zero(); n * n];
+    mul_adj_b(n, m, n, order, &qh, &qh, &mut gram);
+    gram_identity_residual(&gram, n, order)
 }
 
 /// The largest modulus of `q q^H - I` for an `m x n` `q`, the row-side
 /// orthonormality check.
 pub fn gram_adj_residual<T: Scalar>(q: &[T], m: usize, n: usize, order: Order) -> f64 {
+    let mut gram = vec![T::zero(); m * m];
+    mul_adj_b(m, n, m, order, q, q, &mut gram);
+    gram_identity_residual(&gram, m, order)
+}
+
+/// `max |g - I|` over an `n x n` Gram matrix, as the two checks above report it.
+fn gram_identity_residual<T: Scalar>(g: &[T], n: usize, order: Order) -> f64 {
     let mut worst = 0.0_f64;
-    for i in 0..m {
-        for j in 0..m {
-            let mut acc = T::zero();
-            for p in 0..n {
-                acc.add_assign(q[idx(i, p, m, n, order)].mul(q[idx(j, p, m, n, order)].conj()));
-            }
+    for i in 0..n {
+        for j in 0..n {
             let target = if i == j { T::one() } else { T::zero() };
-            worst = residual_max(worst, acc.sub(target).abs());
+            worst = residual_max(worst, g[idx(i, j, n, n, order)].sub(target).abs());
         }
     }
     worst
@@ -474,5 +501,171 @@ mod tests {
         let mut d = [0.0; 4];
         mul(2, 3, 2, Order::F, &a_f, &b_f, &mut d);
         assert_eq!(d, [58.0, 139.0, 64.0, 154.0]);
+    }
+
+    /// The O(n^3) triple loop `mul` used to be, for both layouts: the reference the blocked kernel
+    /// is checked against, and the only place in this crate the naive product still exists (issue
+    /// #77). It is private to this test module, so a check path cannot name it in a release *or* a
+    /// test build; `check_paths_do_not_call_the_naive_product` catches a re-added copy.
+    fn naive_mul<T: Scalar>(
+        m: usize,
+        k: usize,
+        n: usize,
+        order: Order,
+        a: &[T],
+        b: &[T],
+    ) -> Vec<T> {
+        let mut c = vec![T::zero(); m * n];
+        for j in 0..n {
+            for i in 0..m {
+                let mut acc = T::zero();
+                for p in 0..k {
+                    acc.add_assign(a[idx(i, p, m, k, order)].mul(b[idx(p, j, k, n, order)]));
+                }
+                c[idx(i, j, m, n, order)] = acc;
+            }
+        }
+        c
+    }
+
+    fn naive_mul_adj_b<T: Scalar>(
+        m: usize,
+        k: usize,
+        n: usize,
+        order: Order,
+        a: &[T],
+        b: &[T],
+    ) -> Vec<T> {
+        let mut c = vec![T::zero(); m * n];
+        for j in 0..n {
+            for i in 0..m {
+                let mut acc = T::zero();
+                for p in 0..k {
+                    acc.add_assign(a[idx(i, p, m, k, order)].mul(b[idx(j, p, n, k, order)].conj()));
+                }
+                c[idx(i, j, m, n, order)] = acc;
+            }
+        }
+        c
+    }
+
+    fn naive_gram_residual<T: Scalar>(q: &[T], m: usize, n: usize, order: Order) -> f64 {
+        let mut worst = 0.0_f64;
+        for i in 0..n {
+            for j in 0..n {
+                let mut acc = T::zero();
+                for p in 0..m {
+                    acc.add_assign(
+                        q[idx(p, i, m, n, order)]
+                            .conj()
+                            .mul(q[idx(p, j, m, n, order)]),
+                    );
+                }
+                let target = if i == j { T::one() } else { T::zero() };
+                worst = residual_max(worst, acc.sub(target).abs());
+            }
+        }
+        worst
+    }
+
+    fn naive_gram_adj_residual<T: Scalar>(q: &[T], m: usize, n: usize, order: Order) -> f64 {
+        let mut worst = 0.0_f64;
+        for i in 0..m {
+            for j in 0..m {
+                let mut acc = T::zero();
+                for p in 0..n {
+                    acc.add_assign(q[idx(i, p, m, n, order)].mul(q[idx(j, p, m, n, order)].conj()));
+                }
+                let target = if i == j { T::one() } else { T::zero() };
+                worst = residual_max(worst, acc.sub(target).abs());
+            }
+        }
+        worst
+    }
+
+    /// **The blocked kernel is the triple loop, bit for bit.** The check products got faster by
+    /// tiling only -- every element is still the sum over `p` in ascending order from zero -- so a
+    /// residual (and therefore every `verify` verdict and every published number that depends on a
+    /// fixture built through these functions) cannot move. The shapes cross the `IBLK` row seam
+    /// (300 > 256), the `JBLK` column seam (17, 71, 129, 300 > 8) and, with `k = 300`, the `KBLK`
+    /// seam on the `p` axis. The `spd` fixture the `cholesky` and `solve` cases are built from is not
+    /// called here, but it goes through the same `mul_adj_b` this pins.
+    fn blocked_products_match_the_textbook_loop<T: Scalar>() {
+        for (m, k, n) in [
+            (1, 1, 1),
+            (3, 5, 2),
+            (64, 64, 64),
+            (129, 37, 71),
+            (40, 300, 17),
+            (300, 4, 2),
+        ] {
+            for order in [Order::C, Order::F] {
+                let a = fill_seeded::<T>(m * k, seed(m, k, 1));
+                let b = fill_seeded::<T>(k * n, seed(k, n, 2));
+                let mut c = vec![T::zero(); m * n];
+                mul(m, k, n, order, &a, &b, &mut c);
+                assert_eq!(
+                    max_diff(&c, &naive_mul(m, k, n, order, &a, &b)),
+                    0.0,
+                    "mul {m}x{k}x{n} {}",
+                    order.label()
+                );
+                let bh = fill_seeded::<T>(n * k, seed(n, k, 3));
+                mul_adj_b(m, k, n, order, &a, &bh, &mut c);
+                assert_eq!(
+                    max_diff(&c, &naive_mul_adj_b(m, k, n, order, &a, &bh)),
+                    0.0,
+                    "mul_adj_b {m}x{k}x{n} {}",
+                    order.label()
+                );
+            }
+        }
+        // the two orthonormality products, at a size where the triple loop is still cheap
+        for (m, n) in [(1, 1), (5, 3), (37, 13), (13, 37)] {
+            for order in [Order::C, Order::F] {
+                let q = fill_seeded::<T>(m * n, seed(m, n, 4));
+                assert_eq!(
+                    gram_residual(&q, m, n, order),
+                    naive_gram_residual(&q, m, n, order),
+                    "gram_residual {m}x{n} {}",
+                    order.label()
+                );
+                assert_eq!(
+                    gram_adj_residual(&q, m, n, order),
+                    naive_gram_adj_residual(&q, m, n, order),
+                    "gram_adj_residual {m}x{n} {}",
+                    order.label()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn blocked_products_match_the_textbook_loop_all_dtypes() {
+        blocked_products_match_the_textbook_loop::<f64>();
+        blocked_products_match_the_textbook_loop::<Complex64>();
+        blocked_products_match_the_textbook_loop::<f32>();
+        blocked_products_match_the_textbook_loop::<Complex32>();
+    }
+
+    /// Issue #77: no check path may spend minutes on a naive product. Every product in a `check`
+    /// closure goes through [`mul`]/[`mul_adj_b`]/[`gram_residual`]/[`gram_adj_residual`] here; the
+    /// triple loop is `tests::naive_mul`, and this scan fails if a copy of it comes back.
+    #[test]
+    fn check_paths_do_not_call_the_naive_product() {
+        for (name, src) in [
+            ("backend.rs", include_str!("backend.rs")),
+            ("lapack.rs", include_str!("lapack.rs")),
+            ("vendor.rs", include_str!("vendor.rs")),
+            ("main.rs", include_str!("main.rs")),
+            ("timing.rs", include_str!("timing.rs")),
+            ("op.rs", include_str!("op.rs")),
+        ] {
+            assert!(
+                !src.contains("naive_mul"),
+                "{name} calls the naive O(n^3) product in a check path (issue #77): use \
+                 shared::mul/mul_adj_b/gram_*, which are blocked"
+            );
+        }
     }
 }

@@ -2,6 +2,49 @@
 
 Decisions, fixed failures and open items for this campaign. Newest first.
 
+## 2026-11-17 — the verification products are a blocked GEMM (#77)
+
+Every `check` closure's dense product — `qr`'s `Q*R`, `lu`/`full_piv_lu`'s `L*U`, `solve`'s and
+`triangular_solve`'s `A*x`, `cholesky`'s `L*L^H`, `svd`/`eigh`'s reconstruction and their
+orthonormality Grams — called one of four functions in `fbench/src/shared.rs` (`mul`, `mul_adj_b`,
+`gram_residual`, `gram_adj_residual`), and those were textbook triple loops. The row-major branch was
+strided and ran at **0.063 GFLOP/s**, so a 4096 `gemm` cell spent ~23 of its ~24 minutes in the
+check. All four are now one cache-blocked kernel (`shared.rs::mm`); no call site changed, the timed
+`run` closures are untouched, and nothing was added to a measurement budget.
+
+The products are **tiled, not reordered**: `c[i, j]` is still the sum over `p` in ascending order
+from zero, and the row-major route is the same kernel with the operands swapped (`(a b)^T = b^T a^T`,
+no copy), so the residuals are bit-identical to the loops they replace — checked by
+`shared::tests::blocked_products_match_the_textbook_loop_all_dtypes` for all four dtypes and both
+orders, including the `spd` fixture the `cholesky`/`solve` cases are built from. `verify` over the
+full grid at `--n 64` (both faer rows, 4 dtypes, both orders, 12 families, 368 cells) reports the
+same 336 `ok` / 32 `skipped` before and after, and no published number depends on the change.
+
+Check wall time, `--threads 1`, `--dtype f64`, `--rows faer-fork`, both orders per cell, measured on
+CPU 0 with the agent pinned to `8-15,24-31`, before and after interleaved (min of two passes each):
+
+| `--n 1024`, both orders | before | after |
+|---|---|---|
+| `gemm` | 27.95 s | 6.14 s |
+| `qr` | 124.11 s | 26.16 s |
+| `lu` | 28.62 s | 2.66 s |
+| `full_piv_lu` | 27.20 s | 3.89 s |
+| `cholesky` | 9.12 s | 6.61 s |
+| `svd_thin` | 156.85 s | 42.87 s |
+| `eigh` | 124.29 s | 26.49 s |
+
+`--n 4096 --family gemm`, both orders: **1464.68 s → 422.63 s**. What is left is the measured
+library: at 4096 the reference product is now ~55 s of a ~210 s cell, and the rest is colmat's
+own single-threaded GEMM.
+
+Caveat on the numbers: this host was not quiet. Another campaign's two `tlbench-before verify`
+processes were pinned to CPU 0 during part of the session (load average ~13), which is why both
+binaries were run interleaved and the minimum of two passes is reported. The ratio is stable across
+the passes; the absolute seconds are not a quiet-host number and are not published as evidence.
+
+Plan review before implementation: GLM-5.3-flash (`ollama-cloud/glm-5.3-flash:high`), verdict
+**APPROVE**, no blockers.
+
 ## 2026-11-09 — one contract per ratio: the vendor row stops paying for the clock (#74)
 
 The pages put two different kinds of call in one ratio. The vendor row called LAPACKE's plain entry
