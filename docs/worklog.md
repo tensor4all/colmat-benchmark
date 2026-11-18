@@ -2,6 +2,34 @@
 
 Decisions, fixed failures and open items for this campaign. Newest first.
 
+## 2026-11-18 — the throughput legends say colmat / faer / MKL / OpenBLAS (#85)
+
+The charts named their lines by the recorded engine rows (`faer-fork`, `faer-upstream`,
+`lapack-mkl`, `lapack-openblas`), so the campaign's own subject appeared under the fork's old
+name. `benchmarks/throughput.yaml` now gives each series a display `label` — `colmat`, `faer`,
+`MKL`, `OpenBLAS` — while the series keep reading the same engine rows, and the plotted-data
+tables and the page notes still name the engine rows, which are the recorded identity. No
+measurement, colour, marker, run assignment or coefficient changed. The trend charts keep raw
+engine names (`campaign.yaml` `trend.engines`), out of scope here.
+
+The label support is the toolkit's (campaign-toolkit#75, taken over and finished): the open PR
+indexed its per-engine data by the display label and would have raised `KeyError` for every
+label that differs from its engine; fixed by loading the panel points by `spec['engine']`, with
+a regression test. The plan was reviewed before implementation by `reviewer-glm` on
+`ollama-cloud/glm-5.3-flash`: `VERDICT: APPROVE` (its findings — the PR file list, the worklog
+in the diff, the table/trend naming — are addressed). The finished toolkit diff was reviewed by
+`openai/gpt-6.1-sol` (independent-review skill): no blockers, one MINOR (the test could pass
+with empty points) fixed by asserting the plotted polyline; `review: gpt-6.1-sol no blockers,
+MINOR fixed`. Merged as campaign-toolkit@5641191, which `requirements.txt` now pins.
+
+The site regenerated locally from the merged revision: every family's SVG legend says
+`colmat`, `faer`, `MKL`, `OpenBLAS` and no engine row name; the MKL series (green triangles) is
+plotted in `gemm`, the one family whose `lapack-mkl` rows were measured — the other families'
+MKL columns are dots in the recorded data, unchanged. Local gates: unittest (56) OK,
+declarations, `gen_index.py --check`, `campaign-check-generated --base origin/main --no-index`,
+`campaign-sync-pins --check`, `campaign-check-pin-recorded`, `validate_run.py` over every
+recorded manifest — all pass. Nothing generated is committed; the Pages deploy writes it.
+
 ## 2026-11-18 — the harness identity is its measured paths, and the site says colmat (#82)
 
 **The identity.** `gen_comparison.require_one_protocol` compared the recorded `harness.commit` as one
