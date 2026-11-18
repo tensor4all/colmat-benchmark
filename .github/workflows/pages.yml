@@ -11,7 +11,7 @@ name: pages
 on:
   push:
     branches: [main, perf/upstream-regression-campaign]
-    paths: [result/**, data/**, benchmarks/**, 'pins/**', requirements.txt, 'scripts/gen_site.py', 'scripts/gen_comparison.py', '.github/workflows/pages.yml']
+    paths: [result/**, data/**, benchmarks/**, 'pins/**', requirements.txt, 'scripts/gen_site.py', 'scripts/gen_comparison.py', 'scripts/candidate_compare.py', 'scripts/fetch_recorded_harness.sh', '.github/workflows/pages.yml']
   workflow_dispatch:
 
 permissions:
@@ -38,6 +38,10 @@ jobs:
           python-version: '3.12'
       - name: Install the pinned toolkit
         run: python -m pip install --quiet -r requirements.txt
+      - name: Fetch the harness commits the recorded runs name
+        # An arm recorded on a data commit that landed by squash names a harness commit main does
+        # not reach; the four-way view needs its tree (#82).
+        run: ./scripts/fetch_recorded_harness.sh
       - name: Checkout the two reference revisions
         run: ./scripts/setup_extern_deps.sh
       - name: The pin has a current recording

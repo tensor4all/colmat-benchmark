@@ -107,6 +107,10 @@ class PublicationSiteTest(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(gen_site.main([]), 0)
         index = (ROOT / 'result/index.html').read_text()
+        # The site names the project it benchmarks (colmat), not the upstream library it measures
+        # against, on the landing page's title and heading and in every page's title prefix.
+        self.assertIn('<title>colmat benchmark</title>', index)
+        self.assertIn('<h1>colmat benchmark</h1>', index)
         # The measured profile lists its recordings; zen2 profiles were never recorded and say so.
         revision = rev_file_value((ROOT / gen_site.PIN).read_text())
         zen5 = index.split('<h2 id="zen5-cpu">', 1)[1].split('<h2', 1)[0]
@@ -119,12 +123,16 @@ class PublicationSiteTest(unittest.TestCase):
             link = f'zen5-cpu/{suite}/{revision[:12]}-0539947ffb75-{vendor}-timing-v2.html'
             self.assertIn(f'href="{link}"', index)
             self.assertTrue((ROOT / 'result' / link).is_file(), link)
-        # The two daily arms of this recording were started either side of a data commit, so the
-        # pairing guard refuses them; the page must say that rather than link a table. When a future
-        # publication records both arms at one commit, this assertion is the one to flip back to the
-        # `...-comparison.html` link.
-        self.assertIn('The four-way view is withheld', index)
-        self.assertIn('harness.commit: mkl', index)
+        # The two daily arms of this recording were recorded either side of a data commit: their
+        # harness commits differ, the paths the harness is built from do not, so the join is accepted
+        # (#82) and the page links the table instead of a refusal.
+        comparison = f'zen5-cpu/{gen_site.SUITE}/{revision[:12]}-comparison.html'
+        self.assertNotIn('The four-way view is withheld', index)
+        self.assertIn(f'href="{comparison}"', index)
+        joined = (ROOT / 'result' / comparison).read_text()
+        for column in ('fork MKL (ms)', 'fork OpenBLAS (ms)', 'MKL (ms)', 'OpenBLAS (ms)'):
+            self.assertIn(f'<th>{column}</th>', joined)
+        self.assertIn('<tr><td class="k">', joined)
         images = re.findall(r'<img src="([^"]+)"', index)
         self.assertTrue(images)
         for image in images:

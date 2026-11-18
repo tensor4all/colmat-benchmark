@@ -50,8 +50,8 @@ def harness_differences(baseline, candidate, differences):
     return [d for d in differences if not d.startswith('harness commit:')]
 
 
-def candidate_module_same_code(before, after):
-    return candidate.same_measured_code(CAMPAIGN_ROOT, before, after, HARNESS_PATHS, git=git)
+def candidate_module_same_code(before, after, root=None):
+    return candidate.same_measured_code(root or CAMPAIGN_ROOT, before, after, HARNESS_PATHS, git=git)
 
 
 def git(path, *args):

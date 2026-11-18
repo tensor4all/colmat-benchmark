@@ -72,10 +72,11 @@ def write_comparison():
     Returns (page or None, refusal or None). The pairing guard (gen_comparison.require_one_protocol)
     refuses two arms that were not measured under one protocol, and the recorder takes each arm's
     protocol identity from the commit its run started at -- so two arms of one suite recorded either
-    side of a data commit differ in `harness.commit` alone and cannot be joined, even though the
-    same harness source measured both. The guard is the authority on whether the two arms are one
-    session, so its refusal is not argued with here: the landing page publishes what stands on its
-    own and says that the joined view is withheld, naming the field it disagrees on.
+    side of a data commit differ in `harness.commit` alone. The guard compares the harness by the
+    paths the binary is built from (`gen_comparison.harness_identity_same`), so those arms join;
+    a change to the harness itself is still refused. The guard is the authority on whether the two
+    arms are one session, so its refusal is not argued with here: the landing page publishes what
+    stands on its own and says that the joined view is withheld, naming the field it disagrees on.
     """
     arms, control = current_arms()
     if 'mkl' not in arms or 'openblas' not in arms:
@@ -218,7 +219,7 @@ def main(argv=None):
     revision = first['library']['commit'][:7]
     source = html.escape(first['library']['url'].rsplit('/', 1)[-1])
     recorded = first['timestamp'][:10]
-    site.write_site(index.parent, pins=[PIN], repo_ref=args.repo_ref, title='faer benchmark results',
+    site.write_site(index.parent, pins=[PIN], repo_ref=args.repo_ref, title='colmat benchmark',
                     intro=(f'The recordings at the measured revision {revision} of {source}, one '
                            f'section per hardware profile. These are the {recorded} zen5-cpu '
                            'recordings.'),

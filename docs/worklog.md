@@ -2,6 +2,45 @@
 
 Decisions, fixed failures and open items for this campaign. Newest first.
 
+## 2026-11-18 — the harness identity is its measured paths, and the site says colmat (#82)
+
+**The identity.** `gen_comparison.require_one_protocol` compared the recorded `harness.commit` as one
+more protocol field, so the two 93da6217 arms — the MKL run recorded at `cf51a3e` and the OpenBLAS run
+at its data-only child `e3248bea` — were refused over a commit that changed no file the binary is built
+from. The harness is now identified by the paths it is built from: `gen_comparison.harness_identity_same`
+asks `candidate_compare`'s existing rule (`HARNESS_PATHS` → the toolkit's tree comparison) rather than
+carrying a second definition, and only the `harness.commit` line of a refusal is waived when every one
+of those trees is equal. A change under `fbench`, `Cargo.toml`, `Cargo.lock`, `pins`, `benchmarks` or
+`scripts/build_for_faer_rev.sh` still differs and is still refused, as is a pair whose commit this
+checkout cannot resolve (fail closed; it is never certified by absence). Every other field the guard
+compares — host, power, timing, guards, CPU sets, grid, dtype, library/upstream/toolkit revisions — is
+untouched. Regression test: two commits that differ only in `data/` join, a commit that edits
+`fbench/src` is refused (`tests/test_comparison.py`).
+
+The joined page for the 93da6217 recording is regenerated from
+`20261117T092214Z-…-mkl` + `20261117T133516Z-…-openblas`: 4344 cells, both arms' fork columns and 720
+OpenBLAS rows, the header naming both harness commits and stating that their measured paths are
+identical. The header no longer prints one arm's commit above both.
+
+**The deploy holds the commit.** `e3248bea` is unreachable from `main` (the publication landed as the
+squash `9dac34d`), so a `fetch-depth: 0` checkout does not have its tree and the join would fail closed
+on the deploy that actually writes the page. `scripts/fetch_recorded_harness.sh` fetches, by SHA, each
+`harness.commit` the recorded runs name that the checkout does not hold; the `index` job and the Pages
+deploy run it after installing the toolkit. It warns rather than failing when the server no longer has
+one: the guard refuses that pair anyway.
+
+**The site title.** The landing page's `<title>` and `<h1>` still said "faer benchmark results", which
+names the upstream baseline, not the project being benchmarked. Both now say **colmat benchmark**
+(`scripts/gen_site.py`, the one `title` the toolkit renders into the landing page, the history and every
+result page's title prefix). The measured-library and upstream-faerie detail stays in the body.
+
+The plan for this change was reviewed before any code was written by an independent
+`reviewer-glm` subagent on `ollama-cloud/glm-5.3-flash`: `VERDICT: CHANGES`, and its BLOCKER was
+right — `candidate_compare.candidate_module_same_code` hardcodes its checkout, so the regression
+test's temporary repository would not have been consulted; the helper now takes the checkout as a
+parameter. Its IMPORTANT (the page header must not print one arm's harness commit above both) is
+also fixed; see `IMPLEMENTATION-PLAN.md` for the record.
+
 ## 2026-11-17 — the colmat 0.34.0 baseline: the pin moves, and what it cost
 
 The measured library renamed its crate to `colmat` (`tensor4all/colmat-rs`, 2026-11-12). This
@@ -75,6 +114,8 @@ difference of committed data only (`git diff cf51a3e e3248bea -- fbench/ Cargo.l
 pins scripts` is empty). `gen_comparison.require_one_protocol` refuses to join them on `harness.commit`
 alone, and this publication does not argue with that guard: the landing page carries the refusal
 instead of a table. Recording both arms from one HEAD is the process fix, not a change to the guard.
+(This was the state of that publication; the guard now compares the measured harness paths and the two
+arms join — see the 2026-11-18 entry.)
 
 Two coverage gaps that predate this change and stay: a vendor arm measures two of the three engines
 the suite projects onto it (the `faer-upstream` row is absent from the OpenBLAS arms, as it was on

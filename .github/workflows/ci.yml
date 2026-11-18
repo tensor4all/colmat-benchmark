@@ -52,6 +52,10 @@ jobs:
           fetch-depth: 0  # campaign-check-generated compares against origin/main
       - name: Python deps
         run: python3 -m pip install --quiet -r requirements.txt
+      - name: Fetch the harness commits the recorded runs name
+        # An arm recorded on a data commit that landed by squash names a harness commit main does
+        # not reach; the join needs its tree (#82).
+        run: ./scripts/fetch_recorded_harness.sh
       - name: Checkout the two reference revisions
         run: ./scripts/setup_extern_deps.sh
       - name: Declarations are well formed
