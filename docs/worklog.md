@@ -2,6 +2,85 @@
 
 Decisions, fixed failures and open items for this campaign. Newest first.
 
+## 2026-11-17 — the colmat 0.34.0 baseline: the pin moves, and what it cost
+
+The measured library renamed its crate to `colmat` (`tensor4all/colmat-rs`, 2026-11-12). This
+repository's harness on `main` links that crate (`colmat >=0.34`, #73), while the pin still named
+`t4a-faer` 0.28.0 (`325e482`) — a crate the fork no longer publishes under that name. The build
+therefore could not even resolve:
+
+```
+$ scripts/build_for_faer_rev.sh --checkout extern/t4a-faer … --vendor mkl --out /tmp/pin.env
+error: patch location '…/extern/t4a-faer/faer' does not contain packages matching 'colmat'     (rc=1)
+```
+
+**The pin.** `pins/t4a-faer.rev` (the name is historical; renaming it would be a cross-repo path
+change with no measurement value, so it stays) now holds
+`93da62172a96260ae3d5ed7481690f440f58d904` — `colmat-rs` `main` at the 2026-11-17 head, the merge of
+#218. That is the pre-optimization baseline this campaign exists to publish: it carries the
+post-release correctness and perf merges #197–#220, which are in no release. The alternative —
+the source of the published crates.io `colmat 0.34.0`, `e1c83482f5a61449d30e989808c3ba5f751ec391`
+per the crate's `.cargo_vcs_info.json` — was rejected because it predates every one of those merges.
+No `colmat` git tag names `93da6217`, so the pages say so and the manifest's `library.commit` is the
+identity, not the version string.
+
+**The toolkit chain.** The stack gains the `colmat` library (tensor4all/campaign-toolkit#70) and this
+repository's `requirements.txt` follows that merge. The stack held this pin at the last measured
+revision until the pages existed (campaign-toolkit#70's `measured:` hold), and the hold is dropped in
+the change that publishes them (tensor4all/campaign-toolkit#71) — the same order the tcontract-rs
+hold used, so `campaign-sync-pins --check` never reports a pin the pages do not back.
+
+**What the first run cost, and the harness defect it found.** The first attempt died 91 minutes in,
+at the `linalg-wide` cell, with `record_run` rc=1. The row was `qr_factor` on the f-order vendor arm
+at 64x1024 and 256x4096, and the cause was not the measured library: `fbench/src/lapack.rs` sized the
+`orgqr` workspace query on the factor's full `m x n` geometry, where `DORGQR` requires `n <= m`. On a
+wide shape the query was illegal, so the vendor answered with a diagnostic on **stdout**
+(`Intel oneMKL ERROR: Parameter 2 was incorrect on entry to DORGQR`; OpenBLAS its xerbla line), the
+cell child's protocol treats an undefined line as broken output, the row became `failed`, and the
+recorder refused the run — on a measurement that had in fact succeeded (the real call, on Q's own
+shape, worked: `DORGQR(64,64,64,…) 489.84us`, `RESULT 0 ok 1.226427`). The route arrived with #74;
+harness `40d4801`, which recorded the 2026-11-13 pages, had no `qr_factor` `_work` route and records
+those cells `ok`. Fixed as its own change (#80, `orgqr_scratch(m, m.min(n), m.min(n))`, the same rule
+`thin_q` already followed for the call), and the campaign re-run at that harness. No library code was
+touched, and the workspace size — and therefore every recorded number — is unchanged.
+
+**Scope: three arms, and why not four.** Runs were taken one at a time on evo (zen5-cpu):
+
+| arm | grid | passes | accepted |
+|---|---|---|---|
+| `faer-kernels` MKL | `f64`/`c64`/`f32`/`c32`, 1/4/8T, all 8 regimes | 3 | 4 h 13 min, rc=0, no idle-guard rejection |
+| `faer-kernels` OpenBLAS | same | 6 | 4 h 28 min, rc=0, no idle-guard rejection |
+| `faer-kernels-large` MKL | `f64`/`c64`, 4/8T, 1024/1536 + boundary | 3 | 7 h 20 min, rc=0, no idle-guard rejection |
+| `faer-kernels-large` OpenBLAS | — | — | **not recorded (decision, 2026-11-18)** |
+
+The daily suite now records its full declaration — `f64`, `c64`, `f32`, `c32` at 1/4/8T, all eight
+regimes — where the 2026-11-13 pages covered `f64`/`c64` only, so its MKL arm reports
+`covers_declared_suite: true` for the first time. The large suite records the declared 1024/1536 +
+boundary tier at 4/8T; the adoption-only `linalg-big`/`gemm-huge` tiers (2048/3072/4096) stay
+unmeasured and the pages say so.
+
+**The large OpenBLAS arm was deliberately dropped.** In the 1024 large data the fork arm is ahead in
+essentially every cell — in C order it wins all 32 cells (1.11–4.47× at 4T and 8T) and the `gemm`
+cells by 1.17–1.19× — so a second large arm costing ~7 h of machine time had no decision value. The
+qualification, recorded so the omission is not read as a broader claim: in the f-order 8T slice four
+cells go the other way, OpenBLAS up to 1.30× ahead. Those numbers compare the two committed
+2026-11-13 large runs, which were recorded by different harness commits, so they are indicative
+rather than a published ratio — and this publication forms no large-suite vendor ratio at all, which
+is what would otherwise have needed both arms on one contract.
+
+**The joined four-way view is withheld for this recording.** The recorder takes each arm's protocol
+identity from the commit its run started at, and this campaign's data commits landed between the runs,
+so the daily MKL arm records harness `cf51a3e` and the daily OpenBLAS arm records `e3248bea` — a
+difference of committed data only (`git diff cf51a3e e3248bea -- fbench/ Cargo.lock benchmarks/suites
+pins scripts` is empty). `gen_comparison.require_one_protocol` refuses to join them on `harness.commit`
+alone, and this publication does not argue with that guard: the landing page carries the refusal
+instead of a table. Recording both arms from one HEAD is the process fix, not a change to the guard.
+
+Two coverage gaps that predate this change and stay: a vendor arm measures two of the three engines
+the suite projects onto it (the `faer-upstream` row is absent from the OpenBLAS arms, as it was on
+the 2026-11-13 pages), which is why those runs report `covers_declared_suite: false`; and
+`eig`/`upgrade_factor` still have no harness route and are recorded `skipped` with that reason.
+
 ## 2026-11-17 — the verification products are a blocked GEMM (#77)
 
 Every `check` closure's dense product — `qr`'s `Q*R`, `lu`/`full_piv_lu`'s `L*U`, `solve`'s and

@@ -20,6 +20,8 @@ import pathlib
 import re
 import sys
 
+import yaml
+
 from campaign_toolkit import descriptor, gen_index, pin_recorded, site
 from campaign_toolkit.campaign import load
 
@@ -27,13 +29,26 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import gen_comparison  # noqa: E402
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-PIN = 'pins/t4a-faer.rev'
+PIN = 'pins/t4a-faer.rev'   # historical name; it holds the colmat revision since the 2026-11-17 rename
 SUITE = 'faer-kernels'
-MEASURED = '325e482b6532624d06236ad6991a41c57b0c23d1'
-RELEASE = '325e482b6532624d06236ad6991a41c57b0c23d1'
-UPSTREAM = '0539947ffb757a739d7e703a7d2fa0c792a909c1'
-CAVEAT = ('measured at 325e482, the t4a-faer 0.28.0 release source; the four 2026-11-13 zen5-cpu recordings were taken at this revision.')
-LIMITATION = 'Coverage is partial: f64/c64, the small suite at 1/4/8T, and the 1024 + boundary tier at 4/8T.'
+# Read from the current arms' manifests, not restated here: a constant outlived the last
+# publication (harness commit, toolkit commit, vendor kernel, coverage) and the reader had no
+# way to tell.
+LIMITATION_PREFIX = 'Known limitation: '
+
+
+def limitation_text():
+    """The measured suite's own stated limitation, verbatim.
+
+    The landing page repeats what the suite declaration says instead of restating coverage in a
+    second place: a constant here and the YAML bullet below it drift, and the page keeps claiming
+    coverage the declaration no longer has.
+    """
+    data = yaml.safe_load((ROOT / 'benchmarks' / 'suites' / f'{SUITE}.yaml').read_text())
+    for line in data['workloads']['known_blind_spots']:
+        if line.startswith(LIMITATION_PREFIX):
+            return line[len(LIMITATION_PREFIX):]
+    raise SystemExit(f'FAIL {SUITE}.yaml declares no "{LIMITATION_PREFIX}" blind spot')
 
 
 def current_arms():
@@ -52,16 +67,105 @@ def current_arms():
 
 
 def write_comparison():
-    """Write the four-way view under its measured revision; None without both arms."""
+    """Write the four-way view under its measured revision.
+
+    Returns (page or None, refusal or None). The pairing guard (gen_comparison.require_one_protocol)
+    refuses two arms that were not measured under one protocol, and the recorder takes each arm's
+    protocol identity from the commit its run started at -- so two arms of one suite recorded either
+    side of a data commit differ in `harness.commit` alone and cannot be joined, even though the
+    same harness source measured both. The guard is the authority on whether the two arms are one
+    session, so its refusal is not argued with here: the landing page publishes what stands on its
+    own and says that the joined view is withheld, naming the field it disagrees on.
+    """
     arms, control = current_arms()
     if 'mkl' not in arms or 'openblas' not in arms:
-        return None
+        return None, None
     rev = load(arms['mkl'] / 'run.yaml')['library']['commit'][:12]
     out = ROOT / 'result' / 'zen5-cpu' / SUITE / f'{rev}-comparison.html'
     argv = ['--mkl', str(arms['mkl']), '--openblas', str(arms['openblas']), '--out', str(out)]
     if control is not None:
         argv += ['--control-mkl', str(control)]
-    gen_comparison.main(argv)
+    try:
+        gen_comparison.main(argv)
+    except gen_comparison.PairingRefused as refusal:
+        # Only the pairing guard's own refusal is published around. Any other SystemExit from
+        # gen_comparison (missing result files, an arm under the wrong column) still escapes and
+        # fails the deploy, which is what a broken run must do.
+        return None, str(refusal)
+    return out, None
+
+
+def provenance_html(arms):
+    """The landing page's provenance section, read from the current arms' own manifests.
+
+    Every value here is the recording's own: the measured library and its declared version, the
+    upstream baseline, the harness and toolkit commits, the vendor builds and the kernel each one
+    dispatched to. A restated constant goes stale silently -- this section restated the harness
+    commit, the toolkit commit, the vendor kernel and the coverage of an earlier publication, and a
+    reader had no way to tell that the page no longer described its own runs.
+    """
+    runs = {vendor: load(arm / 'run.yaml') for vendor, arm in arms.items()}
+    if not runs:
+        return ''
+    first = runs.get('mkl') or next(iter(runs.values()))
+    lib, up = first['library'], first['upstream']
+    threads = '/'.join(str(t) for t in first['threads']['counts'])
+    dtypes = ', '.join(first['run_spec']['dtypes'])
+    items = [
+        'recorded on <code>{host}</code> ({profile}), measured library <code>{url}</code> at '.format(
+            host=html.escape(first['host']['hostname']), profile=html.escape(first['target_profile']),
+            url=html.escape(lib['url']))
+        + f"<code>{lib['commit']}</code>, declared version <code>{html.escape(str(lib.get('version')))}</code>, "
+        + f"upstream <code>{up['commit']}</code> (<code>{html.escape(str(up.get('ref')))}</code>)",
+        f"measurement toolkit <code>{first['toolkit']['commit']}</code>",
+        # Each arm states the commit that recorded it: the runs of one publication can be recorded
+        # at different commits (a data commit between them), and a single shared value would deny
+        # what the page's own withheld-comparison note says.
+        f"one row per engine: {'; '.join(_vendor_text(runs))}",
+        f"the small suite's declared grid: {html.escape(dtypes)} at {threads}T, both orders, every "
+        "declared regime",
+    ]
+    out = '<section>\n<h2>Current recordings: scope and provenance</h2>\n<ul>\n'
+    out += ''.join(f'<li>{item}</li>\n' for item in items)
+    out += '</ul>\n'
+    if not lib.get('tag'):
+        out += ('<p><strong>No tag names this revision.</strong> '
+                f"<code>{lib['commit'][:12]}</code> is the library's development head, not a release: "
+                f'the version string <code>{html.escape(str(lib.get("version")))}</code> comes from its '
+                'manifest and does not identify this snapshot, and the published crates.io source for '
+                'that version was cut from a different commit (see the worklog). The commit does '
+                'identify it.</p>\n')
+    openblas = runs.get('openblas')
+    corename = (openblas or {}).get('vendor', {}).get('corename')
+    if corename and not corename.lower().startswith('zen'):
+        out += ('<p><strong>OpenBLAS arm: <code>' + html.escape(corename) + '</code> kernel, not '
+                'Zen5-optimized.</strong> ' + html.escape(first['host']['cpu']) + ' dispatched to the '
+                '<code>' + html.escape(corename) + '</code> kernel in the recorded run; comparisons with '
+                'the MKL arm describe these builds and dispatched kernels, not a general vendor '
+                'ranking on Zen5.</p>\n')
+    if first['host'].get('role') != 'reference':
+        out += ('<p>Evo was reserved for measurement, but the recorded <code>host.role='
+                + html.escape(str(first['host'].get('role'))) + '</code> is unchanged: these reports '
+                'retain their profile\'s <strong>provisional</strong> designation.</p>\n')
+    out += ('<p>The wrong-pin partial <code>20261031T222831Z-pub-3a8edf02-20261031-mkl</code> is '
+            'preserved locally and explicitly excluded from this publication. One rejected '
+            'small-OpenBLAS 8T attempt is retained in its raw archive, not counted as an accepted '
+            'sample.</p>\n</section>')
+    return out
+
+
+def _vendor_text(runs):
+    """`MKL 2026.2 …` / `OpenBLAS 0.3.32 (dispatch Cooperlake) …` for each arm present."""
+    out = []
+    for vendor, run in runs.items():
+        v = run['vendor']
+        text = f"<code>{html.escape(str(v.get('name')))} {html.escape(str(v.get('version')))}</code>"
+        if v.get('linkage'):
+            text += f" ({html.escape(str(v['linkage']))})"
+        if v.get('corename'):
+            text += f", dispatch <code>{html.escape(str(v['corename']))}</code>"
+        text += f", recorded by harness <code>{html.escape(str(run['harness']['commit']))}</code>"
+        out.append(text)
     return out
 
 
@@ -77,37 +181,15 @@ def main(argv=None):
         print('FAIL the site is not written while the pin has no current recording', file=sys.stderr)
         return 1
     index = ROOT / 'result' / 'index.html'
-    comparison = write_comparison()
-    extra = '''<section>
-<h2>Current recordings at 325e482: scope and provenance</h2>
-<ul>
-<li>Recorded on evo (zen5-cpu), fork <code>325e482b6532624d06236ad6991a41c57b0c23d1</code>,
-upstream <code>0539947ffb757a739d7e703a7d2fa0c792a909c1</code>, harness <code>eeeaa36388c515a992d5056f4211e4a6cb92ba54</code>.</li>
-<li>The actual measurement toolkit was <code>74e50e8199cb2c2f07e810744a0943fc3a8c1170</code>,
-not the original renderer requirements pin <code>b71624bef111ce941bddaedcce3fdb6eab40f9eb</code>;
-updating the CI dependency does not change this recorded measurement identity.</li>
-<li>Evo was reserved for measurement, but the recorded <code>host.role=development</code> is unchanged:
-these reports retain their profile's <strong>provisional</strong> designation.</li>
-<li><strong>OpenBLAS arm: Cooperlake kernel, not Zen5-optimized.</strong>
-OpenBLAS 0.3.32 DYNAMIC_ARCH reported <code>vendor.corename=Cooperlake</code> on the
-AMD Ryzen AI 9 HX 470 (CPU family 26, model 36). Comparisons with MKL 2026.2 describe
-these builds and dispatched kernels, not a general vendor ranking on Zen5.</li>
-<li>Coverage is <strong>partial</strong> relative to the complete declarations: f64/c64,
-small suite at 1/4/8T and the 1024 + boundary tier at 4/8T. No n=1024 Seq was measured;
-Pfaffian is not a measured family, so this is not a Pfaffian performance claim.</li>
-<li>The wrong-pin partial <code>20261031T222831Z-pub-3a8edf02-20261031-mkl</code>
-is preserved locally and explicitly excluded from this publication. One rejected small-OpenBLAS
-8T attempt is retained in its raw archive, not counted as an accepted sample.</li>
-</ul>
-</section>'''
-    extra += f'<p><strong>Release caveat:</strong> {html.escape(CAVEAT)}</p>\n'
-    extra += f'<p><strong>Known limitation:</strong> {html.escape(LIMITATION)}</p>\n'
+    comparison, refusal = write_comparison()
+    arms, _control = current_arms()
+    extra = provenance_html(arms)
+    extra += f'<p><strong>Known limitation:</strong> {html.escape(limitation_text())}</p>\n'
     # The pages below were recorded by a harness that charged the vendor arms for work the faer arms
     # avoided (#74), so their vendor ratios are not library comparisons. The joined view withdraws
     # those cells (gen_comparison.FAIR_HARNESS); a reader who lands here must not have to infer it
     # from a column, so the landing page says it too -- and stops saying it once the current pages
     # were recorded by a fair harness.
-    arms, _control = current_arms()
     if any(not gen_comparison.fair_harness(load(arm / 'run.yaml').get('harness', {}).get('commit'))
            for arm in arms.values()):
         extra += (
@@ -126,8 +208,20 @@ is preserved locally and explicitly excluded from this publication. One rejected
         extra += ('<h2>The four-way view</h2>\n'
                  f'<p><a href="{rel}">The same recording against upstream, OpenBLAS and MKL in one '
                  f'table ({cells} cells)</a>, with the unchanged row\'s control in its header.</p>')
+    if refusal is not None:
+        extra += ('<h2>The four-way view is withheld</h2>\n'
+                  '<p>The MKL and OpenBLAS arms of this recording were not accepted as one session, '
+                  'so no table joins them here. Each page above states the revision that recorded '
+                  'it, and each stands on its own. The pairing guard reported:</p>\n'
+                  f'<pre>{html.escape(refusal)}</pre>\n')
+    first = load(next(iter(arms.values())) / 'run.yaml')
+    revision = first['library']['commit'][:7]
+    source = html.escape(first['library']['url'].rsplit('/', 1)[-1])
+    recorded = first['timestamp'][:10]
     site.write_site(index.parent, pins=[PIN], repo_ref=args.repo_ref, title='faer benchmark results',
-                    intro=('The recordings at the pinned fork revision 325e482, the t4a-faer 0.28.0 release source, one section per hardware profile. These are the 2026-11-13 zen5-cpu recordings.'),
+                    intro=(f'The recordings at the measured revision {revision} of {source}, one '
+                           f'section per hardware profile. These are the {recorded} zen5-cpu '
+                           'recordings.'),
                     extra_html=extra, root=ROOT)
     return 0
 

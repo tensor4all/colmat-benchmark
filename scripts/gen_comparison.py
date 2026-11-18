@@ -265,6 +265,15 @@ def unmeasured_cells(arms):
     return unmeasured, sorted({key[1] for key in unmeasured})
 
 
+class PairingRefused(SystemExit):
+    """Two arms were offered that are not one measurement session.
+
+    A SystemExit subclass, so the CLI behaves exactly as before (message on stderr, non-zero exit)
+    while a caller can tell a refusal to join -- which it may publish around -- from a run whose
+    files or manifest are broken, which must abort the publication instead.
+    """
+
+
 def require_one_protocol(arms):
     """Refuse to join runs that were not measured the same way on the same machine.
 
@@ -281,16 +290,16 @@ def require_one_protocol(arms):
     cpus = cpu_sets(reference['manifest'])
     grid = run_grid(reference)
     if not cpus:
-        sys.exit(f'ERROR: the {label} arm records no measured CPU sets in run.yaml; a run is only '
-                 'joined when it says which CPUs it measured on')
+        raise PairingRefused(f'ERROR: the {label} arm records no measured CPU sets in run.yaml; a '
+                             'run is only joined when it says which CPUs it measured on')
     # A thread budget is measured on a CPU set, and the set is what a 1T or 8T column means. A
     # shared budget cannot stand in for it: the entry both arms share may be one neither of them
     # measured a cell with, while the budget they did measure has no recorded set at all.
     uncovered = [f'threads.cpu_sets[{count} thread]: the {arm["label"]} arm measured it but records '
                  'no CPU set for it' for arm in arms for count in missing_budget_sets(arm)]
     if uncovered:
-        sys.exit('ERROR: an arm does not say which CPUs it measured a thread budget on, so its rows '
-                 'are not evidence:\n  ' + '\n  '.join(uncovered))
+        raise PairingRefused('ERROR: an arm does not say which CPUs it measured a thread budget on, '
+                             'so its rows are not evidence:\n  ' + '\n  '.join(uncovered))
     for arm in arms[1:]:
         differences = []
         other_label = arm['label']
@@ -328,9 +337,10 @@ def require_one_protocol(arms):
                     f'{shape[6]}-batch dtype: {label} {sorted(mine)} '
                     f'vs {other_label} {sorted(wanted)}')
         if differences:
-            sys.exit(f'ERROR: the {label} arm and the {other_label} arm were not measured under one '
-                     'protocol on one host, so their rows are not one session:\n  '
-                     + '\n  '.join(differences))
+            raise PairingRefused(
+                f'ERROR: the {label} arm and the {other_label} arm were not measured under one '
+                'protocol on one host, so their rows are not one session:\n  '
+                + '\n  '.join(differences))
     return identity
 
 
