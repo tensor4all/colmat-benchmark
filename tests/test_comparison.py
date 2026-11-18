@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 import yaml
 
@@ -108,12 +109,14 @@ class ComparisonTest(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def generate(self, mkl_rows, ob_rows, extra=(), harness=None, **ob_overrides):
-        # `harness` is the revision both arms record; it decides whether this page may print a
-        # vendor ratio at all (see gen_comparison.fair_harness).
+    def generate(self, mkl_rows, ob_rows, extra=(), harness=None, ob_harness=None, **ob_overrides):
+        # `harness` is the revision both arms record unless `ob_harness` names the OpenBLAS arm's; it
+        # decides whether this page may print a vendor ratio at all (see gen_comparison.fair_harness).
         overrides = {} if harness is None else {'harness': {'commit': harness}}
+        own = {} if ob_harness is None else {'harness': {'commit': ob_harness}}
         mkl = write_run(self.dir / 'mkl', 'mkl', mkl_rows, **overrides)
-        ob = write_run(self.dir / 'openblas', 'openblas', ob_rows, **{**overrides, **ob_overrides})
+        ob = write_run(self.dir / 'openblas', 'openblas', ob_rows,
+                       **{**overrides, **own, **ob_overrides})
         self.log = io.StringIO()
         with contextlib.redirect_stdout(self.log):
             self.assertEqual(gen_comparison.main(['--mkl', str(mkl), '--openblas', str(ob),
@@ -151,6 +154,73 @@ class ComparisonTest(unittest.TestCase):
         self.assertIn(f'<td>{fmt(10.0)}</td>', page)
         self.assertIn(f'<td>-</td><td>{fmt(50.0)}</td><td>-</td>', page)
         self.assertNotIn(f'>{fmt(5.0)}<', page)
+
+    def harness_repo(self):
+        """A throw-away repository carrying the measured harness paths, at three commits.
+
+        `harness` is the tree the next two commits share, `data_only` adds only recorded data, and
+        `changed` edits `fbench/src` -- the two cases the join has to tell apart (#82). A repository
+        of its own rather than this campaign's history, so the rule is tested where no commit can be
+        squashed away or garbage-collected.
+        """
+        repo = self.dir / 'harness-repo'
+        for path in ('fbench/src', 'benchmarks/suites', 'pins', 'scripts'):
+            (repo / path).mkdir(parents=True, exist_ok=True)
+        (repo / 'fbench/src/lib.rs').write_text('pub fn f() {}\n')
+        (repo / 'fbench/Cargo.toml').write_text('[package]\nname = "fbench"\nversion = "0.1.0"\n')
+        (repo / 'Cargo.toml').write_text('[workspace]\n')
+        (repo / 'Cargo.lock').write_text('# empty\n')
+        (repo / 'pins/t4a-faer.rev').write_text('0' * 40 + '\n')
+        (repo / 'benchmarks/suites/faer-kernels.yaml').write_text('suite: faer-kernels\n')
+        (repo / 'scripts/build_for_faer_rev.sh').write_text('#!/bin/sh\n')
+
+        def git(*args):
+            return subprocess.run(['git', '-C', str(repo), *args], check=True, capture_output=True,
+                                  text=True).stdout.strip()
+
+        def commit(message):
+            git('add', '-A')
+            git('-c', 'user.name=test', '-c', 'user.email=test@example.com', '-c',
+                'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null', 'commit', '-qm', message)
+            return git('rev-parse', 'HEAD')
+
+        git('init', '-q')
+        harness = commit('the measured harness')
+        (repo / 'data/results/20260101T000000Z-mkl').mkdir(parents=True)
+        (repo / 'data/results/20260101T000000Z-mkl/run0.csv').write_text('cell,total_ms\nlu,1\n')
+        data_only = commit('data: one recorded arm')
+        (repo / 'fbench/src/lib.rs').write_text('pub fn f() { /* moves a number */ }\n')
+        changed = commit('fbench: change the measured code')
+        return repo, harness, data_only, changed
+
+    def test_commits_that_differ_only_in_recorded_data_are_one_harness_identity(self):
+        # The daily 93da6217 arms of this campaign are recorded either side of a data commit: their
+        # harness commits differ, every path the binary is built from is identical. The join asks
+        # the same question `candidate_compare.py` asks with HARNESS_PATHS, so it accepts them.
+        repo, harness, data_only, _ = self.harness_repo()
+        with mock.patch.object(gen_comparison, 'ROOT', repo), \
+                contextlib.redirect_stderr(io.StringIO()):
+            page = self.generate([cell('lu', 'faer-fork', 10.0), cell('lu', 'faer-upstream', 12.0),
+                                  cell('lu', 'lapack-mkl', 20.0)],
+                                 [cell('lu', 'faer-fork', 10.0),
+                                  cell('lu', 'lapack-openblas', 30.0)],
+                                 harness=harness, ob_harness=data_only)
+        self.assertIn('<td class="k">lu</td>', page)
+        self.assertIn('<th>fork OpenBLAS (ms)</th>', page)
+
+    def test_a_change_under_a_measured_harness_path_is_still_refused(self):
+        # The exemption is the measured paths, not the commit: an `fbench/src` change is a different
+        # harness measuring different work, and the pair is refused on `harness.commit` as before.
+        repo, harness, _, changed = self.harness_repo()
+        with mock.patch.object(gen_comparison, 'ROOT', repo), \
+                contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit) as raised:
+                self.generate([cell('lu', 'faer-fork', 10.0), cell('lu', 'lapack-mkl', 20.0)],
+                              [cell('lu', 'faer-fork', 10.0),
+                               cell('lu', 'lapack-openblas', 30.0)],
+                              harness=harness, ob_harness=changed)
+        self.assertIn('harness.commit', str(raised.exception))
+        self.assertFalse(self.out.exists())
 
     def test_a_different_idle_guard_is_not_the_same_protocol(self):
         # The review's reproduction: identical fixtures except the AOCL-era arm's `guards`. A run

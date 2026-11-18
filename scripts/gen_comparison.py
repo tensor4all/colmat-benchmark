@@ -16,7 +16,9 @@ hours apart -- so the arms are joined on what the numbers depend on (host, power
 state, idle-guard and timing policy, the CPU set of every thread budget they
 measured, the revision of library/upstream/harness/toolkit, and the cell grid), and
 a run that differs in any of those is refused with the field named rather than
-joined into a table that claims more than was measured.
+joined into a table that claims more than was measured. The harness is the measured
+harness, not the commit that happened to hold it: two arms recorded either side of a
+commit that only adds recorded data are one identity (`harness_identity_same`).
 
 It is a view over recorded data, not a new measurement: a cell that one arm does
 not carry is shown as a dash, and the per-arm Markdown pages plus their manifests
@@ -24,6 +26,8 @@ stay authoritative for the control statement and the verification record.
 """
 import argparse, csv, html, pathlib, statistics, subprocess, sys
 import yaml
+
+import candidate_compare
 
 KEY = ('regime', 'family', 'dtype', 'order', 'm', 'n', 'k', 'batch', 'threads', 'note')
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -190,7 +194,9 @@ def protocol_identity(manifest, label):
     comparable, docs/protocol-v2-baseline.md), the idle guard the run waited on (a run that
     accepted a busy machine is not a quieter neighbour's peer), the observer's affinity, and the
     revisions of the library, upstream, harness and toolkit -- a different harness measures
-    different work, which no amount of equal timing constants repairs.
+    different work, which no amount of equal timing constants repairs. The harness is its measured
+    paths, not its commit: two commits that differ only outside `HARNESS_PATHS` are one harness
+    (`harness_identity_same`), so `harness.commit` is the one field the join may waive.
     """
     timing = manifest.get('timing_policy') or {}
     guards = manifest.get('guards') or {}
@@ -209,6 +215,18 @@ def protocol_identity(manifest, label):
                  f'({", ".join(missing)} missing from run.yaml); runs are only joined when they were '
                  'measured under one protocol')
     return {field: flatten(value) for field, value in fields.items()}
+
+
+def harness_identity_same(before, after):
+    """Whether two recorded harness commits built the same measured harness.
+
+    A publication's arms can be recorded either side of a commit that only adds recorded data: the
+    commits differ, the files the binary is built from do not. The rule is `candidate_compare`'s --
+    its `HARNESS_PATHS` handed to the toolkit's tree comparison -- not a second definition. A
+    checkout that cannot resolve one of the commits answers no (the toolkit turns a missing path
+    into a difference), so the join is refused rather than certified by absence.
+    """
+    return not candidate_compare.candidate_module_same_code(before, after, ROOT)
 
 
 def cpu_sets(manifest):
@@ -281,7 +299,8 @@ def require_one_protocol(arms):
     and the cell grid are one. Two runs on two machines, or under two timing policies, would make
     it false while the table looked the same, so a difference is refused with every differing
     field named on both sides -- those are what would have to be re-measured for the comparison to
-    be real.
+    be real. The harness revision is compared as its measured paths (`harness_identity_same`): two
+    arms recorded either side of a data commit are one harness, a change to the harness is refused.
     """
     reference = arms[0]
     label = reference['label']
@@ -307,8 +326,19 @@ def require_one_protocol(arms):
         if other_host != identity:
             differences.append(f'host: {describe_host(identity)} vs {describe_host(other_host)}')
         other = protocol_identity(arm['manifest'], other_label)
+        same_harness = (protocol['harness.commit'] == other['harness.commit']
+                        or harness_identity_same(protocol['harness.commit'],
+                                                 other['harness.commit']))
+        # A harness change under a measured path is still a difference: the commits are one identity
+        # only when every path the binary is built from is identical.
         differences += [f'{field}: {label} {protocol[field]} vs {other_label} {other[field]}'
-                        for field in protocol if protocol[field] != other[field]]
+                        for field in protocol if protocol[field] != other[field]
+                        and not (field == 'harness.commit' and same_harness)]
+        if same_harness and protocol['harness.commit'] != other['harness.commit']:
+            print(f"harness commits {protocol['harness.commit'][:12]} ({label}) and "
+                  f"{other['harness.commit'][:12]} ({other_label}) carry identical build inputs "
+                  f"({', '.join(candidate_compare.HARNESS_PATHS)}); the difference is outside the "
+                  "measured harness")
         other_cpus = cpu_sets(arm['manifest'])
         # Only the budgets both arms were asked for, and both recorded (above): a leftover entry for
         # a thread count neither arm measured says nothing about these numbers, and the budget both
@@ -441,8 +471,9 @@ def main(argv=None):
     ctrl = control(args.control_mkl, args.mkl) if args.control_mkl else None
     ob = vendor_arm('openblas', args.openblas)
     identity = require_one_protocol([mkl, ob])
-    # One harness recorded both arms -- `require_one_protocol` refuses a pair that disagrees on the
-    # revision -- so whether these ratios were measured on one contract is asked once.
+    # `require_one_protocol` accepts a pair only when one harness measured both arms: the same
+    # commit, or two commits whose measured harness paths are identical. So whether these ratios
+    # were measured on one contract is asked once, of the MKL arm's manifest.
     harness = (mkl['manifest'].get('harness') or {}).get('commit')
     fair = fair_harness(harness)
 
@@ -481,8 +512,8 @@ def main(argv=None):
     if withdrawn_cells:
         families = sorted({r['key'][1] for r in withdrawn_cells})
         withdrawn_html = (
-            '<p class="withdrawn"><strong>Withdrawn vendor comparison.</strong> These arms were '
-            f'recorded by harness <code>{html.escape(str(harness)[:12])}</code>, which is not at or '
+            '<p class="withdrawn"><strong>Withdrawn vendor comparison.</strong> The MKL arm was recorded '
+            f'by harness <code>{html.escape(str(harness)[:12])}</code>, which is not at or '
             f'after the harness that charged both sides of a vendor ratio the same contract '
             f'(<code>{FAIR_HARNESS[:12]}</code>): it predates it, or this checkout cannot place it in '
             f'the history. '
@@ -522,6 +553,12 @@ def main(argv=None):
     calls = f"{timing['repetitions']} call{'s' if timing['repetitions'] != 1 else ''}"
     reduction = "last of the run's process-set CSVs"
     title = f"{library['suite_id']} on {library['target_profile']} - fork against upstream, OpenBLAS and MKL"
+    # The arms can name two harness commits (one identity, see `harness_identity_same`); printing
+    # only the MKL arm's would describe the page with a revision only one arm was recorded at.
+    ob_harness = (ob['manifest'].get('harness') or {}).get('commit')
+    harness_text = (f"<code>{harness[:12]}</code>" if ob_harness == harness else
+                    f"<code>{harness[:12]}</code> (MKL arm) and <code>{ob_harness[:12]}</code> "
+                    "(OpenBLAS arm), which carry identical measured harness paths")
     parts = [f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <title>{html.escape(title)}</title>
@@ -554,7 +591,7 @@ the fork is faster; the cells outside 0.95-1.05 are tinted.</p>
  <li>hardware profile: <code>{library['target_profile']}</code>; measured CPUs {html.escape(str(library['threads']['cpu_sets']))}; observer {html.escape(str(library['threads']['observer'].get('affinity')))}; one host: {html.escape(describe_host(identity))}</li>
  <li>timing policy: v{timing['version']}, {calls}, {timing['statistic']}, priming {timing['minimum_untimed_priming_ms']} ms; guards: idle {guards['idle_window_seconds']} s, max {guards['max_busy_percent']}% busy, {guards['attempts']} attempts</li>
  <li>recorded: <code>{library['timestamp']}</code> (MKL arm) and <code>{ob['manifest']['timestamp']}</code> (OpenBLAS arm)</li>
- <li>harness <code>{library['harness']['commit'][:12]}</code>, toolkit <code>{library['toolkit']['commit'][:12]}</code></li>
+ <li>harness {harness_text}, toolkit <code>{library['toolkit']['commit'][:12]}</code></li>
 </ul>
 {withdrawn_html}
 {control_html}
