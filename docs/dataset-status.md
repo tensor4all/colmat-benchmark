@@ -11,6 +11,35 @@ Terms are the ones of [docs/provisional-and-clean-datasets.md](../docs/provision
 recorded by a harness at or after `7bb8105` (#49) replaces it; after #74 the bar is the commit of that
 change, see the section above.
 
+## 2026-11-17: the colmat 0.34.0 baseline, recorded on one contract
+
+The four arms published on 2026-11-17 were recorded at
+`93da62172a96260ae3d5ed7481690f440f58d904` (`colmat-rs` `main`, the pre-optimization baseline) by
+harness `cf51a3ea`, which is at or after the fairness change (#74) and at or after the harness fixes
+that followed (#77/#78 verify products, #80 the wide-shape `orgqr` workspace query). On the terms of
+the 2026-11-09 entry above, that is the bar this dataset had to clear, so:
+
+- **`faer-kernels` (both vendor arms) is current, not withdrawn.** Its vendor ratios are formed
+  between rows of one contract: the vendor row runs column-major only, with a caller-owned workspace
+  and prepared outputs, and the faer row it is divided against is the allocation-free route. The
+  `api-inclusive` faer route stays in the labelled API-cost columns and is never divided against a
+  vendor row.
+- **`faer-kernels-large` (MKL) is new**, and covers the declared 1024/1536 + boundary tier at 4/8T.
+  Its OpenBLAS arm was deliberately not recorded (the fork arm is ahead in essentially every 1024
+  cell, so the ~7 h had no decision value — `docs/worklog.md` states the qualification); the large
+  suite therefore forms no vendor ratio here, and its OpenBLAS row is simply unrecorded rather than
+  withdrawn. The adoption-only `linalg-big`/`gemm-huge` tiers (2048/3072/4096) are still not
+  measured.
+- **The 2026-11-13 pages stay in the history** as superseded: they were recorded at `325e482`
+  (`t4a-faer` 0.28.0, the crate name before the 2026-11-12 rename), on a harness that charged the
+  vendor arms for work the faer arms avoided. Quote the 2026-11-17 pages, not those.
+- **What still limits the reading.** The vendor arm is one implementation per library and one
+  dispatch: OpenBLAS reports the kernel its runtime picked (on this host a Cooperlake kernel, not a
+  Zen5 one — the pages say so), MKL names no kernel. `host.role=development` keeps these recordings
+  **provisional**. Coverage is the declared grid; the unmeasured tiers above are named, not implied.
+- **Disclosure.** `version 0.34.0` does not identify these runs: no tag names `93da6217`, and the
+  crates.io 0.34.0 source was cut from `e1c83482`. The commit in each manifest does.
+
 ## 2026-11-09: every vendor comparison is now one contract per ratio (#74)
 
 [#74](https://github.com/tensor4all/colmat-benchmark/issues/74) makes the rule enforceable rather than

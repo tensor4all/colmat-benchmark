@@ -102,7 +102,7 @@ workloads:
     - "`cholesky`, `eigh`, `solve` and `triangular_solve` are measured on square shapes only: the matrix they factor or solve with is square by definition (self-adjoint for the first two, a triangular factor for the last). `lu` and `full_piv_lu` are not gated that way -- they take the declared rectangular shapes too, with `min(m, n)` pivots and a trapezoidal `L` or `U`, which is what `dgetrf` does as well -- so a rectangular LU cell is measured in both orders beside its square one."
     - "`f32`/`c32` are declared and measured as of `docs/harness-dtype-axis.md`; the vendor arm has a route for `gemm` in those two dtypes and reports the LAPACK families as skipped for them. The large regime's 1024 shapes, BLIS, sparse, iterative and GPU arms are later declarations, not machinery built now."
     - "A vendor arm records the library it linked. Only OpenBLAS reports the kernel its runtime dispatched to; MKL names no kernel and no processor count, so its manifest leaves both empty rather than inferring them."
-    - "Known limitation: Coverage is partial: f64/c64, the small suite at 1/4/8T, and the 1024 + boundary tier at 4/8T."
+    - "Known limitation: Coverage is the declared grid: f64/c64/f32/c32 at 1/4/8T for the small suite, f64/c64 at 4/8T for the large suite's 1024/1536 + boundary tier; the adoption-only 2048/3072/4096 tiers are not measured."
 
 # One entry per engine name the harness emits. A result page explains every
 # column from this, so a reader needs no context beyond the page.
@@ -110,7 +110,7 @@ engines_doc:
   faer-fork:
     provider: faer-fork
     summary: >-
-      The measured library: the tensor4all fork (`t4a-faer`, `[lib] name = "faer"`)
+      The measured library: the tensor4all fork (`colmat`, `[lib] name = "colmat"`)
       at the checkout the harness linked by path. This is the row the campaign
       exists for; the fork's three perf experiments and the two correctness
       changes land here.
@@ -118,13 +118,15 @@ engines_doc:
       the fork revision in this run's manifest (`library.commit`), pinned by
       `pins/t4a-faer.rev`
     caveat: >-
-      Both faer crates declare `[lib] name = "faer"`. They are distinct dependency
-      keys (`faer_fork = { package = "t4a-faer" }`, `faer_upstream = { package =
-      "faer" }`) and therefore distinct Rust crate identities, but their `Mat`,
-      `Par` and trait types are not interchangeable: every adapter is written per
-      arm, and shared transitive dependencies can unify Cargo features, so both
-      arms declare equivalent feature sets and the resolved lock is recorded.
-      measured at 325e482, the t4a-faer 0.28.0 release source; the four 2026-11-13 zen5-cpu recordings were taken at this revision.
+      The fork crate is `colmat` (`[lib] name = "colmat"`); the upstream baseline is
+      `faer` (`faer_upstream = { package = "faer" }`). They are distinct Rust crate
+      identities, but their `Mat`, `Par` and trait types are not interchangeable:
+      every adapter is written per arm, and shared transitive dependencies can unify
+      Cargo features, so both arms declare equivalent feature sets and the resolved
+      lock is recorded.
+      measured at 93da6217, colmat-rs main at the 2026-11-17 head: no tag names that
+      revision, and the published crates.io colmat 0.34.0 was cut from e1c83482.
+      The 2026-11-17 zen5-cpu recordings were taken at this revision.
   faer-upstream:
     provider: faer-upstream
     summary: >-
