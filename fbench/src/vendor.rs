@@ -314,7 +314,7 @@ mod sys {
 
 #[cfg(feature = "link-aocl")]
 mod sys {
-    //! AMD AOCL 5.x: LAPACKE from `libflame` (AOCL-LAPACK), CBLAS from the threaded BLIS
+    //! AMD AOCL 5.x/6.x: LAPACKE from `libflame` (AOCL-LAPACK), CBLAS from the threaded BLIS
     //! (`libblis-mt`, AOCL-BLAS), both on GNU OpenMP.
     //!
     //! Three thread counts govern one call, and all three are thread-local to the caller:
@@ -362,8 +362,9 @@ mod sys {
         blis.split_whitespace().nth(1).map(str::to_owned)
     }
 
-    /// Both libraries' own version strings and the files the loader actually mapped for them,
-    /// because the loader path is set by the caller (`LD_LIBRARY_PATH`), not by the binary.
+    /// Both libraries' own version strings and the files the loader actually mapped for them:
+    /// the binary carries an rpath to the resolved tree, but an inherited `LD_LIBRARY_PATH` is
+    /// searched before it, so what was mapped is recorded rather than assumed.
     pub fn config() -> Option<String> {
         // SAFETY: as `version`.
         let blis = string_of(unsafe { bli_info_get_version_str() })?;

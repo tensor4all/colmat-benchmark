@@ -203,17 +203,15 @@ case "$VENDOR" in
     ;;
   aocl)
     FEATURES="fbench/link-aocl"
-    # AMD AOCL (libflame + threaded BLIS + aocl-utils), named by its versioned compiler tree; the
-    # newest installed version wins, as for MKL, and the manifest records the resolved path. AOCL
-    # is not registered with the system loader on purpose, so the binary needs
-    # `LD_LIBRARY_PATH=$AOCL_ROOT/lib` at run time (see `fbench/build.rs`); that is recorded here
-    # too, because it is part of how the numbers are reproduced.
-    AOCL_ROOT="$(newest_dir "${AOCL_ROOT:-/opt/AMD/aocl/*/gcc}")"
-    [[ -n "$AOCL_ROOT" && -f "$AOCL_ROOT/lib_LP64/libflame.so" && -f "$AOCL_ROOT/lib_LP64/libaoclutils.so" ]] || {
-      echo "ERROR: no AOCL install with libflame and aocl-utils found; set AOCL_ROOT" >&2; exit 1; }
-    AOCL_ROOT="$(cd "$AOCL_ROOT" && pwd -P)"
+    # AMD AOCL (libflame + threaded BLIS + aocl-utils), named by its versioned install tree: 5.x
+    # `<prefix>/<ver>/gcc`, 6.x `<prefix>/<ver>/gcc/MT`. The newest installed version wins, as for
+    # MKL, `AOCL_ROOT` overrides, and the manifest records the resolved physical path; see
+    # scripts/resolve_aocl_root.sh for the search order. The binary records the library directory
+    # as an rpath (`fbench/build.rs`), because AOCL is not registered with `ldconfig`.
+    AOCL_ROOT="$("$PROJECT_DIR/scripts/resolve_aocl_root.sh")" || {
+      echo "ERROR: the AOCL arm has no AOCL to link (see above)" >&2; exit 1; }
     export AOCL_ROOT
-    VENDOR_BUILD_ENV="AOCL_ROOT=$AOCL_ROOT run:LD_LIBRARY_PATH=$AOCL_ROOT/lib"
+    VENDOR_BUILD_ENV="AOCL_ROOT=$AOCL_ROOT rpath=$AOCL_ROOT/lib_LP64"
     ;;
   *)
     echo "ERROR: unknown --vendor '$VENDOR'; this harness knows openblas, mkl, aocl and none" >&2; exit 1 ;;
