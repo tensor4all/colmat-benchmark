@@ -34,6 +34,16 @@ def current_pages():
     return [c['page'] for c in current if c['page'] is not None]
 
 
+def current_run_dir(suite, vendor):
+    """The run directory behind the current (suite, vendor) page, or None."""
+    found = collect()
+    current, _ = gen_site.gen_index.split_pages(found['pages'], found['declared'], found['resolved'])
+    for cell in current:
+        if cell['suite'] == suite and cell['vendor'] == vendor and cell['page'] is not None:
+            return pathlib.Path(cell['page']['run_dir'])
+    return None
+
+
 class PublicationSiteTest(unittest.TestCase):
     def test_the_pin_is_the_revision_every_current_page_records(self):
         pin = rev_file_value((ROOT / gen_site.PIN).read_text())
@@ -152,6 +162,81 @@ class PublicationSiteTest(unittest.TestCase):
         small = yaml.safe_load((ROOT / 'benchmarks/suites/faer-kernels.yaml').read_text())
         self.assertTrue(any(gen_site.limitation_text() in spot
                             for spot in small['workloads']['known_blind_spots']))
+
+
+class ThroughputPagesTest(unittest.TestCase):
+    """One page per recorded (dtype, order) dataset, linked from a short landing index (#90)."""
+
+    PAGES = [('f64', 'f'), ('f64', 'c'), ('c64', 'f'), ('c64', 'c')]
+
+    def test_four_dataset_pages_and_a_short_landing_index(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(gen_site.main([]), 0)
+        index = (ROOT / 'result' / 'index.html').read_text()
+        # The landing page links the four dataset pages in the declared order -- f64 / F, the
+        # column-major default view, first -- and no throughput chart is carried inline any
+        # more; what is left on it is the trend section.
+        links = re.findall(r'<li><a href="(throughput-\w+-\w\.html)">([^<]+)</a>', index)
+        self.assertEqual(links, [('throughput-f64-f.html', 'f64 / F order'),
+                                 ('throughput-f64-c.html', 'f64 / C order'),
+                                 ('throughput-c64-f.html', 'c64 / F order'),
+                                 ('throughput-c64-c.html', 'c64 / C order')])
+        self.assertIn('the column-major default view', index)
+        self.assertIn('The four-way view', index)
+        inline = re.findall(r'<img src="([^"]+)"', index)
+        self.assertTrue(inline)
+        for image in inline:
+            self.assertTrue((ROOT / 'result' / image).is_file(), image)
+            self.assertIn('trend/', image)
+        # Each dataset page carries its own title, the four-way nav (the current page bold,
+        # the others links), the landing page's provenance and the suite's limitation, and only
+        # the charts of its own dataset.
+        for dtype, order in self.PAGES:
+            page = (ROOT / 'result' / f'throughput-{dtype}-{order}.html').read_text()
+            title = f'Throughput charts: {dtype} / {order.upper()} order'
+            self.assertIn(f'<title>{title}</title>', page)
+            self.assertIn(f'<h1>{title}</h1>', page)
+            self.assertEqual(len(re.findall(r'href="throughput-\w+-\w\.html"', page)), 3)
+            self.assertIn('<strong>%s / %s order</strong>' % (dtype, order.upper()), page)
+            self.assertIn('Current recordings: scope and provenance', page)
+            self.assertIn(html.escape(gen_site.limitation_text()), page)
+            # The runs behind the charts are stated on the page itself, including the
+            # large-tier arm the daily provenance does not name and the arm not recorded.
+            self.assertIn('Revisions:', page)
+            self.assertIn('No run was given for large-tier OpenBLAS', page)
+            images = re.findall(r'<img src="([^"]+)"', page)
+            self.assertEqual(len(images), 9, (dtype, order))   # every declared family
+            for image in images:
+                self.assertTrue((ROOT / 'result' / image).is_file(), image)
+                self.assertIn(f'/{dtype}-{order}/', image)
+
+    def test_the_c64_charts_come_from_the_recorded_c64_cells(self):
+        # The c64 page is not the f64 page under another name: its plotted numbers are the
+        # recorded c64 cells with the complex x4 count, recomputed here from the current
+        # large-tier MKL run's own CSV -- an f64 copy, or a forgotten x4, fails this.
+        from campaign_toolkit import throughput
+        run = current_run_dir('faer-kernels-large', 'mkl')
+        self.assertIsNotNone(run)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(gen_site.main([]), 0)
+        cells = throughput.load_run(run, dtype='c64', order='c')
+        points = dict((n, gflops) for n, gflops, _ in
+                      throughput.points(cells, 4, 'gemm', 'faer-fork', 2.0, complex_dtype=True))
+        table = (ROOT / 'result' / 'figures' / 'throughput' / 'zen5-cpu' / 'c64-c'
+                 / 'throughput-gemm-v2.md').read_text()
+        shown = float(re.search(r'^\| 1024 \| ([0-9.e+-]+) ', table, re.M).group(1))
+        self.assertAlmostEqual(shown / points[1024], 1.0, places=2)
+        # Where the MKL arm was recorded in c64 (gemm, both orders; the decomposition families
+        # in F order only), its column is plotted; in C order the decomposition columns are
+        # dots, exactly as recorded.
+        for dtype, order, family, has_mkl in (('c64', 'f', 'lu', True), ('c64', 'c', 'lu', False),
+                                              ('c64', 'c', 'gemm', True)):
+            table = (ROOT / 'result' / 'figures' / 'throughput' / 'zen5-cpu' / f'{dtype}-{order}'
+                     / f'throughput-{family}-v2.md').read_text()
+            four_t = table.split('## 4T', 1)[1].split('## 8T', 1)[0]
+            rows = [line for line in four_t.splitlines() if re.match(r'^\| \d+ \|', line)]
+            self.assertTrue(rows, (dtype, order, family))
+            self.assertEqual(('. |' in rows[0]), not has_mkl, rows[0])
 
 
 if __name__ == '__main__':

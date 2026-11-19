@@ -4,9 +4,11 @@
     python3 scripts/gen_site.py [--repo-ref main]
 
 Nothing it writes is committed (see `.gitignore`); the Pages workflow runs it on every deploy from
-the committed `data/`, `result/` and `pins/`. The landing page, the history, the HTML copy of every
-result page and the charts declared in `benchmarks/campaign.yaml` (`figures:`, `trend:`) are the
-toolkit's (`campaign_toolkit.site`). What is this campaign's own is the four-way view: the MKL and
+the committed `data/`, `result/` and `pins/`. The landing page, the history, the HTML copy of
+every result page and the charts declared in `benchmarks/campaign.yaml` (`figures:`, `trend:`) are the
+toolkit's (`campaign_toolkit.site`). The throughput charts are one page per recorded
+`(dtype, order)` dataset (`result/throughput-<dtype>-<order>.html`, `benchmarks/throughput.yaml`
+`variants:`), linked from the landing page instead of carried on it. What is this campaign's own is the four-way view: the MKL and
 OpenBLAS arms of the current `faer-kernels` pages joined on the cell key by `gen_comparison.py`,
 written to `result/zen5-cpu/faer-kernels/<rev12>-comparison.html` and linked from the landing page.
 
@@ -16,13 +18,14 @@ the recordings sit in the history is the failure that rule exists to stop.
 """
 import argparse
 import html
+import markdown
 import pathlib
 import re
 import sys
 
 import yaml
 
-from campaign_toolkit import descriptor, gen_index, pin_recorded, site
+from campaign_toolkit import descriptor, figures, gen_index, pin_recorded, site
 from campaign_toolkit.campaign import load
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
@@ -170,6 +173,58 @@ def _vendor_text(runs):
     return out
 
 
+def variant_label(variant):
+    """`f64 / F order`: the name of one recorded dataset, as the nav and the index print it."""
+    return f'{variant[0]} / {variant[1].upper()} order'
+
+
+def write_throughput_pages(generated, arms):
+    """One HTML page per declared (dtype, order) dataset of the throughput charts.
+
+    The landing page links these instead of carrying every dataset's charts inline: a chart on
+    it named no dataset, and the recorded c64 cells had no page at all. Each page repeats the
+    landing page's provenance and the suite's limitation beside the charts of its own dataset,
+    with the four-way nav; the charts are the toolkit's (`figures.site_figures` wrote one set
+    per variant, from that variant's own cells), and so are the frame and the chart block
+    (`site.write_page`, `figures.grid_html`), so no result page is duplicated here.
+    """
+    config = yaml.safe_load((ROOT / 'benchmarks' / 'throughput.yaml').read_text())
+    variants = [(v['dtype'], v['order']) for v in config['variants']]
+    provenance = provenance_html(arms)
+    provenance += f'<p><strong>Known limitation:</strong> {html.escape(limitation_text())}</p>\n'
+    notes = markdown.markdown('\n'.join(f'- {line}' for line in config['page']['notes']))
+    pages = {}
+    for variant in variants:
+        entries = [f for f in generated if f['kind'] == 'throughput'
+                   and (f['dtype'], f['order']) == variant]
+        # The runs behind the charts, as the toolkit states them (the same line each chart
+        # set's README prints): a plotted number can come from the large-tier run, whose
+        # revisions the daily provenance above does not name.
+        revisions = markdown.markdown(entries[0]['revisions'])
+        nav = ' &middot; '.join(
+            f'<strong>{html.escape(variant_label(other))}</strong>' if other == variant else
+            f'<a href="throughput-{other[0]}-{other[1]}.html">{html.escape(variant_label(other))}</a>'
+            for other in variants)
+        body = (f'<nav class="muted">dataset: {nav}</nav>\n{provenance}\n{notes}\n'
+                f'{revisions}\n' + figures.grid_html(ROOT / 'result', entries))
+        pages[variant] = site.write_page(
+            ROOT / 'result', f'throughput-{variant[0]}-{variant[1]}.html',
+            f'Throughput charts: {variant_label(variant)}', body)
+    return pages
+
+
+def throughput_index_html(pages):
+    """The landing page's index of the dataset pages, in the declared order (f64 / F first)."""
+    items = ''.join(
+        f'<li><a href="{page.name}">{html.escape(variant_label(variant))}</a>'
+        + (' &mdash; the column-major default view' if variant == ('f64', 'f') else '')
+        + '</li>\n'
+        for variant, page in pages.items())
+    return ('<h2>Throughput charts</h2>\n'
+            '<p>One page per recorded dataset, each with its own provenance, chart notes and '
+            'charts:</p>\n<ul>\n' + items + '</ul>\n')
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument('--repo-ref', default='main', help='the branch the site is published from')
@@ -203,6 +258,15 @@ def main(argv=None):
             'docs/dataset-status.md">docs/dataset-status.md</a> is the status of record; the harness\n'
             'now charges both sides the same contract, so the next recording prints these ratios\n'
             'again.</p>\n')
+    # The charts leave the landing page: one page per (dtype, order) dataset is written here
+    # and linked below, so the landing page stays a short index and a chart names the dataset it
+    # came from. The figures are generated once (from the runs behind the current pages, the
+    # same rule `site.write_site` applies) and handed to it, which then shows only what did not
+    # move -- the trend charts.
+    view = site.campaign_view(ROOT, index.parent)
+    current = [ROOT / c['page']['page'] for c in view['current'] if c['page']]
+    generated = figures.site_figures(ROOT, index.parent, current)
+    extra += throughput_index_html(write_throughput_pages(generated, arms))
     if comparison is not None:
         cells = len(re.findall(r'<tr><td class="k">', comparison.read_text()))
         rel = comparison.relative_to(index.parent)
@@ -223,7 +287,8 @@ def main(argv=None):
                     intro=(f'The recordings at the measured revision {revision} of {source}, one '
                            f'section per hardware profile. These are the {recorded} zen5-cpu '
                            'recordings.'),
-                    extra_html=extra, root=ROOT)
+                    extra_html=extra, root=ROOT,
+                    charts=[f for f in generated if f['kind'] != 'throughput'])
     return 0
 
 

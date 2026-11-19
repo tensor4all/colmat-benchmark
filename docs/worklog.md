@@ -2,6 +2,53 @@
 
 Decisions, fixed failures and open items for this campaign. Newest first.
 
+## 2026-11-19 — four throughput pages, one per recorded (dtype, order) dataset (#90)
+
+The landing page carried every throughput chart inline - both orders, f64 only - so a chart
+named no dataset it belonged to, and the recorded c64 cells had no page at all. The
+throughput presentation is now four pages, `result/throughput-<dtype>-<order>.html`
+(written by the Pages deploy, never committed): `f64 / F order` first, then `f64 / C`,
+`c64 / F`, `c64 / C`, each with the landing page's provenance, the suite's limitation, the
+config's chart notes, a four-way nav, the revisions line of the runs behind its charts
+(including the large-tier harness revision and the unrecorded large-tier OpenBLAS arm),
+and the nine family charts of that dataset, drawn from its own recorded cells. The landing
+page becomes a short index linking the four pages - f64 / F named as the column-major
+default view - and keeps the four-way comparison link; only the trend charts stay on it.
+`benchmarks/throughput.yaml` declares the four `variants:` in that order, and its notes
+are corrected while they become page text: the vendor LAPACK rows are measured where the
+harness records them (both orders for `gemm`, F order for the decomposition families - not
+"F only"), the large tier adds 1024, and 1536 for the decompositions, in every variant,
+and the c64 pages are drawn from the recorded c64 cells of the same runs with the complex
+4x count, now also stated in each c64 data table instead of the bare real-operation
+formula.
+
+The variant loop, the per-variant chart directory, the `revisions` field on each
+throughput entry and the `site.write_page` / `write_site(charts=...)` API are the
+toolkit's (campaign-toolkit branch `feat/throughput-variant-pages`, commits `290d07e`, `07bd37e` and
+`b937c62` (the last only moves the `__main__` guard in `tests/test_throughput.py`), which
+`requirements.txt` pins; `orders:` configs keep working as one f64
+variant per order). The plan was reviewed before implementation by `reviewer-glm` on
+`ollama-cloud/glm-5.3-flash:high`: `VERDICT: APPROVE` with no blocker
+(`docs/reviews/20261119-four-throughput-pages-pre-review.md`); its important finding -
+a "c64 differs from f64" assertion would pass a wrongly scaled copy - is addressed by
+recomputing the c64 gemm 1024 4T `faer-fork` value from the recorded CSV and asserting the
+generated table equals it. The finished diffs of both repositories were reviewed by
+`openai/gpt-6.1-sol` (independent-review skill): no blocker, two IMPORTANT - the dataset
+pages did not state the runs behind their charts, and the c64 tables stated the
+real-operation formula while plotting 4x it - both fixed, with the render-side test
+strengthened (`docs/reviews/20261119-four-throughput-pages-post-review.md`).
+
+The site regenerated locally from the recorded data with the new toolkit: all four pages
+render with their own title, nav, provenance, limitation, revisions and nine charts; the
+landing page links them f64/F first and carries only the two trend charts. Local gates:
+benchmark unittest (10 publication-site incl. 2 new + 26 others) OK; toolkit unittest
+(7 throughput incl. 2 new + the rest) OK; declarations; `gen_index.py --check`;
+`campaign-check-pin-recorded`; `campaign-check-generated --base origin/main --no-index`;
+`campaign-sync-pins --check`; `campaign-link-preflight --validate`; toolkit
+`declarations --root tests/fixture`, `stack`, `py_compile`, `ruff check`, `pinned.sh`
+dry-runs; and the new `requirements.txt` pin installs from git and imports. No measurement
+data changed; the two PRs are open, not merged.
+
 ## 2026-11-18 — the throughput legends say colmat / faer / MKL / OpenBLAS (#85)
 
 The charts named their lines by the recorded engine rows (`faer-fork`, `faer-upstream`,
