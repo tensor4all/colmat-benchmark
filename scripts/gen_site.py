@@ -197,12 +197,16 @@ def write_throughput_pages(generated, arms):
     for variant in variants:
         entries = [f for f in generated if f['kind'] == 'throughput'
                    and (f['dtype'], f['order']) == variant]
+        # The runs behind the charts, as the toolkit states them (the same line each chart
+        # set's README prints): a plotted number can come from the large-tier run, whose
+        # revisions the daily provenance above does not name.
+        revisions = markdown.markdown(entries[0]['revisions'])
         nav = ' &middot; '.join(
             f'<strong>{html.escape(variant_label(other))}</strong>' if other == variant else
             f'<a href="throughput-{other[0]}-{other[1]}.html">{html.escape(variant_label(other))}</a>'
             for other in variants)
         body = (f'<nav class="muted">dataset: {nav}</nav>\n{provenance}\n{notes}\n'
-                + figures.grid_html(ROOT / 'result', entries))
+                f'{revisions}\n' + figures.grid_html(ROOT / 'result', entries))
         pages[variant] = site.write_page(
             ROOT / 'result', f'throughput-{variant[0]}-{variant[1]}.html',
             f'Throughput charts: {variant_label(variant)}', body)
@@ -260,8 +264,8 @@ def main(argv=None):
     # same rule `site.write_site` applies) and handed to it, which then shows only what did not
     # move -- the trend charts.
     view = site.campaign_view(ROOT, index.parent)
-    current = [ROOT / c['page']['page'] for c in (view or {'current': []})['current'] if c['page']]
-    generated = figures.site_figures(ROOT, index.parent, current) or []
+    current = [ROOT / c['page']['page'] for c in view['current'] if c['page']]
+    generated = figures.site_figures(ROOT, index.parent, current)
     extra += throughput_index_html(write_throughput_pages(generated, arms))
     if comparison is not None:
         cells = len(re.findall(r'<tr><td class="k">', comparison.read_text()))

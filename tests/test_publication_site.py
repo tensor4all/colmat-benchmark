@@ -200,8 +200,12 @@ class ThroughputPagesTest(unittest.TestCase):
             self.assertIn('<strong>%s / %s order</strong>' % (dtype, order.upper()), page)
             self.assertIn('Current recordings: scope and provenance', page)
             self.assertIn(html.escape(gen_site.limitation_text()), page)
+            # The runs behind the charts are stated on the page itself, including the
+            # large-tier arm the daily provenance does not name and the arm not recorded.
+            self.assertIn('Revisions:', page)
+            self.assertIn('No run was given for large-tier OpenBLAS', page)
             images = re.findall(r'<img src="([^"]+)"', page)
-            self.assertTrue(images, (dtype, order))
+            self.assertEqual(len(images), 9, (dtype, order))   # every declared family
             for image in images:
                 self.assertTrue((ROOT / 'result' / image).is_file(), image)
                 self.assertIn(f'/{dtype}-{order}/', image)
