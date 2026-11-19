@@ -4,11 +4,11 @@
     python3 scripts/gen_site.py [--repo-ref main]
 
 Nothing it writes is committed (see `.gitignore`); the Pages workflow runs it on every deploy from
-the committed `data/`, `result/` and `pins/`. The throughput charts are one page per recorded
+the committed `data/`, `result/` and `pins/`. The landing page, the history, the HTML copy of
+every result page and the charts declared in `benchmarks/campaign.yaml` (`figures:`, `trend:`) are the
+toolkit's (`campaign_toolkit.site`). The throughput charts are one page per recorded
 `(dtype, order)` dataset (`result/throughput-<dtype>-<order>.html`, `benchmarks/throughput.yaml`
-`variants:`), linked from the landing page instead of carried on it. The landing page, the history, the HTML copy of every
-result page and the charts declared in `benchmarks/campaign.yaml` (`figures:`, `trend:`) are the
-toolkit's (`campaign_toolkit.site`). What is this campaign's own is the four-way view: the MKL and
+`variants:`), linked from the landing page instead of carried on it. What is this campaign's own is the four-way view: the MKL and
 OpenBLAS arms of the current `faer-kernels` pages joined on the cell key by `gen_comparison.py`,
 written to `result/zen5-cpu/faer-kernels/<rev12>-comparison.html` and linked from the landing page.
 
