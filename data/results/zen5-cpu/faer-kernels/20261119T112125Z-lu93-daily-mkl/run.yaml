@@ -1,0 +1,284 @@
+schema_version: 1
+target_profile: zen5-cpu
+suite_id: faer-kernels
+suite_file: benchmarks/suites/faer-kernels.yaml
+suite_sha256: f67dee58f81eef4aeb0c933127a6cbef41b7fccd96fcd9d4657cacb1cc660207
+timestamp: '2026-11-19T11:28:12.048534Z'
+command: scripts/record_run.py zen5-cpu faer-kernels --checkout extern/t4a-faer --upstream
+  extern/upstream-faer --vendor mkl --engines faer-fork,lapack-mkl --families lu --dtypes
+  f64 --threads 1,4,8 --regimes linalg-small,linalg-mid --shapes 32,64,96,128,256,512
+  --reps 5 --aa 6 --prime-ms 250 --label lu93-daily-mkl --no-publish
+library:
+  url: https://github.com/tensor4all/colmat-rs
+  commit: a5536ad3f4b4a70344ae73500b6edf4782522fac
+  dirty: false
+  features:
+  - std
+  - rayon
+  measured_path: /home/shinaoka/projects/tensor4all/colmat-rs-93
+  version: 0.34.0
+upstream:
+  url: https://codeberg.org/sarah-quinones/faer
+  commit: 0539947ffb757a739d7e703a7d2fa0c792a909c1
+  version: 0.24.4
+  ref: faer-v0.24.4
+  dirty: false
+  measured_path: /home/shinaoka/projects/tensor4all/colmat-benchmark/extern/upstream-faer
+vendor:
+  name: mkl
+  linkage: shared
+  version: '2026.2'
+  config: null
+  corename: null
+  parallel: null
+  procs: null
+  build_env: MKLROOT=/opt/intel/oneapi/mkl/2026.2 MKL_THREADING_LIB=/opt/intel/oneapi/compiler/2026.2/lib/libiomp5.so
+harness:
+  commit: 9988f5a5efaca26af1a6e80dfd5736564263dc66
+  dirty: false
+  outputs_dirty: false
+  excluded_outputs:
+  - data/results
+  - result
+  excluded_sibling_outputs: []
+toolkit:
+  commit: ec1366c391cbd5023116ddcb6fdadc9c5b76f582
+  dirty: false
+  measured_path: /home/shinaoka/.venvs/weekly-faer/src/campaign-toolkit
+verification_files:
+- verify-linalg-small-1t.csv
+- verify-linalg-small-4t.csv
+- verify-linalg-small-8t.csv
+- verify-linalg-mid-1t.csv
+- verify-linalg-mid-4t.csv
+- verify-linalg-mid-8t.csv
+binary:
+  path: /home/shinaoka/projects/tensor4all/colmat-benchmark-93/target/faer-rev/a5536ad3f4b4-mkl/release/fbench
+  sha256: 0081dbf1739db6d31ec996b1ff138e70b8c19e3755c87e8909a1c94ce28fa2a5
+host:
+  power:
+    cpufreq_boost: '0'
+    amd_pstate_status: active
+    governor: performance
+    energy_performance_preference: performance
+    scaling_max_freq_khz: '2000000'
+    smt:
+      active: '1'
+      control: 'on'
+  numa:
+    nodes: 1
+    cpulists:
+      '0': 0-23
+  role: development
+  hostname: shinaoka-EVO-X1Pro
+  cpu: AMD Ryzen AI 9 HX 470
+  os: Linux 7.0.0-43-generic
+  arch: x86_64
+  logical_cpus: 24
+  l3: 24 MiB (2 instances)
+  l3_domains: '0-3: 16 MiB shared; 4-11: 8 MiB shared'
+  notes: 'AMD Ryzen AI 9 HX 470 (Zen5 mobile APU), 12 physical / 24 logical cores.
+    Heterogeneous L3: CPUs 0-3 share 16 MiB, CPUs 4-11 share 8 MiB, so a thread set
+    must be stated together with the domain it sits in. SMT siblings of CPUs 4-11
+    are 16-23; the idle gate checks them too, because a busy sibling contends with
+    the physical core being measured.'
+build:
+  toolchain:
+    rustc: 'rustc 1.99.0 (b940084d7 2026-09-28)
+
+      binary: rustc
+
+      commit-hash: b940084d7eb6a299eb4bfeb8e34901bc051e7ac4
+
+      commit-date: 2026-09-28
+
+      host: x86_64-unknown-linux-gnu
+
+      release: 1.99.0
+
+      LLVM version: 23.1.1
+
+      '
+    rustc_release: 1.99.0
+    rustflags: null
+    target_cpu: null
+threads:
+  counts:
+  - 1
+  - 4
+  - 8
+  cpu_sets:
+    '1': '4'
+    '4': 4-7
+    '8': 4-11
+  observer:
+    affinity: 0-3, 12-15
+    free_cpus: 0-3, 12-15
+    source: os.sched_getaffinity(0) in the recording process
+  env:
+    OPENBLAS_NUM_THREADS: null
+    MKL_NUM_THREADS: null
+    MKL_DOMAIN_NUM_THREADS: null
+    MKL_INTERFACE_LAYER: null
+    MKL_THREADING_LAYER: null
+    MKL_DYNAMIC: null
+    MKL_ENABLE_INSTRUCTIONS: null
+    MKL_CBWR: null
+    OMP_NUM_THREADS: null
+    OMP_THREAD_LIMIT: null
+    OMP_PROC_BIND: null
+    OMP_PLACES: null
+    KMP_AFFINITY: null
+    GOMP_CPU_AFFINITY: null
+    RAYON_NUM_THREADS: null
+  note: the vendor's budget is set by the harness from the row's thread count and
+    read back before each measurement; these variables were removed from the measured
+    process's environment so it cannot inherit a different one
+timing_policy:
+  version: 2
+  minimum_untimed_priming_ms: 250
+  statistic: median
+  row_rotation_step: 1
+  repetitions: 5
+  notes: descriptive process medians under a rotating engine-order schedule; raw samples
+    and the verification census are retained
+guards:
+  idle_window_seconds: 3
+  max_busy_percent: 5.0
+  attempts: 8
+  sibling_aware: true
+  logs:
+  - run0-linalg-mid-1t.guard
+  - run0-linalg-mid-4t.guard
+  - run0-linalg-mid-8t.guard
+  - run0-linalg-small-1t.guard
+  - run0-linalg-small-4t.guard
+  - run0-linalg-small-8t.guard
+  - run1-linalg-mid-1t.guard
+  - run1-linalg-mid-4t.guard
+  - run1-linalg-mid-8t.guard
+  - run1-linalg-small-1t.guard
+  - run1-linalg-small-4t.guard
+  - run1-linalg-small-8t.guard
+  - run2-linalg-mid-1t.guard
+  - run2-linalg-mid-4t.guard
+  - run2-linalg-mid-8t.guard
+  - run2-linalg-small-1t.guard
+  - run2-linalg-small-4t.guard
+  - run2-linalg-small-8t.guard
+  - run3-linalg-mid-1t.guard
+  - run3-linalg-mid-4t.guard
+  - run3-linalg-mid-8t.guard
+  - run3-linalg-small-1t.guard
+  - run3-linalg-small-4t.guard
+  - run3-linalg-small-8t.guard
+  - run4-linalg-mid-1t.guard
+  - run4-linalg-mid-4t.guard
+  - run4-linalg-mid-8t.guard
+  - run4-linalg-small-1t.guard
+  - run4-linalg-small-4t.guard
+  - run4-linalg-small-8t.guard
+  - run5-linalg-mid-1t.guard
+  - run5-linalg-mid-4t.guard
+  - run5-linalg-mid-8t.guard
+  - run5-linalg-small-1t.guard
+  - run5-linalg-small-4t.guard
+  - run5-linalg-small-8t.guard
+  - verify-linalg-mid-1t.guard
+  - verify-linalg-mid-4t.guard
+  - verify-linalg-mid-8t.guard
+  - verify-linalg-small-1t.guard
+  - verify-linalg-small-4t.guard
+  - verify-linalg-small-8t.guard
+providers:
+- name: faer-fork
+  version: null
+  commit: null
+  path: null
+  note: the provider in the measured revision; see library and upstream above
+- name: mkl
+  version: '2026.2'
+  commit: null
+  path: null
+  note: linked shared, kernel not reported by the vendor
+invalidated_by:
+- faer/src/**
+- faer-traits/src/**
+- faer-macros/src/**
+- Cargo.toml
+- Cargo.lock
+result_files:
+- run0-linalg-small-1t.csv
+- run0-linalg-small-4t.csv
+- run0-linalg-small-8t.csv
+- run0-linalg-mid-1t.csv
+- run0-linalg-mid-4t.csv
+- run0-linalg-mid-8t.csv
+- run1-linalg-small-1t.csv
+- run1-linalg-small-4t.csv
+- run1-linalg-small-8t.csv
+- run1-linalg-mid-1t.csv
+- run1-linalg-mid-4t.csv
+- run1-linalg-mid-8t.csv
+- run2-linalg-small-1t.csv
+- run2-linalg-small-4t.csv
+- run2-linalg-small-8t.csv
+- run2-linalg-mid-1t.csv
+- run2-linalg-mid-4t.csv
+- run2-linalg-mid-8t.csv
+- run3-linalg-small-1t.csv
+- run3-linalg-small-4t.csv
+- run3-linalg-small-8t.csv
+- run3-linalg-mid-1t.csv
+- run3-linalg-mid-4t.csv
+- run3-linalg-mid-8t.csv
+- run4-linalg-small-1t.csv
+- run4-linalg-small-4t.csv
+- run4-linalg-small-8t.csv
+- run4-linalg-mid-1t.csv
+- run4-linalg-mid-4t.csv
+- run4-linalg-mid-8t.csv
+- run5-linalg-small-1t.csv
+- run5-linalg-small-4t.csv
+- run5-linalg-small-8t.csv
+- run5-linalg-mid-1t.csv
+- run5-linalg-mid-4t.csv
+- run5-linalg-mid-8t.csv
+run_spec:
+  populations:
+  - regime: linalg-small
+    families:
+    - lu
+    n:
+    - '32'
+    - '64'
+    - '96'
+    batch:
+    - 1
+    skipped:
+    - lu/32
+    - lu/64
+    - lu/96
+  - regime: linalg-mid
+    families:
+    - lu
+    n:
+    - '128'
+    - '256'
+    - '512'
+    batch:
+    - 1
+    skipped:
+    - lu/128
+    - lu/256
+    - lu/512
+  dtypes:
+  - f64
+  order:
+  - c
+  - f
+  engines:
+  - faer-fork
+  - lapack-mkl
+  aa: 6
+  covers_declared_suite: false
