@@ -382,16 +382,21 @@ mod sys {
     }
 
     /// The kernel family each library dispatched to on this CPU: BLIS's configuration name
-    /// (`zen5`) and libflame's ISA level (`fla_arch_t`: 3 = AVX2, 4 = AVX-512).
+    /// (`zen5`) and libflame's ISA level (`fla_arch_t`, named as FLAME.h names it).
     pub fn corename() -> Option<String> {
         // SAFETY: the context is initialised once; the queries read it.
         let (blis, flame) = unsafe {
             aocl_fla_init();
             (string_of(bli_arch_string(bli_arch_query_id())), fla_arch_query_id())
         };
+        // `fla_arch_t` in FLAME.h (5.x and 6.x): GENERIC, SSE2, AVX, AVX2, AVX512, AVX512DQ (6.x).
         let flame = match flame {
+            0 => "generic".to_owned(),
+            1 => "sse2".to_owned(),
+            2 => "avx".to_owned(),
             3 => "avx2".to_owned(),
             4 => "avx512".to_owned(),
+            5 => "avx512dq".to_owned(),
             other => format!("id{other}"),
         };
         Some(format!("blis={}, flame={flame}", blis?))
