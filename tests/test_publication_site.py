@@ -16,11 +16,12 @@ import gen_site  # noqa: E402
 from campaign_toolkit import pin_recorded  # noqa: E402
 from campaign_toolkit.stack import rev_file_value  # noqa: E402
 
-# The arms this publication recorded: the daily suite on both vendor arms, the large suite on MKL
-# only. The large OpenBLAS arm was dropped by decision (2026-11-18) and is stated as unrecorded
-# on the landing page and in docs/worklog.md; adding it here without adding the run would make
-# this test assert a page that does not exist.
-RECORDED = {('faer-kernels', 'mkl'), ('faer-kernels', 'openblas'), ('faer-kernels-large', 'mkl')}
+# The arms this publication recorded: the daily suite on the MKL, OpenBLAS and AOCL arms (AOCL
+# added by #95), the large suite on MKL only. The large OpenBLAS arm was dropped by decision
+# (2026-11-18) and is stated as unrecorded on the landing page and in docs/worklog.md; adding an
+# arm here without adding its run would make this test assert a page that does not exist.
+RECORDED = {('faer-kernels', 'mkl'), ('faer-kernels', 'openblas'), ('faer-kernels', 'aocl'),
+            ('faer-kernels-large', 'mkl')}
 
 
 def collect():
