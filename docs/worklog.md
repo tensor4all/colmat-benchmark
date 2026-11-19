@@ -24,8 +24,9 @@ formula.
 
 The variant loop, the per-variant chart directory, the `revisions` field on each
 throughput entry and the `site.write_page` / `write_site(charts=...)` API are the
-toolkit's (campaign-toolkit branch `feat/throughput-variant-pages`, commits `290d07e` and
-`07bd37e`, which `requirements.txt` pins; `orders:` configs keep working as one f64
+toolkit's (campaign-toolkit branch `feat/throughput-variant-pages`, commits `290d07e`, `07bd37e` and
+`b937c62` (the last only moves the `__main__` guard in `tests/test_throughput.py`), which
+`requirements.txt` pins; `orders:` configs keep working as one f64
 variant per order). The plan was reviewed before implementation by `reviewer-glm` on
 `ollama-cloud/glm-5.3-flash:high`: `VERDICT: APPROVE` with no blocker
 (`docs/reviews/20261119-four-throughput-pages-pre-review.md`); its important finding -
