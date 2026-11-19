@@ -7,7 +7,7 @@ Older pages (29): [HISTORY.md](HISTORY.md).
 
 - Reference fork revision (`pins/t4a-faer.rev`): `93da62172a96260ae3d5ed7481690f440f58d904`
 - Reference upstream revision (`pins/upstream-faer.rev`): `faer-v0.24.4`
-- Newest recorded run: `2026-11-18T01:23:16.189189Z`
+- Newest recorded run: `2026-11-19T20:40:33.832619Z`
 - Every page below is one `(suite, hardware profile, fork revision, upstream revision,
   vendor arm)` and carries its commits, its hardware and the vendor library it linked.
 
@@ -30,7 +30,7 @@ rather than being implied by the other arm's page.
 | `faer-kernels-large` | `zen2-64-smt-off` (optional) | `aocl` | - | - | - | - | missing | - |
 | `faer-kernels` | `zen5-cpu` | `openblas` | `93da62172a96/0539947ffb75` | 0.34.0 | 2026-11-17 | partial | current | [result/zen5-cpu/faer-kernels/93da62172a96-0539947ffb75-openblas-timing-v2.md](zen5-cpu/faer-kernels/93da62172a96-0539947ffb75-openblas-timing-v2.md) |
 | `faer-kernels` | `zen5-cpu` | `mkl` | `93da62172a96/0539947ffb75` | 0.34.0 | 2026-11-17 | full | current | [result/zen5-cpu/faer-kernels/93da62172a96-0539947ffb75-mkl-timing-v2.md](zen5-cpu/faer-kernels/93da62172a96-0539947ffb75-mkl-timing-v2.md) |
-| `faer-kernels` | `zen5-cpu` | `aocl` | - | - | - | - | missing | - |
+| `faer-kernels` | `zen5-cpu` | `aocl` | `93da62172a96/0539947ffb75` | 0.34.0 | 2026-11-19 | partial | current | [result/zen5-cpu/faer-kernels/93da62172a96-0539947ffb75-aocl-timing-v2.md](zen5-cpu/faer-kernels/93da62172a96-0539947ffb75-aocl-timing-v2.md) |
 | `faer-kernels` | `zen2-cpu` (optional) | `openblas` | - | - | - | - | missing | - |
 | `faer-kernels` | `zen2-cpu` (optional) | `mkl` | - | - | - | - | missing | - |
 | `faer-kernels` | `zen2-cpu` (optional) | `aocl` | - | - | - | - | missing | - |
