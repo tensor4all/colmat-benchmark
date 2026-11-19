@@ -45,7 +45,7 @@ def manifest(vendor, host=None, result_files=(), **overrides):
                     'version': '0.31.0', 'dirty': False},
         'upstream': {'commit': UPSTREAM, 'ref': 'faer-v0.24.4', 'version': '0.24.4'},
         'vendor': {'name': vendor, 'linkage': 'shared',
-                   'version': '2026.2' if vendor == 'mkl' else '0.3.32'},
+                   'version': {'mkl': '2026.2', 'aocl': '6.0.0'}.get(vendor, '0.3.32')},
         # The fixture's default harness is the one that first charged both sides of a vendor ratio
         # the same contract, so a test that says nothing about the harness sees ratios. A test about
         # withdrawal overrides it with a pre-fair revision.
@@ -518,6 +518,52 @@ class ComparisonTest(unittest.TestCase):
             gen_comparison.FAIR_HARNESS = saved
         self.assertIn('is not a commit this checkout holds', stderr.getvalue())
         self.assertIn('re-pin FAIR_HARNESS', stderr.getvalue())
+
+    def aocl_page(self, ao_rows, ao_vendor='aocl', **ao_overrides):
+        mkl = write_run(self.dir / 'mkl', 'mkl', mkl_set(10.0, 12.0, 100.0))
+        ob = write_run(self.dir / 'openblas', 'openblas',
+                       [cell('lu', 'faer-fork', 10.0), cell('lu', 'lapack-openblas', 50.0)])
+        ao = write_run(self.dir / 'aocl', ao_vendor, ao_rows, **ao_overrides)
+        self.log = io.StringIO()
+        with contextlib.redirect_stdout(self.log):
+            gen_comparison.main(['--mkl', str(mkl), '--openblas', str(ob), '--aocl', str(ao),
+                                 '--out', str(self.out)])
+        self.log = self.log.getvalue()
+        return self.out.read_text()
+
+    def test_the_aocl_ratio_divides_by_the_fork_the_aocl_arm_measured(self):
+        # The AOCL arm measured the fork at 20 ms (the MKL arm at 10 ms): AOCL/fork is 30/20 = 1.500,
+        # never 30/10, so the ratio's denominator is the number printed beside it.
+        page = self.aocl_page([cell('lu', 'faer-fork', 20.0), cell('lu', 'lapack-aocl', 30.0)])
+        self.assertIn('<th>fork AOCL (ms)</th><th>AOCL (ms)</th><th>AOCL/fork</th>', page)
+        self.assertIn('<td>20.00</td><td>30.00</td><td class="loss">1.500</td></tr>', page)
+        self.assertIn('fork against upstream, OpenBLAS, MKL and AOCL', page)
+        self.assertIn('AOCL: aocl 6.0.0', page)
+        self.assertIn('1 with an AOCL row', self.log)
+
+    def test_an_aocl_cell_the_aocl_arm_did_not_carry_is_a_dash(self):
+        page = self.aocl_page([cell('lu', 'faer-fork', 20.0), cell('lu', 'lapack-aocl', 30.0)])
+        row = page[page.index('<td class="k">cholesky</td>'):]
+        row = row[:row.index('</tr>')]
+        self.assertTrue(row.endswith('<td>-</td><td>-</td><td>-</td>'), row)
+
+    def test_a_non_aocl_run_handed_to_the_aocl_column_is_refused(self):
+        with self.assertRaises(SystemExit) as raised:
+            self.aocl_page([cell('lu', 'faer-fork', 20.0), cell('lu', 'lapack-mkl', 30.0)],
+                           ao_vendor='mkl')
+        self.assertIn('--aocl records its vendor as', str(raised.exception))
+
+    def test_an_aocl_arm_from_another_host_is_refused(self):
+        other = dict(HOST, hostname='elsewhere')
+        with self.assertRaises(gen_comparison.PairingRefused) as raised:
+            self.aocl_page([cell('lu', 'faer-fork', 20.0), cell('lu', 'lapack-aocl', 30.0)],
+                           host=other)
+        self.assertIn('aocl arm', str(raised.exception))
+
+    def test_without_an_aocl_arm_the_page_has_no_aocl_columns(self):
+        page = self.generate([cell('lu', 'faer-fork', 10.0), cell('lu', 'lapack-mkl', 20.0)],
+                             [cell('lu', 'faer-fork', 10.0), cell('lu', 'lapack-openblas', 20.0)])
+        self.assertNotIn('AOCL', page)
 
     def test_the_table_body_is_pinned(self):
         # The body for the two runs below, byte for byte. It is the guard that a ratio cannot

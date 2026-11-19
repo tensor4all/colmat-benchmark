@@ -113,9 +113,9 @@ is separate from the recorder's vendor arms and does not publish a dataset.
 A third vendor arm runs the same LAPACK row body against AMD AOCL: LAPACKE from
 AOCL-LAPACK (`libflame`), CBLAS from the threaded AOCL-BLAS (`libblis-mt`), plus
 `libaoclutils`, which libflame needs for its CPU-feature dispatch. It is its own
-binary like the other two, built with `scripts/build_for_faer_rev.sh --vendor aocl`
-(feature `link-aocl`, row `lapack-aocl`). It is not yet a recorder arm: the
-campaign descriptor and the suites gain it only after its smoke cell passes (#95). What a reader needs to
+binary like the other two, recorded by `record_run.py --vendor aocl` with engine `lapack-aocl`
+(feature `link-aocl`) on AMD profiles; its smoke cell is
+[`docs/aocl-smoke-20261119.md`](docs/aocl-smoke-20261119.md). What a reader needs to
 reproduce a number from it:
 
 - **`AOCL_ROOT`**: the versioned threaded install tree, e.g.
@@ -139,9 +139,10 @@ reproduce a number from it:
   last two each overriding the OpenMP one. The harness sets the budget through
   OpenMP, as on the MKL arm, and refuses the cell (before each row and again after
   its timed loop) unless all three read back equal to it; `fbench info` prints
-  them as `threads.vendor_detail=omp:N blis:N flame:N`. The build script drops
-  `BLIS_NUM_THREADS` and `FLA_NUM_THREADS` from the build environment; a stray
-  value at run time is refused by the read-back, not silently measured.
+  them as `threads.vendor_detail=omp:N blis:N flame:N`. The recorder removes
+  `BLIS_NUM_THREADS` and `FLA_NUM_THREADS` from the measured environment with the
+  other vendor variables (`benchmarks/campaign.yaml` `vendor_env`), and a stray
+  value that still arrives is refused by the read-back.
 - **Identity**: `fbench info` records both libraries' version strings, the files
   the loader actually mapped, and the dispatched kernels (`blis=zen5,
   flame=avx512` on Zen 5). The fork, upstream and harness revisions come from the
@@ -156,7 +157,7 @@ The seven `scripts/*.py` entry points are thin shims over
 [`campaign-toolkit`](https://github.com/tensor4all/campaign-toolkit), the shared
 package the campaigns now have in common. `requirements.txt` pins it by git
 revision; `benchmarks/campaign.yaml` is this campaign's descriptor, naming the
-measured fork, the upstream baseline, the two vendor arms, the `order` case axis
+measured fork, the upstream baseline, the three vendor arms, the `order` case axis
 and every other value the toolkit needs. The `schemas/` copies are gone: the
 toolkit supplies them.
 
