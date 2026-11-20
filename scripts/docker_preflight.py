@@ -8,6 +8,7 @@ import datetime, json, os, pathlib, shutil, subprocess, sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 IMAGE = os.environ.get("BENCH_IMAGE", "shinaoka/tenferro-bench-cpu:cpu-20261120-julia")
+RECORDER_IMAGE = os.environ.get("BENCH_RECORDER_IMAGE", "colmat-bench-recorder-99:" + IMAGE.rsplit(":", 1)[-1])
 NAME = os.environ.get("BENCH_CONTAINER", "colmat-measured-99")
 MEASURED, OBSERVER = "4-11", "0-3,12-15"
 ENV = dict(os.environ, DOCKER_HOST="unix:///var/run/docker.sock")
@@ -46,10 +47,10 @@ check("measured container running with cpuset 4-11", m.stdout.split()[:2] == ["t
 st = sh(["docker", "exec", NAME, "cat", "/proc/self/status"]).stdout
 check("measured container sees only CPUs 4-11", allowed(st) == MEASURED, allowed(st))
 rec = sh(["docker", "run", "--rm", f"--cpuset-cpus={OBSERVER}", "-v", "/usr/bin/docker:/usr/bin/docker:ro",
-          "-v", "/var/run/docker.sock:/var/run/docker.sock", "-e", f"BENCH_CONTAINER={NAME}", IMAGE, "bash", "-c",
-          f"grep Cpus_allowed_list /proc/self/status; docker exec {NAME} true && echo exec-ok"])
-check("recorder container on 0-3,12-15 and can docker-exec into the measured one",
-      allowed(rec.stdout) == OBSERVER and "exec-ok" in rec.stdout, rec.stdout + rec.stderr)
+          "-v", "/var/run/docker.sock:/var/run/docker.sock", "-e", f"BENCH_CONTAINER={NAME}", RECORDER_IMAGE, "bash", "-c",
+          f"grep Cpus_allowed_list /proc/self/status; docker exec {NAME} true && echo exec-ok; gfortran --version | head -1"])
+check("recorder container (image + gfortran) on 0-3,12-15 and can docker-exec into the measured one",
+      allowed(rec.stdout) == OBSERVER and "exec-ok" in rec.stdout and "GNU Fortran" in rec.stdout, rec.stdout + rec.stderr)
 # 4. the host is quiet
 idle = sh([sys.executable, str(ROOT / "benchmarks/scripts/idle_cpus.py"), "check", MEASURED, "--seconds", "10"])
 check("measured domain idle (10 s, with SMT siblings and L3 peers)", idle.returncode == 0, idle.stdout + idle.stderr)
