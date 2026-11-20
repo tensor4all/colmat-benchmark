@@ -150,8 +150,9 @@ runs:
     dtypes: [f64]
     # F (column-major) only: the issue fixes the order for this profile.
     order: [f]
-    # One vendor arm per run (AGENTS.md): OpenBLAS is the arm built on ohtaka (no MKL arm here).
-    engines: [faer-fork, lapack-openblas]
+    # One vendor arm per run (AGENTS.md). Both arms are declared; the ohtaka large tiers are recorded
+    # with the MKL arm (oneapi_mkl/2025.2.0 module, built on the login node), small/c64 with OpenBLAS.
+    engines: [faer-fork, lapack-openblas, lapack-mkl]
     populations:
       - regime: gemm-ohtaka
         groups: [gemm]
