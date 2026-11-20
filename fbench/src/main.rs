@@ -1190,7 +1190,19 @@ fn main() -> ExitCode {
     if n_rows > 0 {
         rows.rotate_left(args.rotate_rows % n_rows);
     }
-    let orders = [Order::C, Order::F];
+    // Both layouts by default. `FBENCH_ORDER=f` (or `c`) restricts the grid to one layout: a suite
+    // that declares `order: [f]` (the ohtaka-cpu suites) sets it in the recorder's environment, and
+    // the recorder's validation still compares the CSVs with the declared order axis, so a
+    // mismatch between the declaration and this variable is refused rather than published.
+    let orders: Vec<Order> = match std::env::var("FBENCH_ORDER").ok().as_deref() {
+        None | Some("") | Some("both") => vec![Order::C, Order::F],
+        Some("f") => vec![Order::F],
+        Some("c") => vec![Order::C],
+        Some(other) => {
+            eprintln!("FBENCH_ORDER must be f, c or both, not {other:?}");
+            return ExitCode::from(2);
+        }
+    };
     let run = args.command == "run";
     let mut records = Vec::new();
     let mut all_ok = true;
@@ -1202,7 +1214,7 @@ fn main() -> ExitCode {
                     let case = match shape.case(family, *batch) {
                         Ok(case) => case,
                         Err(note) => {
-                            for order in orders {
+                            for &order in &orders {
                                 for row in &rows {
                                     if !run {
                                         println!(
@@ -1231,7 +1243,7 @@ fn main() -> ExitCode {
                             continue;
                         }
                     };
-                    for order in orders {
+                    for &order in &orders {
                         for row in &rows {
                             if let Err(e) = require_threads(threads) {
                                 eprintln!("{e}");
