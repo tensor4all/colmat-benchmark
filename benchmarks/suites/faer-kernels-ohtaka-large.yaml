@@ -1,9 +1,10 @@
 schema_version: 1
 id: faer-kernels-ohtaka-large
 description: >-
-  The ohtaka-cpu large-only suite (colmat-benchmark#97): f64, F order, 1024 to 32768 at 1, 16, 32, 64
-  and 128 threads on one ISSP ohtaka node (`srun -c128`). The 1024 and 2048 cells are there to show
-  that small work does not collapse at high thread counts. Families: gemm, LU, Cholesky and the
+  The ohtaka-cpu large-only suite (colmat-benchmark#97): f64, F order, 4096 to 32768 at 16, 32, 64
+  and 128 threads on one ISSP ohtaka node (`srun -c128`). There is no 1T row at these sizes (one
+  call of the largest cells is tens of minutes to hours at 1T, longer than a node allocation);
+  `faer-kernels-ohtaka-small` carries 1T for 1024 and 2048. Families: gemm, LU, Cholesky and the
   compact QR factor, measured at faer's own API against OpenBLAS as in `faer-kernels-large`.
 # Only paths in the *measured* fork whose change can alter a measured result. The
 # harness and the timing protocol live in this repository, not in the fork, so
@@ -128,10 +129,10 @@ engines_doc:
 
 
 runs:
-  - threads: [1, 16, 32, 64, 128]
+  - threads: [16, 32, 64, 128]
     # The CPUs of each thread row are the profile's own `thread_rows`: 16T is NUMA node 0, 32T
     # nodes 0-1, 64T socket 0, 128T the whole node (no observer CPU is left).
-    cpu_sets: {ohtaka-cpu: ["0", "0-15", "0-31", "0-63", "0-127"]}
+    cpu_sets: {ohtaka-cpu: ["0-15", "0-31", "0-63", "0-127"]}
     dtypes: [f64]
     # F (column-major) only: the issue fixes the order for this profile.
     order: [f]
@@ -140,9 +141,9 @@ runs:
     populations:
       - regime: gemm-ohtaka
         groups: [gemm]
-        n: ["1024x1024x1024", "2048x2048x2048", "4096x4096x4096", "8192x8192x8192", "16384x16384x16384", "32768x32768x32768"]
+        n: ["4096x4096x4096", "8192x8192x8192", "16384x16384x16384", "32768x32768x32768"]
         batch: [1]
       - regime: linalg-ohtaka
         groups: [factor, decompose]
-        n: ["1024", "2048", "4096", "8192", "16384", "32768"]
+        n: ["4096", "8192", "16384", "32768"]
         batch: [1]

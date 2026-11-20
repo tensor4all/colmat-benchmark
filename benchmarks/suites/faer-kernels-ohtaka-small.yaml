@@ -1,0 +1,147 @@
+schema_version: 1
+id: faer-kernels-ohtaka-small
+description: >-
+  The ohtaka-cpu small-work half (colmat-benchmark#97): f64, F order, 1024 and 2048 at 1, 16, 32,
+  64 and 128 threads on one ISSP ohtaka node. These cells test that small work does not collapse
+  at high thread counts. Same families and engines as `faer-kernels-ohtaka-large`.
+# Only paths in the *measured* fork whose change can alter a measured result. The
+# harness and the timing protocol live in this repository, not in the fork, so
+# they cannot appear here; see docs/results.md for how a harness change is
+# recorded. Deliberately not `docs/**` or `tests/**`: an edit there does not make
+# a measurement stale.
+invalidated_by:
+  - faer/src/**
+  - faer-traits/src/**
+  - faer-macros/src/**
+  - Cargo.toml
+  - Cargo.lock
+stale_after: 20
+# Empty until the first (zen5-cpu, faer-kernels) cell exists: `missing` is a
+# normal state for a cell with no run, and it becomes an error only for a profile
+# listed as required. The first recorded cell moves `zen5-cpu` in here.
+# Only the ohtaka-cpu profile (tensor4all/colmat-benchmark#97). Never measured on zen5-cpu or the
+# zen2 profiles: these shapes and thread budgets are sized for a 128-core node.
+required_profiles: []
+optional_profiles:
+  - ohtaka-cpu
+
+family_groups:
+  gemm:
+    - gemm
+  factor:
+    - lu
+    - cholesky
+  decompose:
+    - qr_factor
+
+# What the workload is, in a form the result page can print.
+workloads:
+  name: faer dense kernels and decompositions
+  description: >-
+    Direct calls into one faer revision: square and rectangular dense matrices,
+    C (row-major) and F (column-major) order, `f64` and `c64`. A shape is `N` for
+    square, `MxN` for rectangular, or `MxKxN` for `gemm`, which is a three-index
+    operation and cannot be written as two. Sizes are the matrix dimensions, not
+    a memory budget, so a case name says exactly what was factored. `gemm`
+    measures `linalg::matmul::matmul` into a caller-prepared destination with
+    `Accum::Replace`; there is no operator path, so one shape is one work.
+  source: >-
+    The fork's own public API (`faer/src/linalg`): `matmul`, the QR factor and
+    composite, `upgrade_householder_factor`, the block/sequence Householder
+    apply, LU and full-pivot LU, Cholesky, triangular solve, solve, thin SVD,
+    singular values and the symmetric/nonsymmetric eigensolvers. Inputs are
+    seeded from the case, so `verify` and `run` measure the same matrices and a
+    rerun is reproducible.
+  known_blind_spots:
+    - "Only the faer entry points are measured. tlinalg's packing, batch loop and lane policy, tenferro's tensor construction and dtype dispatch, and the small-`m` decode-projection shapes are other repositories' rows (tlinalg-benchmark, tenferro-benchmark)."
+    - "Vendor C-order cells use CBLAS/LAPACKE row-major entry points. Workspace allocation or layout conversion internal to those APIs remains timed; these are not prepared-column-major or transpose measurements."
+    - "`gemm` covers the tall class's two Householder legs (a 16-wide basis and a 240-column target over 4096 rows: the reduction and the write-back) beside a vendor `?gemm` on the same leg. A single leg beside a vendor gemm is a diagnostic reference, not the equivalent implementation of the whole update, and the row is labelled accordingly."
+    - "`householder_apply` measures block apply and the one-block sequence form as two distinct rows, labelled with basis width min(m,n) and target width n. QR fixture preparation is outside timing. Independently varied basis/target widths and multi-panel sequences are not covered."
+    - "Allocation performed inside the measured call stays inside the clock. The fork's two row splits allocate their partial buffers inside the public call, and the public scratch function does not expose them; the campaign reports that as it is instead of changing faer's API to make the boundary look cleaner."
+    - "`cholesky`, `eigh`, `solve` and `triangular_solve` are measured on square shapes only: the matrix they factor or solve with is square by definition (self-adjoint for the first two, a triangular factor for the last). `lu` and `full_piv_lu` are not gated that way -- they take the declared rectangular shapes too, with `min(m, n)` pivots and a trapezoidal `L` or `U`, which is what `dgetrf` does as well -- so a rectangular LU cell is measured in both orders beside its square one."
+    - "BLIS, sparse, iterative and GPU arms are later declarations, not machinery built now."
+    - "A vendor arm records the library it linked. Only OpenBLAS reports the kernel its runtime dispatched to; MKL names no kernel and no processor count, so its manifest leaves both empty rather than inferring them."
+    - "Known limitation: Coverage is the declared grid only (see `runs`): a subset of families (gemm, LU, Cholesky, QR factor) at the sizes and thread budgets of the ohtaka-cpu profile. SVD, eigen and the other decompositions are not measured at these sizes: at 16384-32768 they are days of wall time."
+
+# One entry per engine name the harness emits. A result page explains every
+# column from this, so a reader needs no context beyond the page.
+engines_doc:
+  faer-fork:
+    provider: faer-fork
+    summary: >-
+      The measured library: the tensor4all fork (`colmat`, `[lib] name = "colmat"`)
+      at the checkout the harness linked by path. This is the row the campaign
+      exists for; the fork's three perf experiments and the two correctness
+      changes land here.
+    identity: >-
+      the fork revision in this run's manifest (`library.commit`), pinned by
+      `pins/t4a-faer.rev`
+    caveat: >-
+      The fork crate is `colmat` (`[lib] name = "colmat"`); the upstream baseline is
+      `faer` (`faer_upstream = { package = "faer" }`). They are distinct Rust crate
+      identities, but their `Mat`, `Par` and trait types are not interchangeable:
+      every adapter is written per arm, and shared transitive dependencies can unify
+      Cargo features, so both arms declare equivalent feature sets and the resolved
+      lock is recorded.
+      measured at 93da6217, colmat-rs main at the 2026-11-17 head: no tag names that
+      revision, and the published crates.io colmat 0.34.0 was cut from e1c83482.
+      The 2026-11-17 zen5-cpu recordings were taken at this revision.
+  faer-upstream:
+    provider: faer-upstream
+    summary: >-
+      Upstream `faer` at the tag the fork is based on, in the same binary as the
+      fork row. The baseline that says whether a fork change moved the number.
+    identity: >-
+      the upstream revision in this run's manifest (`upstream.commit`), pinned by
+      `pins/upstream-faer.rev`
+    caveat: >-
+      Same crate-name and feature-unification caveat as `faer-fork`. A change to
+      upstream at a fixed fork revision produces a different page rather than
+      overwriting one.
+  lapack-openblas:
+    provider: openblas
+    summary: >-
+      CBLAS `?gemm` plus LAPACK drivers linked against OpenBLAS: vendor calls and
+      their marshalling, vendor-owned threading. The vendor's own thread budget
+      is set by the harness before the row and read back, and the vendor identity
+      and the dispatched kernel are recorded in the manifest.
+    identity: the OpenBLAS build recorded in this run's manifest (`providers[openblas]`)
+    caveat: >-
+      LAPACK and BLAS own their threading, so this row's thread budget is the
+      vendor's, not the harness pool's. Where a family has no LAPACK route the
+      row is absent and the CSV says the case was skipped for it.
+  lapack-mkl:
+    provider: mkl
+    summary: >-
+      The same calls against Intel oneAPI MKL, linked from the installation
+      `MKLROOT` names. One binary links one vendor library, so this row is
+      measured by its own build of the harness and recorded as its own run; no
+      page carries two vendor arms. The LP64 interface layer and the threading
+      layer are pinned by the harness before the first MKL call, because MKL
+      otherwise lets the environment choose them and the interface layer is an ABI.
+    identity: the MKL build recorded in this run's manifest (`providers[mkl]`)
+    caveat: >-
+      MKL reports no dispatched-kernel name and no processor count, so its
+      manifest records neither rather than inferring them. Its threading is
+      vendor-owned, as for OpenBLAS.
+
+
+runs:
+  - threads: [1, 16, 32, 64, 128]
+    # The CPUs of each thread row are the profile's own `thread_rows`: 16T is NUMA node 0, 32T
+    # nodes 0-1, 64T socket 0, 128T the whole node (no observer CPU is left).
+    cpu_sets: {ohtaka-cpu: ["0", "0-15", "0-31", "0-63", "0-127"]}
+    dtypes: [f64]
+    # F (column-major) only: the issue fixes the order for this profile.
+    order: [f]
+    # One vendor arm per run (AGENTS.md): OpenBLAS is the arm built on ohtaka (no MKL arm here).
+    engines: [faer-fork, faer-upstream, lapack-openblas]
+    populations:
+      - regime: gemm-ohtaka
+        groups: [gemm]
+        n: ["1024x1024x1024", "2048x2048x2048"]
+        batch: [1]
+      - regime: linalg-ohtaka
+        groups: [factor, decompose]
+        n: ["1024", "2048"]
+        batch: [1]
