@@ -204,7 +204,7 @@ class ThroughputPagesTest(unittest.TestCase):
             # The runs behind the charts are stated on the page itself, including the
             # large-tier arm the daily provenance does not name and the arm not recorded.
             self.assertIn('Revisions:', page)
-            self.assertIn('No run was given for large-tier OpenBLAS', page)
+            self.assertIn('No run was given for run 4, run 5', page)
             images = re.findall(r'<img src="([^"]+)"', page)
             self.assertEqual(len(images), 9, (dtype, order))   # every declared family
             for image in images:
