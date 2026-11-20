@@ -43,6 +43,14 @@ jobs:
           fi
           cat /tmp/link-preflight-negative.txt
           grep -q 'the linker cannot find libmkl_intel_lp64.so' /tmp/link-preflight-negative.txt
+          # the same for the aocl arm (#95): an AOCL_ROOT with an empty lib_LP64 must fail and name it
+          mkdir -p "$empty/lib_LP64"
+          if AOCL_ROOT="$empty" campaign-link-preflight --config benchmarks/link-preflight.yaml \
+              --arm aocl > /tmp/link-preflight-negative-aocl.txt; then
+            echo "the link preflight passed with the aocl libraries hidden"; exit 1
+          fi
+          cat /tmp/link-preflight-negative-aocl.txt
+          grep -q 'the linker cannot find libflame.so' /tmp/link-preflight-negative-aocl.txt
 
   index:
     runs-on: ubuntu-slim

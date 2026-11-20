@@ -13,11 +13,13 @@ measured:
   extern_dir: extern/t4a-faer
   build_script: scripts/build_for_faer_rev.sh
   binary: fbench
-  # One binary links one vendor library, so the arm decides the feature. The two arms
-  # are mutually exclusive binaries, built into separate target directories.
+  # One binary links one vendor library, so the arm decides the feature. The three arms
+  # are mutually exclusive binaries, built into separate target directories. AOCL is an
+  # AMD-host arm (#95): AMD's own LAPACK stack beside the fork.
   features:
     openblas: fbench/link-openblas
     mkl: fbench/link-mkl
+    aocl: fbench/link-aocl
   # How the recorder invokes the build script: both checkouts are named, because the
   # harness links the measured fork and the upstream baseline by path.
   build_argv:
@@ -86,10 +88,11 @@ engines:
   faer-upstream: faer-upstream
   lapack-openblas: openblas
   lapack-mkl: mkl
+  lapack-aocl: aocl
 
 # Providers that own the BLAS/LAPACK symbols; they are mutually exclusive in one process,
 # so they are the axis a run -- and a page -- is split on.
-vendor_providers: [openblas, mkl]
+vendor_providers: [openblas, mkl, aocl]
 
 # Preserve v1 historical pages when the measured workload/timing contract changes.
 # {timing} is empty for v1 and -timing-v2 for the revised contract.
@@ -114,6 +117,8 @@ vendor_env:
   - MKL_DYNAMIC
   - MKL_ENABLE_INSTRUCTIONS
   - MKL_CBWR
+  - BLIS_NUM_THREADS
+  - FLA_NUM_THREADS
   - OMP_NUM_THREADS
   - OMP_THREAD_LIMIT
   - OMP_PROC_BIND

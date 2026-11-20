@@ -101,7 +101,7 @@ workloads:
     - "A copy a library makes inside its own call is that library's cost, and it is never divided against a vendor row: on a row-major matrix the fork's LU factors into a column-major copy it allocates (`lu/partial_pivoting/factor.rs:396-418`), and a row-major cell of a vendored driver family is a `skipped` cell, so no vendor ratio is formed there. Allocation performed inside the measured call stays inside the clock, and no _primary_ row does it. The fork's two row splits allocate their partial buffers inside the public call and the public scratch function does not expose them; that is the fork's cost, charged to the fork, and the owning routes that pay it are published as `api-inclusive` rows rather than divided against a vendor row."
     - "`cholesky`, `eigh`, `solve` and `triangular_solve` are measured on square shapes only: the matrix they factor or solve with is square by definition (self-adjoint for the first two, a triangular factor for the last). `lu` and `full_piv_lu` are not gated that way -- they take the declared rectangular shapes too, with `min(m, n)` pivots and a trapezoidal `L` or `U`, which is what `dgetrf` does as well -- so a rectangular LU cell is measured in both orders beside its square one."
     - "`f32`/`c32` are declared and measured as of `docs/harness-dtype-axis.md`; the vendor arm has a route for `gemm` in those two dtypes and reports the LAPACK families as skipped for them. The large regime's 1024 shapes, BLIS, sparse, iterative and GPU arms are later declarations, not machinery built now."
-    - "A vendor arm records the library it linked. Only OpenBLAS reports the kernel its runtime dispatched to; MKL names no kernel and no processor count, so its manifest leaves both empty rather than inferring them."
+    - "A vendor arm records the library it linked. OpenBLAS and AOCL report the kernel their runtime dispatched to (AOCL for BLIS and libflame separately); MKL names no kernel and no processor count, so its manifest leaves both empty rather than inferring them."
     - "Known limitation: Coverage is the declared grid: f64/c64/f32/c32 at 1/4/8T for the small suite, f64/c64 at 4/8T for the large suite's 1024/1536 + boundary tier; the adoption-only 2048/3072/4096 tiers are not measured."
 
 # One entry per engine name the harness emits. A result page explains every
@@ -165,6 +165,23 @@ engines_doc:
       MKL reports no dispatched-kernel name and no processor count, so its
       manifest records neither rather than inferring them. Its threading is
       vendor-owned, as for OpenBLAS.
+  lapack-aocl:
+    provider: aocl
+    summary: >-
+      The same calls against AMD AOCL, the vendor-native LAPACK stack on AMD hosts:
+      LAPACKE from AOCL-LAPACK (`libflame`), CBLAS from the threaded AOCL-BLAS
+      (`libblis-mt`), linked from the versioned tree `AOCL_ROOT` names and loaded
+      through the rpath the build records. One binary links one vendor library, so
+      this row is measured by its own build of the harness and recorded as its own
+      run. Measured on AMD profiles only.
+    identity: the AOCL build recorded in this run's manifest (`providers[aocl]`)
+    caveat: >-
+      One AOCL call is governed by three per-thread counts (OpenMP, BLIS, libflame);
+      the harness sets the budget through OpenMP and refuses the cell unless all
+      three read back equal to it, before each row and after its timed loop. The
+      manifest records both libraries' versions, the files the loader mapped, and
+      the dispatched kernels (`blis=<config>, flame=<isa>`). Threading is
+      vendor-owned, as for OpenBLAS and MKL.
 
 # Populations are sampled as the shape classes the issue names: the ends of each
 # axis, with the middle dropped where it buys nothing. Historical v1 used a 0.5 s
@@ -192,7 +209,7 @@ runs:
     # measurements: provider-native allocations may include padding, and physical
     # strides are not columns in the CSV.
     order: [c, f]
-    engines: [faer-fork, faer-upstream, lapack-openblas, lapack-mkl]
+    engines: [faer-fork, faer-upstream, lapack-openblas, lapack-mkl, lapack-aocl]
     populations:
       - regime: gemm-small
         groups: [gemm]

@@ -97,7 +97,7 @@ python3 scripts/record_run.py zen5-cpu faer-kernels --vendor mkl \
 ```
 
 Four arms are compared at the library's own API: `colmat` (CSV engine `faer-fork`),
-upstream `faer` (`faer-upstream`), OpenBLAS and Intel oneAPI MKL. The Rust
+upstream `faer` (`faer-upstream`), OpenBLAS and Intel oneAPI MKL; the AOCL arm is described below. The Rust
 libraries are separate dependencies named `colmat` and `faer_upstream`; the
 upstream dependency selects package `faer`. Each vendor arm has its own binary.
 Historical pin paths (`pins/t4a-faer.rev`, `extern/t4a-faer`) and CSV engine names
@@ -106,7 +106,50 @@ are retained so existing recordings and tooling keep their identities.
 For library-only diagnostics on a host without a vendor toolchain, the build
 script also accepts `--vendor none`. This links no vendor; use `--rows faer-fork`
 when running `fbench` for a colmat-only measurement. This diagnostic build option
-is separate from the recorder's two vendor arms and does not publish a dataset.
+is separate from the recorder's vendor arms and does not publish a dataset.
+
+### The AOCL arm (`lapack-aocl`)
+
+A third vendor arm runs the same LAPACK row body against AMD AOCL: LAPACKE from
+AOCL-LAPACK (`libflame`), CBLAS from the threaded AOCL-BLAS (`libblis-mt`), plus
+`libaoclutils`, which libflame needs for its CPU-feature dispatch. It is its own
+binary like the other two, recorded by `record_run.py --vendor aocl` with engine `lapack-aocl`
+(feature `link-aocl`) on AMD profiles; its smoke cell is
+[`docs/aocl-smoke-20261119.md`](docs/aocl-smoke-20261119.md). What a reader needs to
+reproduce a number from it:
+
+- **`AOCL_ROOT`**: the versioned threaded install tree, e.g.
+  `/opt/AMD/aocl/6.0.0/gcc/MT` (AOCL 6.x installs `ST` and `MT` trees side by
+  side) or `/opt/AMD/aocl/5.2.0/gcc` (5.x). Install with
+  `./install.sh -t <prefix> -l blis libflame utils -i lp64`; without `utils`
+  libflame cannot load. `scripts/build_for_faer_rev.sh --vendor aocl` resolves
+  the newest complete tree under `/opt/AMD/aocl`, then under the per-user
+  `$HOME/opt/AMD/aocl` (an install without root), and records the resolved path
+  in `BUILD_ENV`; set `AOCL_ROOT` to choose one explicitly.
+- **No loader path is needed at run time.** The recorder executes the harness
+  directly, so the binary carries the tree's `lib_LP64` as an inherited
+  `DT_RPATH` (`--disable-new-dtags`): a `DT_RUNPATH` would not cover libflame's
+  own `NEEDED libaoclutils.so`. An inherited `LD_LIBRARY_PATH` is still searched
+  first, so the harness records the files the loader actually mapped.
+- **The AOCL tree must not be registered with `ldconfig`.** Otherwise AMD's
+  `libblas`/`liblapack` stand in for the system ones in every process on the
+  host, and no other arm on that machine measures the library it names.
+- **Thread budget**: one AOCL call is governed by three per-thread counts -
+  OpenMP's, BLIS's (`BLIS_NUM_THREADS`) and libflame's (`FLA_NUM_THREADS`), the
+  last two each overriding the OpenMP one. The harness sets the budget through
+  OpenMP, as on the MKL arm, and refuses the cell (before each row and again after
+  its timed loop) unless all three read back equal to it; `fbench info` prints
+  them as `threads.vendor_detail=omp:N blis:N flame:N`. The recorder removes
+  `BLIS_NUM_THREADS` and `FLA_NUM_THREADS` from the measured environment with the
+  other vendor variables (`benchmarks/campaign.yaml` `vendor_env`), and a stray
+  value that still arrives is refused by the read-back.
+- **Identity**: `fbench info` records both libraries' version strings, the files
+  the loader actually mapped, and the dispatched kernels (`blis=zen5,
+  flame=avx512` on Zen 5). The fork, upstream and harness revisions come from the
+  build script's `--out` file, as for the other arms.
+
+A t4a-faer 0.31 checkout must live outside this repository's tree: nested under
+`extern/`, Cargo cannot resolve its workspace-inherited package fields.
 
 ## Tooling
 
@@ -114,7 +157,7 @@ The seven `scripts/*.py` entry points are thin shims over
 [`campaign-toolkit`](https://github.com/tensor4all/campaign-toolkit), the shared
 package the campaigns now have in common. `requirements.txt` pins it by git
 revision; `benchmarks/campaign.yaml` is this campaign's descriptor, naming the
-measured fork, the upstream baseline, the two vendor arms, the `order` case axis
+measured fork, the upstream baseline, the three vendor arms, the `order` case axis
 and every other value the toolkit needs. The `schemas/` copies are gone: the
 toolkit supplies them.
 

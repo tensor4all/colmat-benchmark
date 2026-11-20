@@ -9,7 +9,7 @@ every result page and the charts declared in `benchmarks/campaign.yaml` (`figure
 toolkit's (`campaign_toolkit.site`). The throughput charts are one page per recorded
 `(dtype, order)` dataset (`result/throughput-<dtype>-<order>.html`, `benchmarks/throughput.yaml`
 `variants:`), linked from the landing page instead of carried on it. What is this campaign's own is the four-way view: the MKL and
-OpenBLAS arms of the current `faer-kernels` pages joined on the cell key by `gen_comparison.py`,
+OpenBLAS arms (and, on AMD profiles once recorded, the AOCL arm) of the current `faer-kernels` pages joined on the cell key by `gen_comparison.py`,
 written to `result/zen5-cpu/faer-kernels/<rev12>-comparison.html` and linked from the landing page.
 
 The site is not written when the pin has no current recording (`campaign_toolkit.pin_recorded`,
@@ -89,6 +89,15 @@ def write_comparison():
     argv = ['--mkl', str(arms['mkl']), '--openblas', str(arms['openblas']), '--out', str(out)]
     if control is not None:
         argv += ['--control-mkl', str(control)]
+    # The AOCL arm (AMD profiles, #95) is joined as a third arm when it has a current page. If the
+    # guard refuses it, the MKL/OpenBLAS view is still written and the AOCL refusal is reported:
+    # the third arm's disagreement says nothing about whether the first two are one session.
+    if 'aocl' in arms:
+        try:
+            gen_comparison.main(argv + ['--aocl', str(arms['aocl'])])
+            return out, None
+        except gen_comparison.PairingRefused as refusal:
+            print(f'the AOCL arm is not joined: {refusal}', file=sys.stderr)
     try:
         gen_comparison.main(argv)
     except gen_comparison.PairingRefused as refusal:

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Join the two vendor arms of one recording into a single browser-viewable page.
 
-    scripts/gen_comparison.py --mkl <run dir> --openblas <run dir> --out <file.html>
+    scripts/gen_comparison.py --mkl <run dir> --openblas <run dir> [--aocl <run dir>] --out <file.html>
 
 One binary links one vendor library, so `faer-fork` is measured beside MKL in one
 run and beside OpenBLAS in the other; `faer-upstream` is only in the MKL arm
@@ -23,6 +23,10 @@ commit that only adds recorded data are one identity (`harness_identity_same`).
 It is a view over recorded data, not a new measurement: a cell that one arm does
 not carry is shown as a dash, and the per-arm Markdown pages plus their manifests
 stay authoritative for the control statement and the verification record.
+
+On an AMD profile a third arm, AOCL (`--aocl`), is joined the same way: its own fork
+column, its own `lapack-aocl` column, and `AOCL/fork` dividing by the fork the AOCL arm
+measured. Without `--aocl` the page is the two-arm page, unchanged.
 """
 import argparse, csv, html, pathlib, statistics, subprocess, sys
 import yaml
@@ -379,7 +383,7 @@ def vendor_arm(label, run_dir):
 
     The library name and therefore the row name (`lapack-<name>`) are read from the manifest, and
     the manifest has to name the arm it was handed to: the column headings this page prints are
-    `MKL` and `OpenBLAS`, so an arm given to `--openblas` that recorded `mkl` would show MKL's
+    `MKL`, `OpenBLAS` and `AOCL`, so an arm given to `--openblas` that recorded `mkl` would show MKL's
     numbers under the OpenBLAS heading -- the one thing a page of measurements must not do.
     """
     manifest, cells, skips = load(run_dir)
@@ -463,6 +467,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument('--mkl', required=True, help='run directory of the three-engine arm')
     ap.add_argument('--openblas', required=True, help='run directory of the two-engine arm')
+    ap.add_argument('--aocl', help='run directory of the AOCL arm (AMD profiles); joined as a third arm')
     ap.add_argument('--out', required=True)
     ap.add_argument('--control-mkl', help='an earlier MKL arm to state the unchanged row against')
     args = ap.parse_args(argv)
@@ -470,18 +475,22 @@ def main(argv=None):
     mkl = vendor_arm('mkl', args.mkl)
     ctrl = control(args.control_mkl, args.mkl) if args.control_mkl else None
     ob = vendor_arm('openblas', args.openblas)
-    identity = require_one_protocol([mkl, ob])
+    ao = vendor_arm('aocl', args.aocl) if args.aocl else None
+    arms = [mkl, ob] + ([ao] if ao else [])
+    identity = require_one_protocol(arms)
     # `require_one_protocol` accepts a pair only when one harness measured both arms: the same
     # commit, or two commits whose measured harness paths are identical. So whether these ratios
     # were measured on one contract is asked once, of the MKL arm's manifest.
     harness = (mkl['manifest'].get('harness') or {}).get('commit')
     fair = fair_harness(harness)
 
-    keys = sorted(set(mkl['cells']) | set(ob['cells']))
+    keys = sorted(set(mkl['cells']) | set(ob['cells']) | (set(ao['cells']) if ao else set()))
     rows = []
     for key in keys:
         a, b = mkl['cells'].get(key, {}), ob['cells'].get(key, {})
-        fork_m, fork_o = a.get('faer-fork'), b.get('faer-fork')
+        c = ao['cells'].get(key, {}) if ao else {}
+        fork_m, fork_o, fork_a = a.get('faer-fork'), b.get('faer-fork'), c.get('faer-fork')
+        aoc = c.get(ao['row']) if ao else None
         up, mk, obl = a.get('faer-upstream'), a.get(mkl['row']), b.get(ob['row'])
         # Each ratio is two rows of one arm, and both its numbers are in the row it is printed in:
         # `upstream/fork` and `MKL/fork` divide the fork the MKL arm measured, `OpenBLAS/fork` the
@@ -491,20 +500,24 @@ def main(argv=None):
         # inside its timed call for work the faer row did not, so the two numbers are kept as
         # recorded and the comparison between them is withdrawn.
         withdrawn = not fair and key[1] in WITHDRAWN_VENDOR_FAMILIES
-        rows.append(dict(key=key, fork_m=fork_m, fork_o=fork_o, up=up, mk=mk, obl=obl,
-                         r_up=ratio(up, fork_m), withdrawn=withdrawn,
+        rows.append(dict(key=key, fork_m=fork_m, fork_o=fork_o, fork_a=fork_a, up=up, mk=mk,
+                         obl=obl, aoc=aoc, r_up=ratio(up, fork_m), withdrawn=withdrawn,
                          r_ob=None if withdrawn else ratio(obl, fork_o),
-                         r_mk=None if withdrawn else ratio(mk, fork_m)))
+                         r_mk=None if withdrawn else ratio(mk, fork_m),
+                         r_ao=None if withdrawn else ratio(aoc, fork_a)))
 
     # summary over the cells each arm carries: that is where its baseline row exists
     mkl_pairs = [r for r in rows if r['fork_m'] and r['up']]
     ob_pairs = [r for r in rows if r['fork_o'] and r['r_ob']]
     med_up = statistics.median([r['up'] / r['fork_m'] for r in mkl_pairs]) if mkl_pairs else None
     med_ob = statistics.median([r['obl'] / r['fork_o'] for r in ob_pairs]) if ob_pairs else None
-    unmeasured, unmeasured_families = unmeasured_cells([mkl, ob])
+    ao_pairs = [r for r in rows if r['fork_a'] and r['r_ao']]
+    med_ao = statistics.median([r['aoc'] / r['fork_a'] for r in ao_pairs]) if ao_pairs else None
+    ao_rows = [r for r in rows if r['fork_a'] and r['aoc']]
+    unmeasured, unmeasured_families = unmeasured_cells(arms)
     # The cells whose ratio is actually on the page: a family without a vendor row in this
     # recording has no ratio to withdraw, and the note must not claim otherwise.
-    withdrawn_cells = [r for r in rows if r['withdrawn'] and (r['mk'] or r['obl'])]
+    withdrawn_cells = [r for r in rows if r['withdrawn'] and (r['mk'] or r['obl'] or r['aoc'])]
     ob_rows = [r for r in rows if r['fork_o'] and r['obl']]   # carries a vendor row, withdrawn or not
     ob_families = sorted({r['key'][1] for r in ob_pairs})
 
@@ -552,13 +565,26 @@ def main(argv=None):
     guards = library['guards']
     calls = f"{timing['repetitions']} call{'s' if timing['repetitions'] != 1 else ''}"
     reduction = "last of the run's process-set CSVs"
-    title = f"{library['suite_id']} on {library['target_profile']} - fork against upstream, OpenBLAS and MKL"
+    title = (f"{library['suite_id']} on {library['target_profile']} - fork against upstream, OpenBLAS"
+             + (", MKL and AOCL" if ao else " and MKL"))
     # The arms can name two harness commits (one identity, see `harness_identity_same`); printing
     # only the MKL arm's would describe the page with a revision only one arm was recorded at.
     ob_harness = (ob['manifest'].get('harness') or {}).get('commit')
     harness_text = (f"<code>{harness[:12]}</code>" if ob_harness == harness else
                     f"<code>{harness[:12]}</code> (MKL arm) and <code>{ob_harness[:12]}</code> "
                     "(OpenBLAS arm), which carry identical measured harness paths")
+    if ao:
+        ao_harness = (ao['manifest'].get('harness') or {}).get('commit')
+        if ao_harness != harness:
+            harness_text += (f"; AOCL arm <code>{str(ao_harness)[:12]}</code>, identical measured "
+                             "harness paths")
+    ao_vendor = ''
+    ao_recorded = ''
+    if ao:
+        v = ao['manifest']['vendor']
+        ao_vendor = (f"\n <li>AOCL: {html.escape(str(v.get('name')))} {html.escape(str(v.get('version')))} "
+                     f"({html.escape(str(v.get('linkage')))}; kernels {html.escape(str(v.get('corename')))})</li>")
+        ao_recorded = f" and <code>{ao['manifest']['timestamp']}</code> (AOCL arm)"
     parts = [f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <title>{html.escape(title)}</title>
@@ -587,10 +613,10 @@ the fork is faster; the cells outside 0.95-1.05 are tinted.</p>
  <li>measured revision: <code>{revision}</code> ({html.escape(str(library['library'].get('version')))})</li>
  <li>upstream: <code>{library['upstream']['commit']}</code> ({html.escape(str(library['upstream'].get('ref')))})</li>
  <li>MKL: {html.escape(str(mkl['manifest']['vendor'].get('name')))} {html.escape(str(mkl['manifest']['vendor'].get('version')))} ({html.escape(str(mkl['manifest']['vendor'].get('linkage')))})</li>
- <li>OpenBLAS: {html.escape(str(ob['manifest']['vendor'].get('name')))} {html.escape(str(ob['manifest']['vendor'].get('version')))} ({html.escape(str(ob['manifest']['vendor'].get('linkage')))})</li>
+ <li>OpenBLAS: {html.escape(str(ob['manifest']['vendor'].get('name')))} {html.escape(str(ob['manifest']['vendor'].get('version')))} ({html.escape(str(ob['manifest']['vendor'].get('linkage')))})</li>{ao_vendor}
  <li>hardware profile: <code>{library['target_profile']}</code>; measured CPUs {html.escape(str(library['threads']['cpu_sets']))}; observer {html.escape(str(library['threads']['observer'].get('affinity')))}; one host: {html.escape(describe_host(identity))}</li>
  <li>timing policy: v{timing['version']}, {calls}, {timing['statistic']}, priming {timing['minimum_untimed_priming_ms']} ms; guards: idle {guards['idle_window_seconds']} s, max {guards['max_busy_percent']}% busy, {guards['attempts']} attempts</li>
- <li>recorded: <code>{library['timestamp']}</code> (MKL arm) and <code>{ob['manifest']['timestamp']}</code> (OpenBLAS arm)</li>
+ <li>recorded: <code>{library['timestamp']}</code> (MKL arm) and <code>{ob['manifest']['timestamp']}</code> (OpenBLAS arm){ao_recorded}</li>
  <li>harness {harness_text}, toolkit <code>{library['toolkit']['commit'][:12]}</code></li>
 </ul>
 {withdrawn_html}
@@ -616,7 +642,10 @@ timestamps differ by design and are not compared.</p>
         f'<p class="note">Cells with a baseline row: {len(mkl_pairs)} against <code>faer-upstream</code>, '
         f'{len(ob_rows)} against <code>lapack-openblas</code>. Median baseline/fork ratio (above 1.00 '
         f'means the fork is faster): upstream {fmt(med_up)}, '
-        f'OpenBLAS {fmt(med_ob) if ob_pairs else "withdrawn" if withdrawn_cells else "-"}.</p>\n')
+        f'OpenBLAS {fmt(med_ob) if ob_pairs else "withdrawn" if withdrawn_cells else "-"}'
+        + (f', AOCL {fmt(med_ao) if ao_pairs else "withdrawn" if withdrawn_cells else "-"} '
+           f'({len(ao_rows)} cells against <code>lapack-aocl</code>)' if ao else '')
+        + '.</p>\n')
 
     by_regime = {}
     for r in rows:
@@ -627,7 +656,9 @@ timestamps differ by design and are not compared.</p>
                      '<th>threads</th>'
                      '<th>fork MKL (ms)</th><th>upstream (ms)</th><th>upstream/fork</th>'
                      '<th>fork OpenBLAS (ms)</th><th>OpenBLAS (ms)</th><th>OpenBLAS/fork</th>'
-                     '<th>MKL (ms)</th><th>MKL/fork</th></tr></thead><tbody>')
+                     '<th>MKL (ms)</th><th>MKL/fork</th>'
+                     + ('<th>fork AOCL (ms)</th><th>AOCL (ms)</th><th>AOCL/fork</th>' if ao else '')
+                     + '</tr></thead><tbody>')
         for r in sorted(by_regime[regime], key=lambda r: (
                 r['key'][1], r['key'][2], r['key'][3],
                 int(r['key'][8]) if r['key'][8].isdigit() else 0,
@@ -641,7 +672,10 @@ timestamps differ by design and are not compared.</p>
                 f'<td>{key[2]}</td><td>{key[3]}</td><td>{key[8]}</td>'
                 f'<td>{fmt(r["fork_m"])}</td><td>{fmt(r["up"])}</td><td{cls(r["r_up"])}>{fmt(r["r_up"])}</td>'
                 f'<td>{fmt(r["fork_o"])}</td><td>{fmt(r["obl"])}</td>{vendor_ratio_cell(r, "r_ob")}'
-                f'<td>{fmt(r["mk"])}</td>{vendor_ratio_cell(r, "r_mk")}</tr>')
+                f'<td>{fmt(r["mk"])}</td>{vendor_ratio_cell(r, "r_mk")}'
+                + (f'<td>{fmt(r["fork_a"])}</td><td>{fmt(r["aoc"])}</td>{vendor_ratio_cell(r, "r_ao")}'
+                   if ao else '')
+                + '</tr>')
         parts.append('</tbody></table>')
 
     parts.append('</body></html>\n')
@@ -649,7 +683,8 @@ timestamps differ by design and are not compared.</p>
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text('\n'.join(parts))
     print(f'wrote {out} from {len(rows)} cells '
-          f'({len(mkl_pairs)} with an upstream row, {len(ob_pairs)} with an OpenBLAS row)')
+          f'({len(mkl_pairs)} with an upstream row, {len(ob_pairs)} with an OpenBLAS row'
+          + (f', {len(ao_pairs)} with an AOCL row' if ao else '') + ')')
     if unmeasured:
         print(f'{len(unmeasured)} cells were asked for and measured by neither arm')
     return 0
