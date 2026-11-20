@@ -75,7 +75,7 @@ for arm, engines in (("mkl", "faer-fork,faer-upstream,lapack-mkl"), ("openblas",
     r = sh([str(ROOT / "scripts/docker_campaign.sh"), "shell",
             f"python scripts/record_run.py zen5-cpu faer-kernels --vendor {arm} --engines {engines} "
             f"--regimes gemm-small --families gemm --threads 1,8 --dtypes f64 --reps 2 --aa {len(engines.split(','))} --prime-ms 250 "
-            f"--no-publish --label {label}"])
+            f"--no-publish --label {label}; chown -R {os.getuid()}:{os.getgid()} data .git docs result target"])
     runs = sorted((ROOT / "data/results/zen5-cpu/faer-kernels").glob(f"*-{label}"))
     detail = {"exit": r.returncode, "tail": r.stderr[-600:]}
     ok = r.returncode == 0 and len(runs) == 1
