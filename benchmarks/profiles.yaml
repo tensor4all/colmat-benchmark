@@ -57,12 +57,12 @@ profiles:
   # ISSP ohtaka compute node (F1cpu partition, one whole node via `srun -c128`), tensor4all/colmat-benchmark#97.
   # Never mixed with zen5-cpu or the zen2 profiles: a different machine, a different SMT state, a
   # different NUMA layout, so its cells are only comparable with each other.
-  # The layout is as MEASURED on c18u05n1 (2026-11-20, job 3221137), not as the issue text assumed:
+  # The layout is as MEASURED on c18u05n1 (2026-11-20, job 3221137) and c18u01n3 (job 3221621), not as the issue text assumed:
   # `lscpu` reports 128 CPU(s), 1 thread per core, 2 sockets, 8 NUMA nodes of 16 cores (node k =
   # CPUs 16k..16k+15), `smt/active` is 0, every `thread_siblings_list` is the CPU itself, and
   # `cache/index3/shared_cpu_list` is 4k-4k+3 (16 MiB per 4-core CCX, 32 CCXs). There is no SMT
   # sibling to park an observer on, so the 128T row has no observer CPU (the same deliberate
-  # empty observer as zen2's 64T row): the driver runs off the measured set or is asleep.
+  # empty observer as zen2's 64T row; campaign-toolkit#81 relaxes the recorder's observer refusal for such a declared row): the driver runs off the measured set or is asleep.
   # The node exposes no `cpufreq` sysfs (no `boost`, no `scaling_governor`), so boost and
   # governor are NOT verifiable from inside the job and are deliberately not declared here: the
   # recorder records the power state as unrecorded, and the pages must say that.
