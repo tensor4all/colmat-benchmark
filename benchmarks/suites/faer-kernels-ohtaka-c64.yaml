@@ -1,7 +1,7 @@
 schema_version: 1
 id: faer-kernels-ohtaka-c64
 description: >-
-  The ohtaka-cpu c64 spot suite (colmat-benchmark#97): c64, F order, 8192 at 32, 64 and 128 threads,
+  The ohtaka-cpu c64 spot suite (colmat-benchmark#97): c64, F order, 8192 (plus its 2048 verified companion) at 32, 64 and 128 threads,
   the same families and engines as `faer-kernels-ohtaka-large`, kept as its own suite because a suite
   declares one dtype/size/thread grid and a mixed one would be a Cartesian product.
 # Only paths in the *measured* fork whose change can alter a measured result. The
@@ -126,6 +126,16 @@ engines_doc:
       vendor-owned, as for OpenBLAS.
 
 
+# The harness's residual check forms its reference products with a single-threaded cache-blocked
+# triple loop (`fbench/src/shared.rs` `mm`); a c64 8192 reference product alone is tens of minutes
+# per check (the cpu-bench-refresh verification-cost rule). The 2048 cells are declared as the
+# verified companion of the 8192 spot: the residual check is narrowed to 2048 at every thread
+# budget, and the requested 8192 cells are timed on the same code paths without a residual check
+# at their own size. The 2048 cells are measured and published too; they are an addition to the
+# issue's 8192 spot, made for this reason.
+verify:
+  n: ["2048", "2048x2048x2048"]
+
 runs:
   - threads: [32, 64, 128]
     # The CPUs of each thread row are the profile's own `thread_rows`: 16T is NUMA node 0, 32T
@@ -139,9 +149,9 @@ runs:
     populations:
       - regime: gemm-ohtaka
         groups: [gemm]
-        n: ["8192x8192x8192"]
+        n: ["2048x2048x2048", "8192x8192x8192"]
         batch: [1]
       - regime: linalg-ohtaka
         groups: [factor, decompose]
-        n: ["8192"]
+        n: ["2048", "8192"]
         batch: [1]
