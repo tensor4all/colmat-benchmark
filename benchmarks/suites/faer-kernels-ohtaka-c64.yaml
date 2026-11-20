@@ -1,9 +1,9 @@
 schema_version: 1
 id: faer-kernels-ohtaka-c64
 description: >-
-  The ohtaka-cpu c64 spot suite (colmat-benchmark#97): c64, F order, 8192 (plus its 2048 verified companion) at 32, 64 and 128 threads,
-  the same families and engines as `faer-kernels-ohtaka-large`, kept as its own suite because a suite
-  declares one dtype/size/thread grid and a mixed one would be a Cartesian product.
+  The ohtaka-cpu c64 spot (colmat-benchmark#97): c64, F order, 8192 at 64 and 128 threads (plus its
+  2048 verified companion), the same families and engines as `faer-kernels-ohtaka-large`, kept as
+  its own suite because a suite declares one dtype/size/thread grid.
 # Only paths in the *measured* fork whose change can alter a measured result. The
 # harness and the timing protocol live in this repository, not in the fork, so
 # they cannot appear here; see docs/results.md for how a harness change is
@@ -139,15 +139,15 @@ verify:
   n: ["2048", "2048x2048x2048"]
 
 runs:
-  - threads: [32, 64, 128]
+  - threads: [64, 128]
     # The CPUs of each thread row are the profile's own `thread_rows`: 16T is NUMA node 0, 32T
     # nodes 0-1, 64T socket 0, 128T the whole node (no observer CPU is left).
-    cpu_sets: {ohtaka-cpu: ["0-31", "0-63", "0-127"]}
+    cpu_sets: {ohtaka-cpu: ["0-63", "0-127"]}
     dtypes: [c64]
     # F (column-major) only: the issue fixes the order for this profile.
     order: [f]
     # One vendor arm per run (AGENTS.md): OpenBLAS is the arm built on ohtaka (no MKL arm here).
-    engines: [faer-fork, faer-upstream, lapack-openblas]
+    engines: [faer-fork, lapack-openblas]
     populations:
       - regime: gemm-ohtaka
         groups: [gemm]
