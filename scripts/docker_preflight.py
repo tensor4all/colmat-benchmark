@@ -74,7 +74,7 @@ for arm, engines in (("mkl", "faer-fork,faer-upstream,lapack-mkl"), ("openblas",
     label = f"preflight-smoke-{arm}"
     r = sh([str(ROOT / "scripts/docker_campaign.sh"), "shell",
             f"python scripts/record_run.py zen5-cpu faer-kernels --vendor {arm} --engines {engines} "
-            f"--regimes gemm-small --families gemm --threads 1,8 --dtypes f64 --reps 1 --aa 1 --prime-ms 250 "
+            f"--regimes gemm-small --families gemm --threads 1,8 --dtypes f64 --reps 2 --aa {len(engines.split(','))} --prime-ms 250 "
             f"--no-publish --label {label}"])
     runs = sorted((ROOT / "data/results/zen5-cpu/faer-kernels").glob(f"*-{label}"))
     detail = {"exit": r.returncode, "tail": r.stderr[-600:]}
