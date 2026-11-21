@@ -103,3 +103,43 @@ profiles:
       governor: performance
     thread_rows:
       - {threads: 64, measured: "0-63", observer: ""}
+  # ISSP ohtaka FAT node (c18fat1-8, partitions i1fat/B2fat/L2fat/F2fat: one whole node of 112
+  # cores and 3 TB), tensor4all/colmat-benchmark#101. Never mixed with ohtaka-cpu (the 128-core
+  # EPYC F1cpu node) or with zen5-cpu: a different machine, a different core count, cache layout
+  # and memory class, so its cells are only comparable with each other.
+  # The layout is as MEASURED on c18fat8 (2026-11-21, i1fat job 3222793), not as assumed: `lscpu`
+  # reports 112 CPU(s), 1 thread per core, 4 sockets of 28 cores, 4 NUMA nodes, `smt/active` 0 with
+  # `smt/control` on, 39424 KiB of L3 per socket, and 774 GB of memory per node (3168122680 kB
+  # total). The CPUs are numbered ACROSS the sockets, not within them: NUMA node k is the CPUs
+  # that are k mod 4 (node 0 = 0,4,...,108) and `cache/index3/shared_cpu_list` is the 28 CPUs of one
+  # node for all four, so a thread row has to name its CPUs one by one - `0-15` would straddle all
+  # four nodes. Turbo (4.0 GHz) and the governor are exposed by cpufreq here, so the recorder
+  # records the power state instead of this profile declaring it (contrast ohtaka-cpu, which
+  # exposes no cpufreq and must say it does not).
+  - name: ohtaka-fat
+    role: measurement
+    description: >-
+      4x Intel Xeon Platinum 8280 (Cascade Lake), 112 physical / 112 logical cores (SMT off),
+      4 NUMA nodes of 28 cores of 774 GB each, 39424 KiB of L3 per socket. Rows fill one node
+      before the next: 16T is the first 16 cores of node 0, 32T all of node 0 and 4 cores of node
+      1, 64T nodes 0-1 and 8 cores of node 2, 112T the whole machine. The 112T row measures every
+      core, so no CPU is left for the observing side: it is declared with no observer and the run
+      is recorded os-shared (shared with the operating system, Slurm and the recorder).
+    cpu: Intel Xeon Platinum 8280
+    logical_cpus: 112
+    l3: "39424 KiB per socket: 4 domains of 28 CPUs, one per NUMA node, node k = CPUs = k mod 4"
+    # One hardware thread per core: CPU n's sibling is n itself.
+    smt: {threads_per_core: 1, sibling_offset: 112}
+    record_numa: true
+    # The measured CPUs are named explicitly because the numbering is interleaved across the four
+    # sockets. The observing side sits in NUMA node 3 (CPUs 3,7,...,111), which no row below 112T
+    # measures: one L3 domain of its own, so the recorder and the guard never run in a domain the
+    # cells time in. The 112T row has no such CPU and declares none.
+    thread_rows:
+      - {threads: 16, measured: "0,4,8,12,16,20,24,28,32,36,40,44,48,52,56,60",
+         observer: "3,7,11,15,19,23,27,31,35,39,43,47,51,55,59,63,67,71,75,79,83,87,91,95,99,103,107,111"}
+      - {threads: 32, measured: "0,4,8,12,16,20,24,28,32,36,40,44,48,52,56,60,64,68,72,76,80,84,88,92,96,100,104,108,1,5,9,13",
+         observer: "3,7,11,15,19,23,27,31,35,39,43,47,51,55,59,63,67,71,75,79,83,87,91,95,99,103,107,111"}
+      - {threads: 64, measured: "0,4,8,12,16,20,24,28,32,36,40,44,48,52,56,60,64,68,72,76,80,84,88,92,96,100,104,108,1,5,9,13,17,21,25,29,33,37,41,45,49,53,57,61,65,69,73,77,81,85,89,93,97,101,105,109,2,6,10,14,18,22,26,30",
+         observer: "3,7,11,15,19,23,27,31,35,39,43,47,51,55,59,63,67,71,75,79,83,87,91,95,99,103,107,111"}
+      - {threads: 112, measured: "0-111", observer: ""}
