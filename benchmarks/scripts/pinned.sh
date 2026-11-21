@@ -40,10 +40,22 @@ wait=${PINNED_WAIT:-30}
 check() { python3 "$here/idle_cpus.py" check "$cpus" --seconds "$seconds" --max-busy "$max_busy" 2> "$guard"; }
 runner=(taskset -c "$cpus")
 if [[ -n ${BENCH_CONTAINER:-} ]]; then
-    runner=(docker exec "$BENCH_CONTAINER" taskset -c "$cpus")
+    # `docker exec` does not inherit this process's environment, so what the recorder declares for
+    # the measured process has to be passed by name: FBENCH_* (the hardware profile the harness
+    # writes into every CSV row) and the loader path. The thread-budget variables are not
+    # forwarded; the recorder removes them and the container's own environment has none.
+    runner=(docker exec)
+    forwarded=()
+    for name in $(compgen -e | grep -E '^(FBENCH_.*|LD_LIBRARY_PATH)$' || true); do
+        runner+=(-e "$name"); forwarded+=("$name")
+    done
+    runner+=("$BENCH_CONTAINER" taskset -c "$cpus")
+    echo "pinned.sh: environment forwarded into the container: ${forwarded[*]:-none}" >&2
     echo "pinned.sh: measured in container $BENCH_CONTAINER: $(docker inspect -f 'image={{.Config.Image}} image_id={{.Image}} cpuset={{.HostConfig.CpusetCpus}}' "$BENCH_CONTAINER")" >&2
 fi
-if [[ $(uname -s) != Linux ]] || [[ ! -r /proc/stat ]] || ! command -v taskset >/dev/null; then
+# In container mode taskset runs inside the container, so its presence here is not the question and
+# the fallback below, which would run the command on this side, must never apply.
+if [[ $(uname -s) != Linux ]] || [[ ! -r /proc/stat ]] || { [[ -z ${BENCH_CONTAINER:-} ]] && ! command -v taskset >/dev/null; }; then
     echo "pinned.sh: CPU pinning unavailable on this host (Linux only); running unpinned" >&2
     exec "$@"
 fi

@@ -88,7 +88,12 @@ for arm, engines in (("mkl", "faer-fork,faer-upstream,lapack-mkl"), ("openblas",
         in_container = f"measured in container {NAME}" in guard and "cpuset=4-11" in guard
         detail.update({"vendor.name": bi.get("vendor.name"), "vendor.version": bi.get("vendor.version"),
                        "guards_name_the_container": in_container})
-        ok = ok and bi.get("vendor.name") == arm and in_container
+        # The recorder's FBENCH_PROFILE must reach the measured process (docker exec does not inherit
+        # the environment); the harness writes it into every CSV row, so an empty column is a lost variable.
+        import csv
+        profiles = {r.get("profile") for f in run.glob("run*.csv") for r in csv.DictReader(open(f))}
+        detail["profile_column"] = sorted(map(str, profiles))
+        ok = ok and bi.get("vendor.name") == arm and in_container and profiles == {"zen5-cpu"}
         dest = ROOT / "target/preflight-smoke" / arm
         shutil.rmtree(dest, ignore_errors=True); dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(run), dest)

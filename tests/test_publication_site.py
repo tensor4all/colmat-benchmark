@@ -18,7 +18,7 @@ from campaign_toolkit.stack import rev_file_value  # noqa: E402
 
 # The arms this publication recorded: both suites on the MKL, OpenBLAS and AOCL arms (AOCL added by
 # #95; the large OpenBLAS arm, once dropped by decision on 2026-11-18, is back in the same-pin Docker
-# refresh #99). `benchmarks/campaign.yaml` `figures.runs` declares the same six positions; adding an
+# refresh #99). `benchmarks/campaign.yaml` `figures.throughput.runs` declares the same six positions; adding an
 # arm here without its run would make this test assert a page that does not exist.
 RECORDED = {('faer-kernels', 'mkl'), ('faer-kernels', 'openblas'), ('faer-kernels', 'aocl'),
             ('faer-kernels-large', 'mkl'), ('faer-kernels-large', 'openblas'),
