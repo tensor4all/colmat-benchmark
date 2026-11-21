@@ -1,0 +1,47 @@
+status: PASS
+issue: tensor4all/colmat-benchmark#99
+timestamp: 20261121T193632Z
+image: shinaoka/tenferro-bench-cpu:cpu-20261120-julia
+harness_commit: 97a428e46a7d7ab6e8cd71268e0acecac13260f0
+measured_container: colmat-measured-99
+power: {"boost": "0", "governor_cpu4": "performance"}
+checks:
+  - name: "docker daemon is not rootless"
+    status: PASS
+    detail: "[name=apparmor,profile=default name=seccomp,profile=builtin name=cgroupns]"
+  - name: "dockerd and containerd pinned to 0-3,12-15"
+    status: PASS
+    detail: "CPUAffinity=0-3 12-15 CPUAffinity=0-3 12-15"
+  - name: "image present"
+    status: PASS
+    detail: "sha256:14e6b8b99973d583518fbb96952a9486815c3fd90919c5e9dd35428734b03dfb [shinaoka/tenferro-bench-cpu@sha256:14e6b8b99973d583518fbb96952a9486815c3fd90919c5e9dd35428734b03dfb]"
+  - name: "measured container running with cpuset 4-11"
+    status: PASS
+    detail: "true 4-11 sha256:14e6b8b99973d583518fbb96952a9486815c3fd90919c5e9dd35428734b03dfb"
+  - name: "measured container sees only CPUs 4-11"
+    status: PASS
+    detail: "4-11"
+  - name: "recorder container (image + gfortran) on 0-3,12-15 and can docker-exec into the measured one"
+    status: PASS
+    detail: "Cpus_allowed_list:\t0-3,12-15\nexec-ok\nGNU Fortran (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0"
+  - name: "measured domain idle (10 s, with SMT siblings and L3 peers)"
+    status: PASS
+    detail: "cpu4 busy=0.001\ncpu5 busy=0.001\ncpu6 busy=0.003\ncpu7 busy=0.002\ncpu8 busy=0.002\ncpu9 busy=0.003\ncpu10 busy=0.002\ncpu11 busy=0.000\ncpu16 busy=0.002 (cache peer)\ncpu17 busy=0.000 (cache peer)\ncpu18 busy=0.001 (cache peer)\ncpu19 busy=0.002 (cache peer)\ncpu20 busy=0.001 (cache peer)\ncpu21 busy=0.002 (cache peer)\ncpu22 busy=0.001 (cache peer)\ncpu23 busy=0.006 (cache peer)"
+  - name: "no host process that used CPU may run on the measured side"
+    status: PASS
+    detail: "observer-audit: nothing used CPU outside the observing side 0-3,12-15"
+  - name: "no other benchmark process or container"
+    status: PASS
+    detail: "[] ['colmat-measured-99']"
+  - name: "harness commit clean and on a remote"
+    status: PASS
+    detail: "97a428e46a7d7ab6e8cd71268e0acecac13260f0 origin/feat/docker-3arm-99"
+  - name: "smoke cell on the mkl arm: builds, verifies, measures through the container"
+    status: PASS
+    detail: "{\"exit\": 0, \"tail\": \"ev.sh resolves them]  (0.088 s)\\n       note:     MKL_THREADING_LIB unset; resolved to /opt/intel/oneapi/compiler/2026.2/lib/libiomp5.so from /opt/intel/oneapi/compiler/*/lib/libiomp5.so\\nLINK PREFLIGHT OK\\ncpu sets from the suite's cpu_sets for zen5-cpu: 1T 4, 8T 4-11\\n+ /work/colmat-99/scripts/build_for_faer_rev.sh --checkout /work/colmat-99/extern/t4a-faer --upstream /work/colmat-99/extern/upstream-faer --vendor mkl --out /work/colmat-99/target/pin-mkl.env --bin fbench\\n+ rustc -vV\\n+ cargo -vV\\nok   /work/colmat-99/data/results/zen5-cpu/faer-kernels/20261121T193231Z-preflight-smoke-mkl/run.yaml\\n\\n\", \"vendor.name\": \"mkl\", \"vendor.version\": \"2026.2\", \"guards_name_the_container\": true, \"profile_column\": [\"zen5-cpu\"]}"
+  - name: "smoke cell on the openblas arm: builds, verifies, measures through the container"
+    status: PASS
+    detail: "{\"exit\": 0, \"tail\": \"link preflight on dad94ebd3d0f: /work/colmat-99/benchmarks/link-preflight.yaml\\n  (no arm applies)\\nLINK PREFLIGHT OK\\ncpu sets from the suite's cpu_sets for zen5-cpu: 1T 4, 8T 4-11\\n+ /work/colmat-99/scripts/build_for_faer_rev.sh --checkout /work/colmat-99/extern/t4a-faer --upstream /work/colmat-99/extern/upstream-faer --vendor openblas --out /work/colmat-99/target/pin-openblas.env --bin fbench\\n+ rustc -vV\\n+ cargo -vV\\nok   /work/colmat-99/data/results/zen5-cpu/faer-kernels/20261121T193421Z-preflight-smoke-openblas/run.yaml\\n\\n\", \"vendor.name\": \"openblas\", \"vendor.version\": \"0.3.32\", \"guards_name_the_container\": true, \"profile_column\": [\"zen5-cpu\"]}"
+  - name: "smoke cell on the aocl arm: builds, verifies, measures through the container"
+    status: PASS
+    detail: "{\"exit\": 0, \"tail\": \" on 490a38e7ac8e: /work/colmat-99/benchmarks/link-preflight.yaml\\n  OK   aocl  [fbench/build.rs (feature link-aocl); AOCL_ROOT as scripts/build_for_faer_rev.sh resolves it]  (0.072 s)\\nLINK PREFLIGHT OK\\ncpu sets from the suite's cpu_sets for zen5-cpu: 1T 4, 8T 4-11\\n+ /work/colmat-99/scripts/build_for_faer_rev.sh --checkout /work/colmat-99/extern/t4a-faer --upstream /work/colmat-99/extern/upstream-faer --vendor aocl --out /work/colmat-99/target/pin-aocl.env --bin fbench\\n+ rustc -vV\\n+ cargo -vV\\nok   /work/colmat-99/data/results/zen5-cpu/faer-kernels/20261121T193541Z-preflight-smoke-aocl/run.yaml\\n\\n\", \"vendor.name\": \"aocl\", \"vendor.version\": \"6.0.0\", \"guards_name_the_container\": true, \"profile_column\": [\"zen5-cpu\"]}"
