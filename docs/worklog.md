@@ -165,7 +165,7 @@ touched, and the workspace size — and therefore every recorded number — is u
 | `faer-kernels` MKL | `f64`/`c64`/`f32`/`c32`, 1/4/8T, all 8 regimes | 3 | 4 h 13 min, rc=0, no idle-guard rejection |
 | `faer-kernels` OpenBLAS | same | 6 | 4 h 28 min, rc=0, no idle-guard rejection |
 | `faer-kernels-large` MKL | `f64`/`c64`, 4/8T, 1024/1536 + boundary | 3 | 7 h 20 min, rc=0, no idle-guard rejection |
-| `faer-kernels-large` OpenBLAS | — | — | **not recorded (decision, 2026-11-18)** |
+| `faer-kernels-large` OpenBLAS | — | — | **not recorded (decision, 2026-11-18)**; recorded at the same pin in the Docker refresh #99 |
 
 The daily suite now records its full declaration — `f64`, `c64`, `f32`, `c32` at 1/4/8T, all eight
 regimes — where the 2026-11-13 pages covered `f64`/`c64` only, so its MKL arm reports
