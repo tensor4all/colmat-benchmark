@@ -6,9 +6,9 @@ description: >-
   Slurm limit. 112T is the whole node: every core is measured, no observer CPU is left, and the row
   is recorded os-shared. Families: gemm, LU, Cholesky and the compact QR factor, measured at faer's
   own API against Intel oneAPI MKL (the upstream faer row is not measured: the 2-process-set budget
-  needs a 2-row arm). This suite is its own page beside `faer-kernels-ohtaka-large`: a different
-  machine (112 Intel cores against 128 EPYC cores), so its cells are only comparable with each
-  other, never with the F1cpu node or with zen5-cpu.
+  needs a 2-row arm). This suite is its own page, never joined with the F1cpu `ohtaka-cpu` profile
+  or with `zen5-cpu`: a different machine (112 Intel cores in 4 sockets against 128 EPYC cores in
+  2), so its cells are only comparable with each other.
 # Only paths in the *measured* fork whose change can alter a measured result. The
 # harness and the timing protocol live in this repository, not in the fork, so
 # they cannot appear here; see docs/results.md for how a harness change is
@@ -57,17 +57,13 @@ workloads:
     rerun is reproducible.
   known_blind_spots:
     - "Only the faer entry points are measured. tlinalg's packing, batch loop and lane policy, tenferro's tensor construction and dtype dispatch, and the small-`m` decode-projection shapes are other repositories' rows (tlinalg-benchmark, tenferro-benchmark)."
-    - "Vendor C-order cells use CBLAS/LAPACKE row-major entry points. Workspace allocation or layout conversion internal to those APIs remains timed; these are not prepared-column-major or transpose measurements."
-    - "`gemm` covers the tall class's two Householder legs (a 16-wide basis and a 240-column target over 4096 rows: the reduction and the write-back) beside a vendor `?gemm` on the same leg. A single leg beside a vendor gemm is a diagnostic reference, not the equivalent implementation of the whole update, and the row is labelled accordingly."
-    - "`householder_apply` measures block apply and the one-block sequence form as two distinct rows, labelled with basis width min(m,n) and target width n. QR fixture preparation is outside timing. Independently varied basis/target widths and multi-panel sequences are not covered."
-    - "Allocation performed inside the measured call stays inside the clock. The fork's two row splits allocate their partial buffers inside the public call, and the public scratch function does not expose them; the campaign reports that as it is instead of changing faer's API to make the boundary look cleaner."
-    - "`cholesky`, `eigh`, `solve` and `triangular_solve` are measured on square shapes only: the matrix they factor or solve with is square by definition (self-adjoint for the first two, a triangular factor for the last). `lu` and `full_piv_lu` are not gated that way -- they take the declared rectangular shapes too, with `min(m, n)` pivots and a trapezoidal `L` or `U`, which is what `dgetrf` does as well -- so a rectangular LU cell is measured in both orders beside its square one."
-    - "BLIS, sparse, iterative and GPU arms are later declarations, not machinery built now."
-    - "A vendor arm records the library it linked. Only OpenBLAS reports the kernel its runtime dispatched to; MKL names no kernel and no processor count, so its manifest leaves both empty rather than inferring them."
+    - "The grid is square only: 4096 and 8192 for `gemm`, LU, Cholesky and the compact QR factor. Rectangular LU, the 255/257/511/513 boundary shapes, the Householder apply rows, SVD and the eigensolvers are declared in other suites of this campaign and are not measured here; a reader must not carry a conclusion from this page to those shapes."
+    - "F (column-major) order only, because the issue fixes it for this profile: the recorder passes `FBENCH_ORDER=f` in the environment of both the census and the timing pass, so the harness emits no C-order cell. A C-order reading of the same sizes is the other ohtaka suite's business, not this one's."
+    - "A vendor arm records the library it linked. MKL names no dispatched kernel and no processor count, so its manifest leaves both empty rather than inferring them. C-order vendor cells do not exist here (F order only), which is also the layout where LAPACKE has a route that leaves the clock free of allocation and layout conversion."
     - "The upstream faer row is not measured on this profile: the 2-process-set budget (`--aa 2`) needs a 2-row arm, so only the colmat fork and MKL are measured. The upstream faer revision printed in the page header is the pinned baseline of the campaign, not a measured column."
-    - "The 112T row is os-shared: it measures every core of the node, so the operating system, Slurm and the recorder itself share the measured CPUs with the cells, and the recorder (pinned to NUMA node 3) sits inside the measured set for that row. The profile declares the row with no observer CPU, the recorder records the caveat in the observer block, and the page repeats it. Rows 16T, 32T and 64T keep the observing side on CPUs 64-111 (16T and 32T: 16-111 and 32-111)."
+    - "The 112T row is os-shared: it measures every core of the node, so the operating system, Slurm and the recorder itself share the measured CPUs with the cells, and the recorder (pinned to NUMA node 3) sits inside the measured set for that row. The profile declares the row with no observer CPU, the recorder records the caveat in its observer block, and the page repeats it. Rows 16T, 32T and 64T keep the observing side in NUMA node 3 (CPUs 3,7,...,111), a domain none of them measures."
     - "Machine state not shown elsewhere: the fat node's layout is 4 sockets of 28 cores, 4 NUMA nodes with CPUs interleaved across them by stride 4, SMT off, 39424 KiB of L3 per socket, 774 GB of memory per node (see the profile for how each row's CPUs are named). Its cpufreq exposes turbo and the governor, so the recorder records the power state from sysfs. Timing settings are reps 3, 2 process sets, priming 100 ms, below the 250 ms of the frozen v2 baseline (150 ms was rejected there because one cell read about 3% fast), so single cells may read a few percent fast."
-    - "Known limitation: Coverage is the declared grid only (see `runs`): a subset of families (gemm, LU, Cholesky, QR factor) at the sizes and thread budgets of the ohtaka-fat profile. SVD, eigen and the other decompositions are not measured on this profile."
+    - "Known limitation: Coverage is the declared grid only (see `runs`): a subset of families (gemm, LU, Cholesky, QR factor) at the sizes and thread budgets of the ohtaka-fat profile."
     - "Residual-check coverage narrowed: the verification census (`verify`) covers the 4096 cells only, at every thread budget, and its reference product is the harness's single-threaded cache-blocked loop on this harness revision, so the census costs minutes per case. A timed process also checks the result of its last timed call at the cell's own size (the harness's `timing::measure` ends in the cell's check), so a wrong 8192 result fails its row; that check is not part of the census and records no residual, and at 8192 it costs minutes of one core per cell. Where this page says every timed cell matches a verification census, read it with this limit."
 
 # One entry per engine name the harness emits. A result page explains every
@@ -128,7 +124,9 @@ runs:
         - "0,4,8,12,16,20,24,28,32,36,40,44,48,52,56,60,64,68,72,76,80,84,88,92,96,100,104,108,1,5,9,13,17,21,25,29,33,37,41,45,49,53,57,61,65,69,73,77,81,85,89,93,97,101,105,109,2,6,10,14,18,22,26,30"
         - "0-111"
     dtypes: [f64]
-    # F (column-major) only: the issue fixes the order for this profile.
+    # F (column-major) only: the issue fixes the order for this profile. The recorder passes no
+    # layout argument, so the run script exports FBENCH_ORDER=f; without it the harness emits the
+    # C-order cells too and the CSVs would not match this axis.
     order: [f]
     # One vendor arm per run (AGENTS.md): MKL is the arm built on the fat node (no OpenBLAS arm
     # here; the F1cpu ohtaka suites use OpenBLAS, so their vendor rows do not compare with these).
