@@ -1,0 +1,20 @@
+MINOR | scripts/gen_site.py:218; result/throughput-f64-f.html:24 | All four pages still put “One algorithmic operation count per family…not across charts” before the first chart. This is a chart-interpretation limitation, so the strict “notes/limitations below the charts” requirement is not fully met. | Move that prefatory paragraph below the grid through the shared toolkit renderer; do not introduce a second local renderer.
+MINOR | tests/test_publication_site.py:228–231 | The order checks omit chart notes. Moving `{notes}` back above the charts would leave these tests passing, despite violating the requested order. | Add a distinctive chart-note marker to the existing per-page below-chart assertions.
+
+### Delete list
+- `tests/test_publication_site.py:232`: delete the extra `Known limitation:` prefix assertion; the full limitation-text order check already covers the actual reorder.
+- No production abstraction, configuration, or rendering path needs deleting; the implementation otherwise remains appropriately small.
+
+### Read-through assessment
+- The new assertions **would fail on the old order**: provenance, limitation text and `Revisions:` previously preceded every chart.
+- Per-page order checks are the right scope. Matching `<img src=` is acceptable against this pinned toolkit and consistent with the existing image checks; no HTML parser is warranted.
+- The plotted-data tables remain separate Markdown files reached through each figure caption’s **`data` link**, not inline tables. Keeping those links under their respective charts preserves the existing presentation; I would not interpret this issue as requesting table inlining or a separate tables section.
+- The `c64` four-times count and dot-means-unmeasured explanation survive below the charts and in the linked data tables. Their relocation is intentional, not a reason to restore the large introduction.
+- No caller/signature or page-frame break found. The landing-page wording agrees with the new order. Toolkit ownership is supported by `/tmp/ct-pin/campaign_toolkit/{figures,site}.py`; that checkout’s `HEAD` matches the requirement pin.
+- No unsupported adapted-code provenance claim found in the changed hunks or new worklog entry.
+
+### Not checked / not verifiable by reading
+- No commands, builds, tests, regeneration, or browser rendering performed. Exact fold placement and narrow-screen wrapping remain unverified.
+- Generated artifacts were not compared byte-for-byte with pre-change outputs; unchanged chart/table generation is supported by the diff, not an artifact comparison.
+- PR count, no-merge state, and the required PR `Model:`/provenance line were not supplied for verification.
+- Pre-existing documentation mismatch: `AGENTS.md:103` says `fbench` has no `src/`; `fbench/src/main.rs` and other implementation files exist.
