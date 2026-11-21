@@ -16,12 +16,19 @@ import gen_site  # noqa: E402
 from campaign_toolkit import pin_recorded  # noqa: E402
 from campaign_toolkit.stack import rev_file_value  # noqa: E402
 
-# The arms this publication recorded: the daily suite on the MKL, OpenBLAS and AOCL arms (AOCL
-# added by #95), the large suite on MKL only. The large OpenBLAS arm was dropped by decision
-# (2026-11-18) and is stated as unrecorded on the landing page and in docs/worklog.md; adding an
-# arm here without adding its run would make this test assert a page that does not exist.
+# The arms this publication recorded: both suites on the MKL, OpenBLAS and AOCL arms (AOCL added by
+# #95; the large OpenBLAS arm, once dropped by decision on 2026-11-18, is back in the same-pin Docker
+# refresh #99). `benchmarks/campaign.yaml` `figures.runs` declares the same six positions; adding an
+# arm here without its run would make this test assert a page that does not exist.
 RECORDED = {('faer-kernels', 'mkl'), ('faer-kernels', 'openblas'), ('faer-kernels', 'aocl'),
-            ('faer-kernels-large', 'mkl')}
+            ('faer-kernels-large', 'mkl'), ('faer-kernels-large', 'openblas'),
+            ('faer-kernels-large', 'aocl')}
+
+
+def unrecorded_throughput_runs():
+    """`run N` labels of the declared throughput runs that have no current page, in order."""
+    runs = yaml.safe_load((ROOT / 'benchmarks/campaign.yaml').read_text())['figures']['throughput']['runs']
+    return [f'run {i}' for i, r in enumerate(runs) if (r['suite'], r['vendor']) not in RECORDED]
 
 
 def collect():
@@ -204,7 +211,11 @@ class ThroughputPagesTest(unittest.TestCase):
             # The runs behind the charts are stated on the page itself, including the
             # large-tier arm the daily provenance does not name and the arm not recorded.
             self.assertIn('Revisions:', page)
-            self.assertIn('No run was given for run 4, run 5', page)
+            missing = unrecorded_throughput_runs()
+            if missing:
+                self.assertIn('No run was given for ' + ', '.join(missing), page)
+            else:
+                self.assertNotIn('No run was given for', page)
             images = re.findall(r'<img src="([^"]+)"', page)
             self.assertEqual(len(images), 9, (dtype, order))   # every declared family
             for image in images:

@@ -1,0 +1,368 @@
+schema_version: 1
+target_profile: zen5-cpu
+suite_id: faer-kernels-large
+suite_file: benchmarks/suites/faer-kernels-large.yaml
+suite_sha256: d8f17bb3e0828b3cb2ae47ce0ebe943bb213238afa28d86005ca6ffd886cf44d
+timestamp: '2026-11-21T11:25:37.042522Z'
+command: scripts/record_run.py zen5-cpu faer-kernels-large --vendor aocl --engines
+  faer-fork,lapack-aocl --threads 4,8 --regimes linalg-large,gemm-large,linalg-boundary
+  --shapes 1024,1536,1024x1024x1024,1536x1536x1536,255,257,511,513 --reps 5 --aa 6
+  --prime-ms 250 --label pub-93da6217-20261120-large-aocl
+library:
+  url: https://github.com/tensor4all/colmat-rs
+  commit: 93da62172a96260ae3d5ed7481690f440f58d904
+  dirty: false
+  features:
+  - std
+  - rayon
+  measured_path: /work/colmat-99/extern/t4a-faer
+  version: 0.34.0
+upstream:
+  url: https://codeberg.org/sarah-quinones/faer
+  commit: 0539947ffb757a739d7e703a7d2fa0c792a909c1
+  version: 0.24.4
+  ref: faer-v0.24.4
+  dirty: false
+  measured_path: /work/colmat-99/extern/upstream-faer
+vendor:
+  name: aocl
+  linkage: shared
+  version: 6.0.0
+  config: AOCL-BLAS 6.0.0 Build 20261026; AOCL-LAPACK 6.0.0 Build 20261026, supports
+    LAPACK 3.12.1 w/o Index-64 interfaces; mapped=/opt/AMD/aocl/6.0.0/gcc/MT/lib_LP64/libaoclutils.so:/opt/AMD/aocl/6.0.0/gcc/MT/lib_LP64/libblis-mt.so.6.0.0:/opt/AMD/aocl/6.0.0/gcc/MT/lib_LP64/libflame.so:/usr/lib/x86_64-linux-gnu/libgomp.so.1.0.0
+  corename: blis=zen5, flame=avx512dq
+  parallel: openmp
+  procs: null
+  build_env: AOCL_ROOT=/opt/AMD/aocl/6.0.0/gcc/MT rpath=/opt/AMD/aocl/6.0.0/gcc/MT/lib_LP64
+harness:
+  commit: e7a1baa48af15fb7767986acb7501818796ec8ec
+  dirty: false
+  outputs_dirty: true
+  excluded_outputs:
+  - data/results
+  - result
+  excluded_sibling_outputs: []
+toolkit:
+  commit: ec1366c391cbd5023116ddcb6fdadc9c5b76f582
+  dirty: false
+  measured_path: /work/colmat-99/target/venv/src/campaign-toolkit
+verification_files:
+- verify-linalg-large-4t.csv
+- verify-linalg-large-8t.csv
+- verify-gemm-large-4t.csv
+- verify-gemm-large-8t.csv
+- verify-linalg-boundary-4t.csv
+- verify-linalg-boundary-8t.csv
+binary:
+  path: /work/colmat-99/target/faer-rev/93da62172a96-aocl/release/fbench
+  sha256: 6ba8fea0520b48e8b9c3541aef0d4d9f4dda98e9b9d102866e3f862e9a1ad118
+host:
+  power:
+    cpufreq_boost: '0'
+    amd_pstate_status: active
+    governor: performance
+    energy_performance_preference: performance
+    scaling_max_freq_khz: '2000000'
+    smt:
+      active: '1'
+      control: 'on'
+  numa:
+    nodes: 1
+    cpulists:
+      '0': 0-23
+  role: development
+  hostname: f990be0ea5d6
+  cpu: AMD Ryzen AI 9 HX 470
+  os: Linux 7.0.0-43-generic
+  arch: x86_64
+  logical_cpus: 24
+  l3: 24 MiB (2 instances)
+  l3_domains: '0-3: 16 MiB shared; 4-11: 8 MiB shared'
+  notes: 'AMD Ryzen AI 9 HX 470 (Zen5 mobile APU), 12 physical / 24 logical cores.
+    Heterogeneous L3: CPUs 0-3 share 16 MiB, CPUs 4-11 share 8 MiB, so a thread set
+    must be stated together with the domain it sits in. SMT siblings of CPUs 4-11
+    are 16-23; the idle gate checks them too, because a busy sibling contends with
+    the physical core being measured.'
+build:
+  toolchain:
+    rustc: 'rustc 1.100.0 (0ef1bc386 2026-11-09)
+
+      binary: rustc
+
+      commit-hash: 0ef1bc386059596dada8fb65b50425aab2ea637a
+
+      commit-date: 2026-11-09
+
+      host: x86_64-unknown-linux-gnu
+
+      release: 1.100.0
+
+      LLVM version: 23.1.5
+
+      '
+    rustc_release: 1.100.0
+    rustflags: null
+    target_cpu: null
+threads:
+  counts:
+  - 4
+  - 8
+  cpu_sets:
+    '4': 4-7
+    '8': 4-11
+  observer:
+    affinity: 0-3, 12-15
+    free_cpus: 0-3, 12-15
+    source: os.sched_getaffinity(0) in the recording process
+  env:
+    OPENBLAS_NUM_THREADS: null
+    MKL_NUM_THREADS: null
+    MKL_DOMAIN_NUM_THREADS: null
+    MKL_INTERFACE_LAYER: null
+    MKL_THREADING_LAYER: null
+    MKL_DYNAMIC: null
+    MKL_ENABLE_INSTRUCTIONS: null
+    MKL_CBWR: null
+    BLIS_NUM_THREADS: null
+    FLA_NUM_THREADS: null
+    OMP_NUM_THREADS: null
+    OMP_THREAD_LIMIT: null
+    OMP_PROC_BIND: null
+    OMP_PLACES: null
+    KMP_AFFINITY: null
+    GOMP_CPU_AFFINITY: null
+    RAYON_NUM_THREADS: null
+  note: the vendor's budget is set by the harness from the row's thread count and
+    read back before each measurement; these variables were removed from the measured
+    process's environment so it cannot inherit a different one
+timing_policy:
+  version: 2
+  minimum_untimed_priming_ms: 250
+  statistic: median
+  row_rotation_step: 1
+  repetitions: 5
+  notes: descriptive process medians under a rotating engine-order schedule; raw samples
+    and the verification census are retained
+guards:
+  idle_window_seconds: 3
+  max_busy_percent: 5.0
+  attempts: 3
+  sibling_aware: true
+  logs:
+  - run0-gemm-large-4t.guard
+  - run0-gemm-large-8t.guard
+  - run0-linalg-boundary-4t.guard
+  - run0-linalg-boundary-8t.guard
+  - run0-linalg-large-4t.guard
+  - run0-linalg-large-8t.guard
+  - run1-gemm-large-4t.guard
+  - run1-gemm-large-8t.guard
+  - run1-linalg-boundary-4t.guard
+  - run1-linalg-boundary-8t.guard
+  - run1-linalg-large-4t.guard
+  - run1-linalg-large-8t.guard
+  - run2-gemm-large-4t.guard
+  - run2-gemm-large-8t.guard
+  - run2-linalg-boundary-4t.guard
+  - run2-linalg-boundary-8t.guard
+  - run2-linalg-large-4t.guard
+  - run2-linalg-large-8t.guard
+  - run3-gemm-large-4t.guard
+  - run3-gemm-large-8t.guard
+  - run3-linalg-boundary-4t.guard
+  - run3-linalg-boundary-8t.guard
+  - run3-linalg-large-4t.guard
+  - run3-linalg-large-8t.guard
+  - run4-gemm-large-4t.guard
+  - run4-gemm-large-8t.guard
+  - run4-linalg-boundary-4t.guard
+  - run4-linalg-boundary-8t.guard
+  - run4-linalg-large-4t.guard
+  - run4-linalg-large-8t.guard
+  - run5-gemm-large-4t.guard
+  - run5-gemm-large-8t.guard
+  - run5-linalg-boundary-4t.guard
+  - run5-linalg-boundary-8t.guard
+  - run5-linalg-large-4t.guard
+  - run5-linalg-large-8t.guard
+  - verify-gemm-large-4t.guard
+  - verify-gemm-large-8t.guard
+  - verify-linalg-boundary-4t.guard
+  - verify-linalg-boundary-8t.guard
+  - verify-linalg-large-4t.guard
+  - verify-linalg-large-8t.guard
+providers:
+- name: faer-fork
+  version: null
+  commit: null
+  path: null
+  note: the provider in the measured revision; see library and upstream above
+- name: aocl
+  version: 6.0.0
+  commit: null
+  path: null
+  note: linked shared, kernel dispatched to blis=zen5, flame=avx512dq, config AOCL-BLAS
+    6.0.0 Build 20261026; AOCL-LAPACK 6.0.0 Build 20261026, supports LAPACK 3.12.1
+    w/o Index-64 interfaces; mapped=/opt/AMD/aocl/6.0.0/gcc/MT/lib_LP64/libaoclutils.so:/opt/AMD/aocl/6.0.0/gcc/MT/lib_LP64/libblis-mt.so.6.0.0:/opt/AMD/aocl/6.0.0/gcc/MT/lib_LP64/libflame.so:/usr/lib/x86_64-linux-gnu/libgomp.so.1.0.0
+invalidated_by:
+- faer/src/**
+- faer-traits/src/**
+- faer-macros/src/**
+- Cargo.toml
+- Cargo.lock
+result_files:
+- run0-linalg-large-4t.csv
+- run0-linalg-large-8t.csv
+- run0-gemm-large-4t.csv
+- run0-gemm-large-8t.csv
+- run0-linalg-boundary-4t.csv
+- run0-linalg-boundary-8t.csv
+- run1-linalg-large-4t.csv
+- run1-linalg-large-8t.csv
+- run1-gemm-large-4t.csv
+- run1-gemm-large-8t.csv
+- run1-linalg-boundary-4t.csv
+- run1-linalg-boundary-8t.csv
+- run2-linalg-large-4t.csv
+- run2-linalg-large-8t.csv
+- run2-gemm-large-4t.csv
+- run2-gemm-large-8t.csv
+- run2-linalg-boundary-4t.csv
+- run2-linalg-boundary-8t.csv
+- run3-linalg-large-4t.csv
+- run3-linalg-large-8t.csv
+- run3-gemm-large-4t.csv
+- run3-gemm-large-8t.csv
+- run3-linalg-boundary-4t.csv
+- run3-linalg-boundary-8t.csv
+- run4-linalg-large-4t.csv
+- run4-linalg-large-8t.csv
+- run4-gemm-large-4t.csv
+- run4-gemm-large-8t.csv
+- run4-linalg-boundary-4t.csv
+- run4-linalg-boundary-8t.csv
+- run5-linalg-large-4t.csv
+- run5-linalg-large-8t.csv
+- run5-gemm-large-4t.csv
+- run5-gemm-large-8t.csv
+- run5-linalg-boundary-4t.csv
+- run5-linalg-boundary-8t.csv
+run_spec:
+  populations:
+  - regime: linalg-large
+    families:
+    - lu
+    - full_piv_lu
+    - cholesky
+    - triangular_solve
+    - solve
+    - qr_factor
+    - qr
+    - svd_values
+    - svd_thin
+    - eigh
+    n:
+    - '1024'
+    - '1536'
+    batch:
+    - 1
+    skipped:
+    - cholesky/1024
+    - cholesky/1536
+    - eigh/1024
+    - eigh/1536
+    - full_piv_lu/1024
+    - full_piv_lu/1536
+    - lu/1024
+    - lu/1536
+    - qr/1024
+    - qr/1536
+    - qr_factor/1024
+    - qr_factor/1536
+    - solve/1024
+    - solve/1536
+    - svd_thin/1024
+    - svd_thin/1536
+    - svd_values/1024
+    - svd_values/1536
+    - triangular_solve/1024
+    - triangular_solve/1536
+  - regime: gemm-large
+    families:
+    - gemm
+    n:
+    - 1024x1024x1024
+    - 1536x1536x1536
+    batch:
+    - 1
+  - regime: linalg-boundary
+    families:
+    - lu
+    - full_piv_lu
+    - cholesky
+    - triangular_solve
+    - solve
+    - qr_factor
+    - qr
+    - svd_values
+    - svd_thin
+    - eigh
+    n:
+    - '255'
+    - '257'
+    - '511'
+    - '513'
+    batch:
+    - 1
+    skipped:
+    - cholesky/255
+    - cholesky/257
+    - cholesky/511
+    - cholesky/513
+    - eigh/255
+    - eigh/257
+    - eigh/511
+    - eigh/513
+    - full_piv_lu/255
+    - full_piv_lu/257
+    - full_piv_lu/511
+    - full_piv_lu/513
+    - lu/255
+    - lu/257
+    - lu/511
+    - lu/513
+    - qr/255
+    - qr/257
+    - qr/511
+    - qr/513
+    - qr_factor/255
+    - qr_factor/257
+    - qr_factor/511
+    - qr_factor/513
+    - solve/255
+    - solve/257
+    - solve/511
+    - solve/513
+    - svd_thin/255
+    - svd_thin/257
+    - svd_thin/511
+    - svd_thin/513
+    - svd_values/255
+    - svd_values/257
+    - svd_values/511
+    - svd_values/513
+    - triangular_solve/255
+    - triangular_solve/257
+    - triangular_solve/511
+    - triangular_solve/513
+  dtypes:
+  - f64
+  - c64
+  order:
+  - c
+  - f
+  engines:
+  - faer-fork
+  - lapack-aocl
+  aa: 6
+  covers_declared_suite: false
