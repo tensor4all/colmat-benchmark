@@ -1,6 +1,6 @@
 # `colmat-benchmark`
 
-> ## 📈 [Results, charts and trends](https://tensor4all.org/colmat-benchmark/)
+> ## 📈 [Throughput charts](https://tensor4all.org/colmat-benchmark/)
 >
 > The site shows the pages at the pinned revisions, one section per hardware profile, with the
 > throughput charts (one per family, 1T / 4T / 8T panels, between-start error bars, the plotted
@@ -8,10 +8,12 @@
 > pins. It is built from `data/` on every deploy; nothing on it is committed. The current pages are
 > listed in [`result/INDEX.md`](result/INDEX.md), older ones in [`result/HISTORY.md`](result/HISTORY.md).
 
-The benchmark campaign for the tensor4all [faer](https://github.com/tensor4all/faer)
-fork: results keyed by **library commit × hardware profile**, measured at faer's
-own API, with the staleness of every cell visible rather than implied. It is the
-same shape as [`tlinalg-benchmark`](https://github.com/tensor4all/tlinalg-benchmark)
+The benchmark campaign for [colmat](https://github.com/tensor4all/colmat-rs)
+(`tensor4all/colmat-rs`, the tensor4all fork of `faer`, published as `t4a-faer`
+before its 2026-11 rename): results keyed by **library commit × hardware
+profile**, measured at colmat's own API, with upstream `faer` as the baseline row
+and the staleness of every cell visible rather than implied. It is the same shape
+as [`tlinalg-benchmark`](https://github.com/tensor4all/tlinalg-benchmark)
 and [`tcontract-benchmark`](https://github.com/tensor4all/tcontract-benchmark),
 which own the same job one layer up.
 
@@ -21,7 +23,7 @@ which own the same job one layer up.
 | Result layout | [`docs/results.md`](docs/results.md) |
 | Timing policy | [`docs/timing-policy.md`](docs/timing-policy.md) |
 | Measurement audit | [`docs/measurement-audit-2026-11-06.md`](docs/measurement-audit-2026-11-06.md) — what each timed call includes, per family and arm |
-| Reference revisions | [`pins/t4a-faer.rev`](pins/t4a-faer.rev) (the fork) and [`pins/upstream-faer.rev`](pins/upstream-faer.rev) (the baseline) — what `status` is measured against |
+| Reference revisions | [`pins/t4a-faer.rev`](pins/t4a-faer.rev) (historical file name; it holds the measured `colmat` revision) and [`pins/upstream-faer.rev`](pins/upstream-faer.rev) (the baseline) — what `status` is measured against |
 | Rules and runbook | [`docs/rules.md`](docs/rules.md) - acceptance in an hour, the frozen contract, and the commands |
 | Design record | [`docs/worklog.md`](docs/worklog.md) — decisions, fixed failures, open items |
 | Provenance | [`docs/provenance.md`](docs/provenance.md) — what was copied from which sibling and under what terms |
@@ -33,8 +35,9 @@ which own the same job one layer up.
 > [`docs/provisional-and-clean-datasets.md`](docs/provisional-and-clean-datasets.md). Acceptance runs are
 > separate, local and never published.
 
-> **Provenance note (2026-10-16):** the runs recorded on 2026-10-15/16 linked the crates.io release
-> `t4a-faer 0.24.5` for the fork row, not the pinned checkout — see
+> **Provenance note (2026-10-16, historical):** the runs recorded on 2026-10-15/16 linked the
+> crates.io release `t4a-faer 0.24.5` (the measured library's name before its 2026-11 rename to
+> `colmat`) for the measured row, not the pinned checkout — see
 > [`docs/reviews/20261016-linked-crate-provenance.md`](docs/reviews/20261016-linked-crate-provenance.md).
 > The build now refuses such a mismatch instead of warning.
 
@@ -72,9 +75,9 @@ logs.
 
 ## How it works
 
-The harness lives **here**, not in the fork: faer has no `benchmarks/` directory
-and the fork's `AGENTS.md` forbids adding one, because campaign infrastructure
-would be a rebase cost. So `fbench` links the measured library *by path* from a
+The harness lives **here**, not in `colmat`: colmat has no `benchmarks/` directory
+and its `AGENTS.md` forbids adding one, because campaign infrastructure would be
+a rebase cost. So `fbench` links the measured library *by path* from a
 checkout, and it owns the timing protocol
 (`benchmarks/scripts/{pinned.sh,idle_cpus.py}`) as well.
 
@@ -83,25 +86,27 @@ three are recorded in `run.yaml`:
 
 | identity | what it is | pinned by |
 |---|---|---|
-| `library` | the measured fork checkout (package and library `colmat`) | `pins/t4a-faer.rev` |
-| `upstream` | the upstream `faer` release the fork is based on | `pins/upstream-faer.rev` |
+| `library` | the measured `colmat` checkout (package and library `colmat`) | `pins/t4a-faer.rev` (historical file name) |
+| `upstream` | the upstream `faer` release `colmat` is based on | `pins/upstream-faer.rev` |
 | `harness` | this repository, whose commit and dirty state can move a number | per run (`harness.commit`) |
 
 ```bash
 # one vendor arm, build + verify + measure + validate + publish + reindex.
 # One binary links one vendor library, so an arm is a run of its own.
 python3 scripts/record_run.py zen5-cpu faer-kernels --vendor openblas \
-    --checkout /path/to/t4a-faer --upstream /path/to/upstream-faer
+    --checkout /path/to/colmat-rs --upstream /path/to/upstream-faer
 python3 scripts/record_run.py zen5-cpu faer-kernels --vendor mkl \
-    --checkout /path/to/t4a-faer --upstream /path/to/upstream-faer
+    --checkout /path/to/colmat-rs --upstream /path/to/upstream-faer
 ```
 
 Four arms are compared at the library's own API: `colmat` (CSV engine `faer-fork`),
 upstream `faer` (`faer-upstream`), OpenBLAS and Intel oneAPI MKL; the AOCL arm is described below. The Rust
 libraries are separate dependencies named `colmat` and `faer_upstream`; the
 upstream dependency selects package `faer`. Each vendor arm has its own binary.
-Historical pin paths (`pins/t4a-faer.rev`, `extern/t4a-faer`) and CSV engine names
-are retained so existing recordings and tooling keep their identities.
+The pin file, the checkout directory and the CSV engine names keep their
+pre-rename names (`pins/t4a-faer.rev`, `extern/t4a-faer`, `faer-fork`,
+`faer-upstream`) as historical identities, so existing recordings and tooling keep
+resolving; they name `colmat`, not the old crate.
 
 For library-only diagnostics on a host without a vendor toolchain, the build
 script also accepts `--vendor none`. This links no vendor; use `--rows faer-fork`
@@ -145,11 +150,12 @@ reproduce a number from it:
   value that still arrives is refused by the read-back.
 - **Identity**: `fbench info` records both libraries' version strings, the files
   the loader actually mapped, and the dispatched kernels (`blis=zen5,
-  flame=avx512` on Zen 5). The fork, upstream and harness revisions come from the
-  build script's `--out` file, as for the other arms.
+  flame=avx512` on Zen 5). The `colmat`, upstream and harness revisions come from
+  the build script's `--out` file, as for the other arms.
 
-A t4a-faer 0.31 checkout must live outside this repository's tree: nested under
-`extern/`, Cargo cannot resolve its workspace-inherited package fields.
+A `colmat` checkout may live inside this repository's tree, at `extern/t4a-faer`:
+the linked crate then inherits its package fields from this repository's
+[`Cargo.toml`](Cargo.toml), which declares them.
 
 ## Tooling
 
@@ -157,13 +163,14 @@ The seven `scripts/*.py` entry points are thin shims over
 [`campaign-toolkit`](https://github.com/tensor4all/campaign-toolkit), the shared
 package the campaigns now have in common. `requirements.txt` pins it by git
 revision; `benchmarks/campaign.yaml` is this campaign's descriptor, naming the
-measured fork, the upstream baseline, the three vendor arms, the `order` case axis
+measured library, the upstream baseline, the three vendor arms, the `order` case axis
 and every other value the toolkit needs. The `schemas/` copies are gone: the
 toolkit supplies them.
 
-`scripts/setup_extern_deps.sh` materialises `extern/t4a-faer` and
-`extern/upstream-faer` from the pins, which is what `gen_index.py --check` needs to
-say whether a recorded page is current.
+`scripts/setup_extern_deps.sh` materialises the measured `colmat` checkout at
+`extern/t4a-faer` (historical directory name) and `extern/upstream-faer` from the
+pins, which is what `gen_index.py --check` needs to say whether a recorded page is
+current.
 
 For local development, install the toolkit from a checkout instead of from git:
 
@@ -173,8 +180,8 @@ pip install -e ../campaign-toolkit
 
 ## What this repository is not
 
-It is not the fork's per-PR gate; the fork's CI is a build, and this repository
-owns the campaign. It is not tlinalg or tenferro marshalling, batch loops, lane
+It is not `colmat`'s per-PR gate; colmat's CI is a build, and this repository owns
+the campaign. It is not tlinalg or tenferro marshalling, batch loops, lane
 policy, tensor construction or dtype dispatch — those are `tlinalg-benchmark`'s
 and `tenferro-benchmark`'s rows. It is not upstream's website bench page: no
-nalgebra/eigen arms, no `fx128`. No API change to faer follows from it.
+nalgebra/eigen arms, no `fx128`. No API change to `colmat` follows from it.
