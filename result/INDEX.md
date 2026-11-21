@@ -25,6 +25,12 @@ rather than being implied by the other arm's page.
 | `faer-kernels-large` | `zen2-cpu` (optional) | `mkl` | - | - | - | - | missing | - |
 | `faer-kernels-large` | `zen2-64-smt-off` (optional) | `openblas` | - | - | - | - | missing | - |
 | `faer-kernels-large` | `zen2-64-smt-off` (optional) | `mkl` | - | - | - | - | missing | - |
+| `faer-kernels-ohtaka-c64` | `ohtaka-cpu` (optional) | `openblas` | - | - | - | - | missing | - |
+| `faer-kernels-ohtaka-large` | `ohtaka-cpu` (optional) | `openblas` | - | - | - | - | missing | - |
+| `faer-kernels-ohtaka-large` | `ohtaka-cpu` (optional) | `mkl` | - | - | - | - | missing | - |
+| `faer-kernels-ohtaka-small` | `ohtaka-cpu` (optional) | `openblas` | - | - | - | - | missing | - |
+| `faer-kernels-ohtaka-xlarge` | `ohtaka-cpu` (optional) | `openblas` | - | - | - | - | missing | - |
+| `faer-kernels-ohtaka-xlarge` | `ohtaka-cpu` (optional) | `mkl` | - | - | - | - | missing | - |
 | `faer-kernels` | `zen5-cpu` | `openblas` | `93da62172a96/0539947ffb75` | 0.34.0 | 2026-11-17 | partial | current | [result/zen5-cpu/faer-kernels/93da62172a96-0539947ffb75-openblas-timing-v2.md](zen5-cpu/faer-kernels/93da62172a96-0539947ffb75-openblas-timing-v2.md) |
 | `faer-kernels` | `zen5-cpu` | `mkl` | `93da62172a96/0539947ffb75` | 0.34.0 | 2026-11-17 | full | current | [result/zen5-cpu/faer-kernels/93da62172a96-0539947ffb75-mkl-timing-v2.md](zen5-cpu/faer-kernels/93da62172a96-0539947ffb75-mkl-timing-v2.md) |
 | `faer-kernels` | `zen2-cpu` (optional) | `openblas` | - | - | - | - | missing | - |
