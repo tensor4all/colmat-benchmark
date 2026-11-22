@@ -1,0 +1,133 @@
+# `faer-kernels-ohtaka-fat-factor` on `ohtaka-fat`
+
+- colmat (fork, measured) commit: `93da62172a96260ae3d5ed7481690f440f58d904`
+- colmat version: `0.34.0`
+- upstream faer commit: `0539947ffb757a739d7e703a7d2fa0c792a909c1`
+- upstream faer ref/version: `faer-v0.24.4` / `0.24.4`
+- features: `std, rayon`
+- faer rows: `faer-fork` (the provider in the measured revision; see library and upstream above)
+- harness commit: `41146610cb25cf37eedcd325da22b9cd3eb6d59b`
+- toolkit commit: `34cf62b2504fa68857c5c1a33c125d22c5620452`
+- measured binary SHA-256: `98d8630aedfa98879e82eb12d7141ac57ada4716a9c0b420232a780a710c069e`
+- hardware profile: `ohtaka-fat`
+- host role: `measurement` — published dataset host
+- timestamp: `2026-11-22T04:27:46.796286Z`
+- timing policy: v2, median of 3 reps, priming 100 ms (time-based, identical on every row)
+- guards: idle window 3 s, max busy 5.0% including SMT siblings, 8 attempts
+- command: `scripts/record_run.py ohtaka-fat faer-kernels-ohtaka-fat-factor --vendor mkl --checkout /home/k0156/k015600/cb101/extern/t4a-faer --upstream /home/k0156/k015600/cb101/extern/upstream-faer --label ohtaka-fat-101-faer-kernels-ohtaka-fat-factor --reps 3 --aa 2 --prime-ms 100`
+- raw data: `data/results/ohtaka-fat/faer-kernels-ohtaka-fat-factor/20261122T040054Z-ohtaka-fat-101-faer-kernels-ohtaka-fat-factor/`
+
+## What was measured
+
+- **Workload** — Direct calls into one faer revision: square and rectangular dense matrices, C (row-major) and F (column-major) order, `f64` and `c64`. A shape is `N` for square, `MxN` for rectangular, or `MxKxN` for `gemm`, which is a three-index operation and cannot be written as two. Sizes are the matrix dimensions, not a memory budget, so a case name says exactly what was factored. `gemm` measures `linalg::matmul::matmul` into a caller-prepared destination with `Accum::Replace`; there is no operator path, so one shape is one work.
+  Source: The fork's own public API (`faer/src/linalg`): `matmul`, the QR factor and composite, `upgrade_householder_factor`, the block/sequence Householder apply, LU and full-pivot LU, Cholesky, triangular solve, solve, thin SVD, singular values and the symmetric/nonsymmetric eigensolvers. Inputs are seeded from the case, so `verify` and `run` measure the same matrices and a rerun is reproducible.
+  Known blind spot: Only the faer entry points are measured. tlinalg's packing, batch loop and lane policy, tenferro's tensor construction and dtype dispatch, and the small-`m` decode-projection shapes are other repositories' rows (tlinalg-benchmark, tenferro-benchmark).
+  Known blind spot: LU and Cholesky only: the square gemm rows of this profile are `faer-kernels-ohtaka-fat-gemm`, the compact QR factor is `faer-kernels-ohtaka-fat-qr`, and the 8192 tier is `faer-kernels-ohtaka-fat-xlarge`. Rectangular LU, the 255/257/511/513 boundary shapes, the Householder apply rows, SVD and the eigensolvers are declared in other suites of this campaign and are not measured here; a reader must not carry a conclusion from this page to those shapes.
+  Known blind spot: F (column-major) order only, because the issue fixes it for this profile: the recorder passes `FBENCH_ORDER=f` in the environment of both the census and the timing pass, so the harness emits no C-order cell. A C-order reading of the same sizes is the other ohtaka suite's business, not this one's.
+  Known blind spot: A vendor arm records the library it linked. MKL names no dispatched kernel and no processor count, so its manifest leaves both empty rather than inferring them. C-order vendor cells do not exist here (F order only), which is also the layout where LAPACKE has a route that leaves the clock free of allocation and layout conversion.
+  Known blind spot: The upstream faer row is not measured on this profile: the 2-process-set budget (`--aa 2`) needs a 2-row arm, so only the colmat fork and MKL are measured. The upstream faer revision printed in the page header is the pinned baseline of the campaign, not a measured column.
+  Known blind spot: The 112T row is os-shared: it measures every core of the node, so the operating system, Slurm and the recorder itself share the measured CPUs with the cells, and the recorder (pinned to NUMA node 3) sits inside the measured set for that row. The profile declares the row with no observer CPU, the recorder records the caveat in its observer block, and the page repeats it. Rows 16T, 32T and 64T keep the observing side in NUMA node 3 (CPUs 3,7,...,111), a domain none of them measures.
+  Known blind spot: Boost is ON for this run and is not comparable with a boost-off run: the fat node exposes `intel_pstate/no_turbo` = 0, an unprivileged job cannot switch it off, and the recorder was started with `FBENCH_ALLOW_BOOST=1`, which prints the warning, keeps the raw switch in `host.power`, and records the deviation instead of refusing. A boost-off comparison needs the switch turned off by the operator and another run of this suite.
+  Known blind spot: Machine state not shown elsewhere: the fat node's layout is 4 sockets of 28 cores, 4 NUMA nodes with CPUs interleaved across them by stride 4, SMT off, 39424 KiB of L3 per socket, 774 GB of memory per node (see the profile for how each row's CPUs are named). Its cpufreq exposes turbo and the governor, so the recorder records the power state from sysfs. Timing settings are reps 3, 2 process sets, priming 100 ms, below the 250 ms of the frozen v2 baseline (150 ms was rejected there because one cell read about 3% fast), so single cells may read a few percent fast.
+  Known blind spot: Known limitation: Coverage is the declared grid only (see `runs`): LU and Cholesky at the sizes and thread budgets of the ohtaka-fat profile.
+  Known blind spot: Residual-check coverage narrowed: the verification census (`verify`) covers the population's 2048 cells at every thread budget, not its 4096 cells. The reference product is the harness's single-threaded cache-blocked loop on this harness revision, so one 4096 case costs minutes and a 4096 census would not fit the 30-minute queue. A timed process also checks the result of its last timed call at the cell's own size (the harness's `timing::measure` ends in the cell's check), so a wrong 4096 result fails its row, but that check records no residual and is not part of the census. Where this page says every timed cell matches a verification census, read it with this limit.
+- **Rows** — one row per engine in every table below:
+  - `faer-fork` — The measured library: the tensor4all fork (`colmat`, `[lib] name = "colmat"`) at the checkout the harness linked by path. This is the row the campaign exists for; the fork's three perf experiments and the two correctness changes land here.
+    Identity: the fork revision in this run's manifest (`library.commit`), pinned by `pins/t4a-faer.rev`
+    Caveat: The fork crate is `colmat` (`[lib] name = "colmat"`); the upstream baseline is `faer` (`faer_upstream = { package = "faer" }`). They are distinct Rust crate identities, but their `Mat`, `Par` and trait types are not interchangeable: every adapter is written per arm, and shared transitive dependencies can unify Cargo features, so both arms declare equivalent feature sets and the resolved lock is recorded.
+    As measured: `faer-fork` (the provider in the measured revision; see library and upstream above)
+  - `lapack-mkl` — The same calls against Intel oneAPI MKL on the fat node, linked from the installation `MKLROOT` names. One binary links one vendor library, so this row is measured by its own build of the harness and recorded as its own run; no page carries two vendor arms. The LP64 interface layer and the threading layer are pinned by the harness before the first MKL call, because MKL otherwise lets the environment choose them and the interface layer is an ABI.
+    Identity: the MKL build recorded in this run's manifest (`providers[mkl]`)
+    Caveat: MKL reports no dispatched-kernel name and no processor count, so its manifest records neither rather than inferring them. Its threading is vendor-owned, as for OpenBLAS. MKL is the vendor arm this profile is measured with: the fat node is an Intel machine, and the F1cpu ohtaka suites use OpenBLAS instead, so the two profiles' vendor rows do not compare.
+    As measured: linked shared; mkl 2025.2; kernel not reported by the vendor
+
+## Hardware
+
+- CPU: `Intel Xeon Platinum 8280`
+- logical CPUs: `112`
+- L3: `39424K`
+- L3 domains: `39424 KiB per socket: 4 domains of 28 CPUs, one per NUMA node, node k = CPUs = k mod 4`
+- OS / arch: `Linux 4.18.0-372.9.1.el8.x86_64` / `x86_64`
+- hostname: `c18fat4`
+- CPU sets: 16T -> `0,4,8,12,16,20,24,28,32,36,40,44,48,52,56,60`, 32T -> `0,4,8,12,16,20,24,28,32,36,40,44,48,52,56,60,64,68,72,76,80,84,88,92,96,100,104,108,1,5,9,13`, 64T -> `0,4,8,12,16,20,24,28,32,36,40,44,48,52,56,60,64,68,72,76,80,84,88,92,96,100,104,108,1,5,9,13,17,21,25,29,33,37,41,45,49,53,57,61,65,69,73,77,81,85,89,93,97,101,105,109,2,6,10,14,18,22,26,30`, 112T -> `0-111`
+
+Every timed cell matches a successful verification census, including operation variants.
+Each cell is median of process medians ± sample SD of those medians; W is the median
+within-process sample SD. All values are milliseconds. These are descriptive spreads,
+not confidence intervals. The between-process spread includes the rotating-order schedule.
+Each process retains 3 chronological calls; 2 complete process sets are recorded.
+Spread guide (computed from this run's own rows): per-engine between-start range median 0.69%, worst 56.95% among cells of 1 us or more (a sub-microsecond row is timer and scheduler jitter, not kernel time); 5 of 48 engine cells exceed 5% and carry `!`; median within-process relative SD 0.36%. A cell whose `±`, `!` or `p` is as large as the difference you are reading is not evidence of a regression.
+The `vs faer-fork` column is the rotation-averaged ratio
+exp(mean over starts of log(engine median / faer-fork median)),
+with the per-start ratios beside it: `R > 1`
+means the engine was slower than that first-declared row in that start. It removes a
+row-position
+effect only under one position effect shared by the engines and stable across starts,
+and only where every declared engine has a measured row (`*` marks a cell where one has
+no row, so no ratio there is position-balanced). `!` marks a cell where some engine's own
+per-start median range exceeds 5% of its median, and `p` a balanced cell whose estimated
+position-effect ratio exceeds 1.05. Flagged cells are retained, not discarded; the
+between-start variation can exceed the difference being compared.
+The `vs` columns mark only differences larger than the spread this run recorded for those
+two rows (combined between-start SD, floored at 5%), always with the measured library as the subject:
+`🔵 <row> X faster than <row>` / `🔴 <row> X slower than <row>` (the subject is the first column of the table, the compared row is named in
+the cell, not only in the column header), `·` inside the band, `-` that row is not
+measured in this arm. `notes` carries the cell warnings (`*` a declared row has no measurement,
+`!` between-start range over 5%, `p` position effect over 5%, dispatch-dominated means the
+row is under 20 us so 4T/8T pay thread-region start-up). Per-start ratios and every
+chronological sample are in the run directory named at the top of this page (`run*.csv`).
+These describe the recorded revisions; they are not a regression claim.
+
+## factor-ohtaka-fat, f64, f order, 16T (CPU 0,4,8,12,16,20,24,28,32,36,40,44,48,52,56,60)
+
+| case | faer-fork (ms) | lapack-mkl (ms) | vs `lapack-mkl` | notes |
+|---|---|---|---|---|
+| `cholesky/n2048/b1` | 7.96786 ± 0.0729642 (W 0.0277263) | 7.47051 ± 0.132381 (W 0.0676742) | 🔴 faer-fork 1.07× slower than `lapack-mkl` |  |
+| `cholesky/n2048/b1 [api-inclusive]` | 15.5719 ± 0.0707969 (W 0.0547666) | - | - | `*` one row has no measurement here |
+| `cholesky/n4096/b1` | 69.744 ± 0.193106 (W 0.0694931) | 37.2299 ± 0.0663422 (W 0.26155) | 🔴 faer-fork 1.87× slower than `lapack-mkl` |  |
+| `cholesky/n4096/b1 [api-inclusive]` | 114.154 ± 0.0578251 (W 0.111774) | - | - | `*` one row has no measurement here |
+| `lu/n2048/b1` | 19.8084 ± 0.0306128 (W 0.0788344) | 15.2774 ± 0.252055 (W 0.0642801) | 🔴 faer-fork 1.30× slower than `lapack-mkl` |  |
+| `lu/n2048/b1 [api-inclusive]` | 39.4954 ± 0.697456 (W 0.14206) | - | - | `*` one row has no measurement here |
+| `lu/n4096/b1` | 100.231 ± 0.187863 (W 0.140045) | 73.7284 ± 0.372114 (W 0.21745) | 🔴 faer-fork 1.36× slower than `lapack-mkl` |  |
+| `lu/n4096/b1 [api-inclusive]` | 186.323 ± 0.600397 (W 0.327842) | - | - | `*` one row has no measurement here |
+
+## factor-ohtaka-fat, f64, f order, 32T (CPU 0,4,8,12,16,20,24,28,32,36,40,44,48,52,56,60,64,68,72,76,80,84,88,92,96,100,104,108,1,5,9,13)
+
+| case | faer-fork (ms) | lapack-mkl (ms) | vs `lapack-mkl` | notes |
+|---|---|---|---|---|
+| `cholesky/n2048/b1` | 10.3703 ± 0.0266947 (W 0.0143839) | 5.63294 ± 0.450687 (W 0.724747) | 🔴 faer-fork 1.84× slower than `lapack-mkl` | `!` between-start range over 5%; `p` position effect over 5% |
+| `cholesky/n2048/b1 [api-inclusive]` | 20.3354 ± 0.418199 (W 0.0531596) | - | - | `*` one row has no measurement here |
+| `cholesky/n4096/b1` | 60.506 ± 0.0982688 (W 0.109964) | 56.7844 ± 3.13794 (W 2.56314) | 🔴 faer-fork 1.07× slower than `lapack-mkl` | `!` between-start range over 5% |
+| `cholesky/n4096/b1 [api-inclusive]` | 106.372 ± 0.0867118 (W 0.215437) | - | - | `*` one row has no measurement here |
+| `lu/n2048/b1` | 27.9344 ± 0.0134449 (W 0.141831) | 12.5881 ± 0.0409266 (W 0.0992206) | 🔴 faer-fork 2.22× slower than `lapack-mkl` |  |
+| `lu/n2048/b1 [api-inclusive]` | 47.8351 ± 0.59802 (W 0.110094) | - | - | `*` one row has no measurement here |
+| `lu/n4096/b1` | 122.066 ± 0.683004 (W 0.396093) | 54.4801 ± 0.644765 (W 0.265697) | 🔴 faer-fork 2.24× slower than `lapack-mkl` |  |
+| `lu/n4096/b1 [api-inclusive]` | 213.832 ± 2.84485 (W 0.235562) | - | - | `*` one row has no measurement here |
+
+## factor-ohtaka-fat, f64, f order, 64T (CPU 0,4,8,12,16,20,24,28,32,36,40,44,48,52,56,60,64,68,72,76,80,84,88,92,96,100,104,108,1,5,9,13,17,21,25,29,33,37,41,45,49,53,57,61,65,69,73,77,81,85,89,93,97,101,105,109,2,6,10,14,18,22,26,30)
+
+| case | faer-fork (ms) | lapack-mkl (ms) | vs `lapack-mkl` | notes |
+|---|---|---|---|---|
+| `cholesky/n2048/b1` | 11.3796 ± 0.0420799 (W 0.0918591) | 5.86711 ± 0.843327 (W 0.749524) | 🔴 faer-fork 1.94× slower than `lapack-mkl` | `!` between-start range over 5%; `p` position effect over 5% |
+| `cholesky/n2048/b1 [api-inclusive]` | 22.1975 ± 0.0659582 (W 0.0497891) | - | - | `*` one row has no measurement here |
+| `cholesky/n4096/b1` | 66.1548 ± 0.712365 (W 0.1029) | 64.2875 ± 12.9643 (W 14.7149) | · | `!` between-start range over 5%; `p` position effect over 5% |
+| `cholesky/n4096/b1 [api-inclusive]` | 109.413 ± 0.0565869 (W 1.35199) | - | - | `*` one row has no measurement here |
+| `lu/n2048/b1` | 34.1401 ± 0.354799 (W 0.186695) | 12.5274 ± 0.333216 (W 0.468265) | 🔴 faer-fork 2.73× slower than `lapack-mkl` |  |
+| `lu/n2048/b1 [api-inclusive]` | 54.6976 ± 0.231757 (W 0.201111) | - | - | `*` one row has no measurement here |
+| `lu/n4096/b1` | 141.985 ± 0.214794 (W 0.120821) | 102.654 ± 1.99716 (W 0.425641) | 🔴 faer-fork 1.38× slower than `lapack-mkl` |  |
+| `lu/n4096/b1 [api-inclusive]` | 234.666 ± 1.28319 (W 0.235427) | - | - | `*` one row has no measurement here |
+
+## factor-ohtaka-fat, f64, f order, 112T (CPU 0-111)
+
+| case | faer-fork (ms) | lapack-mkl (ms) | vs `lapack-mkl` | notes |
+|---|---|---|---|---|
+| `cholesky/n2048/b1` | 11.495 ± 0.0180736 (W 0.0540003) | 5.1595 ± 2.07784 (W 0.899983) | 🔴 faer-fork 2.23× slower than `lapack-mkl` | `!` between-start range over 5%; `p` position effect over 5% |
+| `cholesky/n2048/b1 [api-inclusive]` | 21.6225 ± 0.342417 (W 0.0730678) | - | - | `*` one row has no measurement here |
+| `cholesky/n4096/b1` | 51.2454 ± 0.146643 (W 0.0856379) | 26.3219 ± 0.228921 (W 0.326725) | 🔴 faer-fork 1.95× slower than `lapack-mkl` |  |
+| `cholesky/n4096/b1 [api-inclusive]` | 98.0261 ± 0.166908 (W 0.419663) | - | - | `*` one row has no measurement here |
+| `lu/n2048/b1` | 35.6182 ± 0.158683 (W 0.223188) | 11.0856 ± 0.112916 (W 0.115583) | 🔴 faer-fork 3.21× slower than `lapack-mkl` |  |
+| `lu/n2048/b1 [api-inclusive]` | 55.8307 ± 0.261091 (W 0.1765) | - | - | `*` one row has no measurement here |
+| `lu/n4096/b1` | 145.87 ± 0.261588 (W 0.444262) | 71.2541 ± 1.63946 (W 0.801323) | 🔴 faer-fork 2.05× slower than `lapack-mkl` |  |
+| `lu/n4096/b1 [api-inclusive]` | 238.624 ± 0.0514463 (W 0.213609) | - | - | `*` one row has no measurement here |
+
+Repeated process sets describe observed repeatability under the recorded order schedule; they are not a paired baseline/candidate experiment and do not establish equal performance between engines.
