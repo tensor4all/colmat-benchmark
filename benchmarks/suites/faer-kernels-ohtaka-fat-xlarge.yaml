@@ -1,0 +1,149 @@
+schema_version: 1
+id: faer-kernels-ohtaka-fat-xlarge
+description: >-
+  The ohtaka-fat 8192 tier (colmat-benchmark#101): f64, F order, 8192 at 16, 32, 64 and 112 threads
+  on one ISSP fat node (`c18fat*`, 112 cores, 3 TB, B2fat partition), with a 4096 companion that
+  carries the verification census, because the census product at 8192 is minutes of one core per
+  case. Sized for a 12 h Slurm limit: it does not fit the 30-minute debug queue, which is why the
+  4096 tier is its own suite (`faer-kernels-ohtaka-fat-large`). 112T is the whole node: every core
+  is measured, no observer CPU is left, and the row is recorded os-shared. Families: gemm, LU, Cholesky and the compact QR factor, measured at faer's
+  own API against Intel oneAPI MKL (the upstream faer row is not measured: the 2-process-set budget
+  needs a 2-row arm). This suite is its own page, never joined with the F1cpu `ohtaka-cpu` profile
+  or with `zen5-cpu`: a different machine (112 Intel cores in 4 sockets against 128 EPYC cores in
+  2), so its cells are only comparable with each other.
+# Only paths in the *measured* fork whose change can alter a measured result. The
+# harness and the timing protocol live in this repository, not in the fork, so
+# they cannot appear here; see docs/results.md for how a harness change is
+# recorded. Deliberately not `docs/**` or `tests/**`: an edit there does not make
+# a measurement stale.
+invalidated_by:
+  - faer/src/**
+  - faer-traits/src/**
+  - faer-macros/src/**
+  - Cargo.toml
+  - Cargo.lock
+stale_after: 20
+# Empty until the first (ohtaka-fat, faer-kernels-ohtaka-fat-large) cell exists: `missing` is a
+# normal state for a cell with no run, and it becomes an error only for a profile listed as
+# required. The first recorded cell moves `ohtaka-fat` in here.
+required_profiles: []
+optional_profiles:
+  - ohtaka-fat
+
+family_groups:
+  gemm:
+    - gemm
+  factor:
+    - lu
+    - cholesky
+  decompose:
+    - qr_factor
+
+# What the workload is, in a form the result page can print.
+workloads:
+  name: faer dense kernels and decompositions
+  description: >-
+    Direct calls into one faer revision: square and rectangular dense matrices,
+    C (row-major) and F (column-major) order, `f64` and `c64`. A shape is `N` for
+    square, `MxN` for rectangular, or `MxKxN` for `gemm`, which is a three-index
+    operation and cannot be written as two. Sizes are the matrix dimensions, not
+    a memory budget, so a case name says exactly what was factored. `gemm`
+    measures `linalg::matmul::matmul` into a caller-prepared destination with
+    `Accum::Replace`; there is no operator path, so one shape is one work.
+  source: >-
+    The fork's own public API (`faer/src/linalg`): `matmul`, the QR factor and
+    composite, `upgrade_householder_factor`, the block/sequence Householder
+    apply, LU and full-pivot LU, Cholesky, triangular solve, solve, thin SVD,
+    singular values and the symmetric/nonsymmetric eigensolvers. Inputs are
+    seeded from the case, so `verify` and `run` measure the same matrices and a
+    rerun is reproducible.
+  known_blind_spots:
+    - "Only the faer entry points are measured. tlinalg's packing, batch loop and lane policy, tenferro's tensor construction and dtype dispatch, and the small-`m` decode-projection shapes are other repositories' rows (tlinalg-benchmark, tenferro-benchmark)."
+    - "The grid is square only: 4096 and 8192 for `gemm`, LU, Cholesky and the compact QR factor. Rectangular LU, the 255/257/511/513 boundary shapes, the Householder apply rows, SVD and the eigensolvers are declared in other suites of this campaign and are not measured here; a reader must not carry a conclusion from this page to those shapes."
+    - "F (column-major) order only, because the issue fixes it for this profile: the recorder passes `FBENCH_ORDER=f` in the environment of both the census and the timing pass, so the harness emits no C-order cell. A C-order reading of the same sizes is the other ohtaka suite's business, not this one's."
+    - "A vendor arm records the library it linked. MKL names no dispatched kernel and no processor count, so its manifest leaves both empty rather than inferring them. C-order vendor cells do not exist here (F order only), which is also the layout where LAPACKE has a route that leaves the clock free of allocation and layout conversion."
+    - "The upstream faer row is not measured on this profile: the 2-process-set budget (`--aa 2`) needs a 2-row arm, so only the colmat fork and MKL are measured. The upstream faer revision printed in the page header is the pinned baseline of the campaign, not a measured column."
+    - "The 112T row is os-shared: it measures every core of the node, so the operating system, Slurm and the recorder itself share the measured CPUs with the cells, and the recorder (pinned to NUMA node 3) sits inside the measured set for that row. The profile declares the row with no observer CPU, the recorder records the caveat in its observer block, and the page repeats it. Rows 16T, 32T and 64T keep the observing side in NUMA node 3 (CPUs 3,7,...,111), a domain none of them measures."
+    - "Boost is ON for this run and is not comparable with a boost-off run: the fat node exposes
+      `intel_pstate/no_turbo` = 0, an unprivileged job cannot switch it off, and the recorder was
+      started with `FBENCH_ALLOW_BOOST=1`, which prints the warning, keeps the raw switch in
+      `host.power`, and records the deviation instead of refusing. A boost-off comparison needs the
+      switch turned off by the operator and another run of this suite."
+    - "Machine state not shown elsewhere: the fat node's layout is 4 sockets of 28 cores, 4 NUMA nodes with CPUs interleaved across them by stride 4, SMT off, 39424 KiB of L3 per socket, 774 GB of memory per node (see the profile for how each row's CPUs are named). Its cpufreq exposes turbo and the governor, so the recorder records the power state from sysfs. Timing settings are reps 3, 2 process sets, priming 100 ms, below the 250 ms of the frozen v2 baseline (150 ms was rejected there because one cell read about 3% fast), so single cells may read a few percent fast."
+    - "Known limitation: Coverage is the declared grid only (see `runs`): a subset of families (gemm, LU, Cholesky, QR factor) at the sizes and thread budgets of the ohtaka-fat profile."
+    - "Residual-check coverage narrowed: the verification census (`verify`) covers the 4096 cells only, at every thread budget, and its reference product is the harness's single-threaded cache-blocked loop on this harness revision, so the census costs minutes per case. A timed process also checks the result of its last timed call at the cell's own size (the harness's `timing::measure` ends in the cell's check), so a wrong 8192 result fails its row; that check is not part of the census and records no residual, and at 8192 it costs minutes of one core per cell. Where this page says every timed cell matches a verification census, read it with this limit."
+
+# One entry per engine name the harness emits. A result page explains every
+# column from this, so a reader needs no context beyond the page.
+engines_doc:
+  faer-fork:
+    provider: faer-fork
+    summary: >-
+      The measured library: the tensor4all fork (`colmat`, `[lib] name = "colmat"`)
+      at the checkout the harness linked by path. This is the row the campaign
+      exists for; the fork's three perf experiments and the two correctness
+      changes land here.
+    identity: >-
+      the fork revision in this run's manifest (`library.commit`), pinned by
+      `pins/t4a-faer.rev`
+    caveat: >-
+      The fork crate is `colmat` (`[lib] name = "colmat"`); the upstream baseline is
+      `faer` (`faer_upstream = { package = "faer" }`). They are distinct Rust crate
+      identities, but their `Mat`, `Par` and trait types are not interchangeable:
+      every adapter is written per arm, and shared transitive dependencies can unify
+      Cargo features, so both arms declare equivalent feature sets and the resolved
+      lock is recorded.
+  lapack-mkl:
+    provider: mkl
+    summary: >-
+      The same calls against Intel oneAPI MKL on the fat node, linked from the
+      installation `MKLROOT` names. One binary links one vendor library, so this row
+      is measured by its own build of the harness and recorded as its own run; no
+      page carries two vendor arms. The LP64 interface layer and the threading
+      layer are pinned by the harness before the first MKL call, because MKL
+      otherwise lets the environment choose them and the interface layer is an ABI.
+    identity: the MKL build recorded in this run's manifest (`providers[mkl]`)
+    caveat: >-
+      MKL reports no dispatched-kernel name and no processor count, so its
+      manifest records neither rather than inferring them. Its threading is
+      vendor-owned, as for OpenBLAS. MKL is the vendor arm this profile is measured
+      with: the fat node is an Intel machine, and the F1cpu ohtaka suites use
+      OpenBLAS instead, so the two profiles' vendor rows do not compare.
+
+# The verification census (`fbench verify`) recomputes each case's reference with a cache-blocked
+# product (`fbench/src/shared.rs` `mm`), which is single-threaded on this harness revision: minutes
+# per case at 8192, so the census is narrowed to the 4096 companion cells of every population at
+# every thread budget. A timed process still checks its last call at the cell's own size; see `known_blind_spots`.
+verify:
+  n: ["4096", "4096x4096x4096"]
+
+runs:
+  - threads: [16, 32, 64, 112]
+    # The CPUs of each thread row are the profile's own `thread_rows`, restated here because the
+    # schema asks the suite for them: the fat node numbers its CPUs across the four sockets
+    # (NUMA node k = CPUs = k mod 4), so `0-15` would straddle all four nodes. Rows fill one node
+    # before the next; 112T is the whole node and has no observer CPU left (that row is
+    # recorded os-shared).
+    cpu_sets:
+      ohtaka-fat:
+        - "0,4,8,12,16,20,24,28,32,36,40,44,48,52,56,60"
+        - "0,4,8,12,16,20,24,28,32,36,40,44,48,52,56,60,64,68,72,76,80,84,88,92,96,100,104,108,1,5,9,13"
+        - "0,4,8,12,16,20,24,28,32,36,40,44,48,52,56,60,64,68,72,76,80,84,88,92,96,100,104,108,1,5,9,13,17,21,25,29,33,37,41,45,49,53,57,61,65,69,73,77,81,85,89,93,97,101,105,109,2,6,10,14,18,22,26,30"
+        - "0-111"
+    dtypes: [f64]
+    # F (column-major) only: the issue fixes the order for this profile. The recorder passes no
+    # layout argument, so the run script exports FBENCH_ORDER=f; without it the harness emits the
+    # C-order cells too and the CSVs would not match this axis.
+    order: [f]
+    # One vendor arm per run (AGENTS.md): MKL is the arm built on the fat node (no OpenBLAS arm
+    # here; the F1cpu ohtaka suites use OpenBLAS, so their vendor rows do not compare with these).
+    engines: [faer-fork, lapack-mkl]
+    populations:
+      - regime: gemm-ohtaka-fat
+        groups: [gemm]
+        n: ["4096x4096x4096", "8192x8192x8192"]
+        batch: [1]
+      - regime: linalg-ohtaka-fat
+        groups: [factor, decompose]
+        n: ["4096", "8192"]
+        batch: [1]
