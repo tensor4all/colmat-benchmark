@@ -24,6 +24,7 @@ import pathlib
 import sys
 
 from campaign_toolkit import descriptor, hostinfo
+from campaign_toolkit import record_run as _toolkit_record_run
 from campaign_toolkit.record_run import main as record_run_main
 
 CPU = "sys/devices/system/cpu"
@@ -97,6 +98,24 @@ def require_host(profile, root="/"):
                  f"({len(bad)} of {len(siblings)} CPUs disagree). Nothing was written.")
 
 
+def allow_os_shared(profile):
+    """Explicit override for a profile that declares `os_shared: true` (keyaki-64-os-shared).
+
+    A row that measures every core leaves no CPU for the observing side, so the toolkit's two
+    observer refusals can never pass. Only those two are skipped, only for a profile that says
+    `os_shared: true`, and the skip is printed; the boost gate, the idle guard, the host check
+    above and every other refusal stay in force. The profile's description carries the caveat
+    onto the page, and the recording notes it beside the run.
+    """
+    def skipped(name):
+        def override(cpu_sets, *args, **kwargs):
+            print(f"warning: os-shared override ({profile['name']}): {name} skipped; the observing "
+                  f"side shares the measured CPUs {', '.join(cpu_sets.values())}", file=sys.stderr)
+        return override
+    for name in ("require_observer_off_measured_cpus", "require_quiet_observing_side"):
+        setattr(_toolkit_record_run, name, skipped(name))
+
+
 def main(argv=None, root=None, host_root="/"):
     argv = list(sys.argv[1:] if argv is None else argv)
     root = pathlib.Path(root or pathlib.Path(__file__).resolve().parent.parent)
@@ -117,6 +136,8 @@ def main(argv=None, root=None, host_root="/"):
         # The recorder calls the harness with the static argv its descriptor declares, so the
         # profile reaches the harness through the environment it inherits.
         os.environ["FBENCH_PROFILE"] = profile["name"]
+        if profile.get("os_shared"):
+            allow_os_shared(profile)
     return record_run_main(argv, root=root)
 
 
