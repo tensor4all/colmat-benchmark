@@ -60,7 +60,9 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --checkout) FORK_DIR="${2:?--checkout needs a path}"; shift 2 ;;
         --upstream) UPSTREAM_DIR="${2:?--upstream needs a path}"; shift 2 ;;
-        --vendor) VENDOR="${2:?--vendor needs a name}"; shift 2 ;;
+        # The recorder passes `--vendor ""` for a suite that declares no vendor arm (its `{vendor}`
+        # token is empty and its var file is `pin-none.env`), so an empty name is that arm: `none`.
+        --vendor) VENDOR="${2-}"; VENDOR="${VENDOR:-none}"; shift 2 ;;
         --out) OUT_FILE="${2:?--out needs a file}"; shift 2 ;;
         --bin) BINS+=("${2:?--bin needs a name}"); shift 2 ;;
         --profile) PROFILE="${2:?--profile needs a name}"; shift 2 ;;
