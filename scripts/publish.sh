@@ -65,5 +65,15 @@ fi
 #       --shapes 1024,1536,1024x1024x1024,1536x1536x1536,255,257,511,513 \
 #       --reps 5 --aa 6 --prime-ms 250 --label "$LABEL-large-openblas"
 
+# The large OpenBLAS arm, off by default (see above) and on for a same-pin three-arm refresh (#99):
+# PUBLISH_LARGE_OPENBLAS=1 records it after the others, so the large suite carries all three vendors.
+if [ "${PUBLISH_LARGE_OPENBLAS:-0}" = 1 ]; then
+    $TASKSET python3 scripts/record_run.py zen5-cpu faer-kernels-large \
+        --vendor openblas --engines faer-fork,lapack-openblas --threads 4,8 \
+        --regimes linalg-large,gemm-large,linalg-boundary \
+        --shapes 1024,1536,1024x1024x1024,1536x1536x1536,255,257,511,513 \
+        --reps 5 --aa 6 --prime-ms 250 --label "$LABEL-large-openblas"
+fi
+
 # The joined four-way view and the throughput charts are not written here: the Pages workflow
 # draws them from these runs on every deploy (scripts/gen_site.py, campaign_toolkit.figures).
