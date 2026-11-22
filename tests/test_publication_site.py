@@ -36,10 +36,11 @@ def collect():
     return gen_site.gen_index.collect()
 
 
-def current_pages():
+def current_pages(profile='zen5-cpu'):
+    """The current pages of one hardware profile: zen5-cpu is the publication; keyaki has its own."""
     found = collect()
     current, _ = gen_site.gen_index.split_pages(found['pages'], found['declared'], found['resolved'])
-    return [c['page'] for c in current if c['page'] is not None]
+    return [c['page'] for c in current if c['page'] is not None and c['page']['profile'] == profile]
 
 
 def current_run_dir(suite, vendor):
@@ -64,6 +65,17 @@ class PublicationSiteTest(unittest.TestCase):
         for page in current_pages():
             self.assertEqual(page['profile'], 'zen5-cpu')
         self.assertEqual(len({p['upstream_commit'] for p in current_pages()}), 1)
+
+    def test_keyaki_pages_are_their_own_profiles_and_the_64t_one_carries_its_caveat(self):
+        pin = rev_file_value((ROOT / gen_site.PIN).read_text())
+        for profile, suite in (('keyaki-64', 'faer-kernels-keyaki'),
+                               ('keyaki-64-os-shared', 'faer-kernels-keyaki-os-shared')):
+            pages = current_pages(profile)
+            self.assertEqual({(p['suite'], p['vendor']) for p in pages}, {(suite, 'mkl')})
+            self.assertEqual({p['library_commit'] for p in pages}, {pin})
+        # the 64T cell is os-shared and says so on its page, where a reader of the table sees it
+        shared = pathlib.Path(current_pages('keyaki-64-os-shared')[0]['run_dir']) / 'report.md'
+        self.assertIn('OS-SHARED, NOT COMPARABLE WITH THE 60T ROW', shared.read_text())
 
     def test_guard_passes_at_the_pin_and_fails_at_the_unrecorded_release(self):
         found = collect()
