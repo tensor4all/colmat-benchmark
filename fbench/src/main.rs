@@ -1,4 +1,4 @@
-//! `fbench`: the measurement harness for the faer benchmark campaign.
+//! `fbench`: the measurement harness for the colmat benchmark campaign (colmat against upstream faer and the vendor LAPACKs).
 //!
 //! Three subcommands, at the contract `scripts/record_run.py` reads:
 //!

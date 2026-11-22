@@ -18,7 +18,7 @@ The fork side of the same rules is `colmat-rs/docs/adoption-protocol.md`.
 the observing side pinned off the measured L3 domains (refused otherwise), an idle guard that watches
 every CPU sharing the measured cache (3 s window, 5% busy, 8 admission retries), one campaign lock,
 the colmat and faer rows timed with the row's parallelism held around the whole loop when the budget is more
-than one thread: the fork row through `faer::team::with_team(threads, ..)` (its team is the only
+than one thread: the colmat row through `colmat::team::with_team(threads, ..)` (its team is the only
 parallel route since tensor4all/faer#85, and the token it lends is what every measured call uses),
 the unchanged upstream row through the spindle worker group (`spindle::with_lock(threads, ..)`, which
 is how it has always been measured). Runs before the fork's team row was measured this way are not

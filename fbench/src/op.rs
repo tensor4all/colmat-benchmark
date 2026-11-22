@@ -391,7 +391,7 @@ mod tests {
     /// outside it on the other. Every row's `run` is executed single-threaded (`Token::none()` is
     /// `Par::Seq`, `backend.rs`), which is what makes the counter exact: the measured call runs on
     /// this thread and allocates nothing there. A library's own threaded-path allocation is not in
-    /// scope here and is declared in `benchmarks/suites/faer-kernels.yaml` (known blind spots).
+    /// scope here and is declared in `benchmarks/suites/colmat-kernels.yaml` (known blind spots).
     #[test]
     fn no_row_allocates_inside_run() {
         let _budget = hold_budget();
@@ -403,9 +403,9 @@ mod tests {
         // The cells a primary ratio is formed from: column-major everywhere (the vendor's driver
         // route), plus row-major `gemm`, the only family the vendor also measures row-major. A
         // row-major LAPACK-driver cell has no vendor counterpart (it is a skip, `lapack.rs`), and
-        // the faer row may allocate its own column-major copy inside the library call there
+        // the colmat row may allocate its own column-major copy inside the library call there
         // (`lu/partial_pivoting/factor.rs:396-418`), a declared blind spot in
-        // benchmarks/suites/faer-kernels.yaml, not a harness allocation.
+        // benchmarks/suites/colmat-kernels.yaml, not a harness allocation.
         for (order, families) in [(Order::F, FAMILIES), (Order::C, &["gemm"][..])] {
             for row in crate::engine_rows() {
                 for family in families {
