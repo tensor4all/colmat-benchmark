@@ -19,7 +19,7 @@ from campaign_toolkit import descriptor  # noqa: E402
 from campaign_toolkit import gen_index, validate_run  # noqa: E402
 from campaign_toolkit.campaign import engines_for_vendor, vendor_engines  # noqa: E402
 
-SUITES = ('faer-kernels', 'faer-kernels-large')
+SUITES = ('colmat-kernels', 'colmat-kernels-large')
 
 
 def read(path):
@@ -53,7 +53,7 @@ class DescriptorTest(unittest.TestCase):
                 self.assertEqual(suite['engines_doc']['lapack-aocl']['provider'], 'aocl')
                 # An AOCL cell is the measured rows plus AOCL's own row, never another vendor's.
                 self.assertEqual(engines_for_vendor(suite, 'aocl'),
-                                 ['faer-fork', 'faer-upstream', 'lapack-aocl'])
+                                 ['colmat', 'faer', 'lapack-aocl'])
 
     def test_the_link_preflight_checks_what_the_build_links(self):
         arm = read('benchmarks/link-preflight.yaml')['arms']['aocl']
@@ -74,6 +74,9 @@ class ValidatorAndIndexTest(unittest.TestCase):
 
     def test_an_aocl_run_names_its_vendor(self):
         errors = []
+        validate_run.check_vendor(self.manifest(['colmat', 'lapack-aocl'], {'name': 'aocl'}), errors)
+        self.assertEqual(errors, [])
+        # A run recorded before #113 names the measured row `faer-fork`; it is the same arm.
         validate_run.check_vendor(self.manifest(['faer-fork', 'lapack-aocl'], {'name': 'aocl'}), errors)
         self.assertEqual(errors, [])
 
@@ -100,17 +103,17 @@ class ValidatorAndIndexTest(unittest.TestCase):
             self.assertIn((suite_id, 'zen5-cpu'), cells)
         # The other arms are still declared next to it.
         for vendor in ('mkl', 'openblas'):
-            self.assertIn(('faer-kernels', 'zen5-cpu'),
+            self.assertIn(('colmat-kernels', 'zen5-cpu'),
                           {(c['suite'], c['profile']) for c in declared if c['vendor'] == vendor})
 
 
 class PublishTest(unittest.TestCase):
     def test_publish_records_aocl_in_both_suites_and_keeps_the_other_arms(self):
         text = (ROOT / 'scripts/publish.sh').read_text()
-        for needle in ('faer-kernels \\\n    --vendor mkl', 'faer-kernels \\\n    --vendor openblas',
-                       'faer-kernels-large \\\n    --vendor mkl',
-                       'faer-kernels \\\n        --vendor aocl --engines faer-fork,lapack-aocl',
-                       'faer-kernels-large \\\n        --vendor aocl --engines faer-fork,lapack-aocl'):
+        for needle in ('colmat-kernels \\\n    --vendor mkl', 'colmat-kernels \\\n    --vendor openblas',
+                       'colmat-kernels-large \\\n    --vendor mkl',
+                       'colmat-kernels \\\n        --vendor aocl --engines colmat,lapack-aocl',
+                       'colmat-kernels-large \\\n        --vendor aocl --engines colmat,lapack-aocl'):
             self.assertIn(needle, text)
         self.assertIn('scripts/resolve_aocl_root.sh', text)
 

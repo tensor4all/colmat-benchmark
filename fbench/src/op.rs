@@ -296,7 +296,7 @@ mod tests {
                     k: if family == "gemm" { Some(n) } else { None },
                     batch: 1,
                 };
-                for mut op in crate::ops_for("faer-fork", Dtype::F64, family, case, order).unwrap()
+                for mut op in crate::ops_for(crate::ROW_COLMAT, Dtype::F64, family, case, order).unwrap()
                 {
                     op.prepare().unwrap();
                     let s = colmat::team::with_team(threads, |par| {
@@ -313,7 +313,7 @@ mod tests {
                         + s.gemm_team_kernel;
                     assert!(
                         team > 0,
-                        "faer-fork {family} {} {}: no team dispatch ({s:?})",
+                        "colmat {family} {} {}: no team dispatch ({s:?})",
                         order.label(),
                         op.note
                     );
@@ -347,12 +347,12 @@ mod tests {
                             Ok(ops) => ops,
                             Err(_) => continue,
                         };
-                        // householder_apply times both public forms; a faer row times the
-                        // two-route families through the owning method and the allocation-free
-                        // route.
+                        // householder_apply times both public forms; a colmat or faer row times
+                        // the two-route families through the owning method and the
+                        // allocation-free route.
                         let expected = match family {
                             "householder_apply" => 2,
-                            _ if row.starts_with("faer-")
+                            _ if (row == crate::ROW_COLMAT || row == crate::ROW_FAER)
                                 && TWO_ROUTE_FAMILIES.contains(&family) =>
                             {
                                 2
@@ -522,7 +522,7 @@ mod tests {
             k: None,
             batch: 1,
         };
-        for row in ["faer-fork", "faer-upstream"] {
+        for row in [crate::ROW_COLMAT, crate::ROW_FAER] {
             for family in TWO_ROUTE_FAMILIES {
                 let ops = crate::ops_for(row, Dtype::F64, family, case, Order::F).unwrap();
                 assert_eq!(ops.len(), 2, "{row} {family} must time both routes");

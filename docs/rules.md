@@ -7,17 +7,17 @@ The normative text is `docs/protocol-v2-baseline.md`; this page is the index and
 
 | job | where | grid | published |
 | --- | --- | --- | --- |
-| **Acceptance** - may this change be merged into `t4a-faer`? | the development machine | the change's blast radius: affected families at every declared shape at 4T/8T, target cells at 1T, two or three untouched families as a collateral control | no - evidence in the PR, the worklog and the fork's `PATCHSET.md` |
+| **Acceptance** - may this change be merged into `colmat`? | the development machine | the change's blast radius: affected families at every declared shape at 4T/8T, target cells at 1T, two or three untouched families as a collateral control | no - evidence in the PR, the worklog and the fork's `PATCHSET.md` |
 | **Public dataset** - the pages under `result/` | a dedicated clean measurement host, re-recorded periodically | the whole declared suite | yes |
 
-The fork side of the same rules is `t4a-faer/docs/adoption-protocol.md`.
+The fork side of the same rules is `colmat-rs/docs/adoption-protocol.md`.
 
 ## The contract every run uses
 
 `--prime-ms 250 --reps 5 --aa 3 --statistic median`, CPU boost off (the recorder refuses otherwise),
 the observing side pinned off the measured L3 domains (refused otherwise), an idle guard that watches
 every CPU sharing the measured cache (3 s window, 5% busy, 8 admission retries), one campaign lock,
-the two faer rows timed with the row's parallelism held around the whole loop when the budget is more
+the colmat and faer rows timed with the row's parallelism held around the whole loop when the budget is more
 than one thread: the fork row through `faer::team::with_team(threads, ..)` (its team is the only
 parallel route since tensor4all/faer#85, and the token it lends is what every measured call uses),
 the unchanged upstream row through the spindle worker group (`spindle::with_lock(threads, ..)`, which
@@ -32,7 +32,7 @@ then stops. Both are in the command below; the 32 row is the guard, not an optio
 (affected families at every declared shape, collateral controls, the comparator).
 
 ```sh
-python3 scripts/record_run.py zen5-cpu faer-kernels ... \
+python3 scripts/record_run.py zen5-cpu colmat-kernels ... \
     --shapes 64,64x64x64,32,32x32x32 --dtypes f64,c64,f32,c32 --threads 4,8 --label loop-<rev>
 ```
 
@@ -50,27 +50,27 @@ cd /home/shinaoka/projects/tensor4all/faer-benchmark
 # 1. declare the blast radius of the changed paths, then measure the affected families at 4T/8T,
 #    the target cells at 1T and a couple of untouched families as a control. Example for row-major QR/LU:
 export PINNED_RETRIES=8
-python3 scripts/record_run.py zen5-cpu faer-kernels \
+python3 scripts/record_run.py zen5-cpu colmat-kernels \
     --checkout ../faer --upstream extern/upstream-faer --vendor mkl \
-    --engines faer-fork,faer-upstream,lapack-mkl \
+    --engines colmat,faer,lapack-mkl \
     --regimes linalg-small,linalg-mid,linalg-tall,linalg-wide \
     --families qr_factor,qr,lu,full_piv_lu,solve \
     --dtypes f64,c64 --reps 5 --aa 3 --prime-ms 250 \
     --label acceptance-<revision> --no-publish
 # 2. the pinned baseline is measured once and kept (baseline-ref-* runs under data/results/), never re-run
-#    per candidate: the same command with --checkout extern/t4a-faer
+#    per candidate: the same command with --checkout extern/colmat
 # 3. compare, and let the tool refuse a merge that changed the measured code:
 python3 scripts/candidate_compare.py \
-    --baseline data/results/zen5-cpu/faer-kernels/<baseline-ref run> \
+    --baseline data/results/zen5-cpu/colmat-kernels/<baseline-ref run> \
     --candidate data/probes/acceptance/<candidate run> \
     --checkout ../faer --merged-commit <merge commit> --json /tmp/acceptance.json
 ```
 
 A comparison is accepted only when the identity check passes (only the library commit differs), the
-`faer-upstream` control row reproduces the baseline, no measured guard cell regresses beyond the
+`faer` control row reproduces the baseline, no measured guard cell regresses beyond the
 recorded spread, and the target cells improve beyond it.
 
-Gates that must also pass: `cargo test -p t4a-faer --lib` in the checkout, the change's own regression
+Gates that must also pass: `cargo test -p colmat --lib` in the checkout, the change's own regression
 test, and the harness's `fbench verify` over the affected populations and budgets (the recorder runs it
 before timing; a mismatch or an undeclared skip fails acceptance).
 
@@ -78,11 +78,11 @@ before timing; a mismatch or an undeclared skip fails acceptance).
 
 ```sh
 # both suites, both arms; run serially, commit after each so publication cannot dirty the next run
-for suite in faer-kernels faer-kernels-large; do
-  for arm in "mkl|faer-fork,faer-upstream,lapack-mkl|3" "openblas|faer-fork,lapack-openblas|2"; do
+for suite in colmat-kernels colmat-kernels-large; do
+  for arm in "mkl|colmat,faer,lapack-mkl|3" "openblas|colmat,lapack-openblas|2"; do
     IFS='|' read -r vendor engines aa <<< "$arm"
     PINNED_RETRIES=8 python3 scripts/record_run.py zen5-cpu "$suite" \
-      --checkout extern/t4a-faer --upstream ./extern/upstream-faer --vendor "$vendor" \
+      --checkout extern/colmat --upstream ./extern/upstream-faer --vendor "$vendor" \
       --engines "$engines" --dtypes f64,c64 --reps 5 --aa "$aa" --prime-ms 250
     git add -A && git commit -m "data: $suite $vendor"
   done

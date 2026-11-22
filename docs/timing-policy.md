@@ -135,7 +135,7 @@ fork's row splits are exactly a threaded-kernel change.
 
 The two suites answer different questions, so they run on different triggers.
 
-| | `faer-kernels` (small) | `faer-kernels-large`, 1024 tier |
+| | `colmat-kernels` (small) | `colmat-kernels-large`, 1024 tier |
 | --- | --- | --- |
 | question | *has anything regressed* - the whole family list at every thread budget | *does the result hold at scale* - the first size whose working set leaves the cache |
 | shapes | squares 32-512, tall/wide up to `4096x256` | `1024`, `1024^3`, and the boundary shapes `255/257/511/513` |

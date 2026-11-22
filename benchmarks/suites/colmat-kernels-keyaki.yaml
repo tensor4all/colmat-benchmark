@@ -1,9 +1,9 @@
 schema_version: 1
-id: faer-kernels-keyaki
+id: colmat-kernels-keyaki
 description: >-
-  keyaki-64 (tensor4all/colmat-benchmark#100): the faer-kernels populations at 16/32/60T, f64 and c64, MKL arm only. One suite per profile, as the ohtaka suites do, because the toolkit reads only `runs[0]` and pairs its threads with its cpu sets by position.
-    The faer entry points themselves, measured at faer's own API: the fork
-  (`t4a-faer`, lib name `faer`) and upstream `faer` are separate dependency keys
+  keyaki-64 (tensor4all/colmat-benchmark#100): the colmat-kernels populations at 16/32/60T, f64 and c64, MKL arm only. One suite per profile, as the ohtaka suites do, because the toolkit reads only `runs[0]` and pairs its threads with its cpu sets by position.
+    The colmat and upstream faer entry points themselves, measured at their own
+  API: colmat (the fork, lib name `colmat`) and upstream `faer` are separate dependency keys
   in the harness, so they are separate engine rows in one binary, and the
   LAPACK/BLAS vendor arms link their own separate binaries. Rows are declared as
   populations (regime x family group x shape grid x order x thread budget), not
@@ -12,13 +12,13 @@ description: >-
   of the same family measure the same work:
   `gemm` is `linalg::matmul::matmul` into a caller-prepared destination with
   `Accum::Replace`; `qr_factor` is the compact `qr_in_place`; `qr` is the
-  composite returning explicit Q and R on both sides: the faer rows time
+  composite returning explicit Q and R on both sides: the colmat and faer rows time
   `qr_in_place` followed by the block-Householder apply into a prepared `Q`, and
   the vendor row times `geqrf_work` followed by `ormqr_work` into a prepared
   identity block, so `R` is the factor buffer's upper trapezoid and `Q` is the
   compact `m x min(m, n)` factor that this suite's own check consumes -- not the
   full `m x m` completion, which on a tall shape is eight times the work and is
-  not what either row would be buying. The faer rows also keep the owning call
+  not what either row would be buying. The colmat and faer rows also keep the owning call
   (`qr`, returning owned Q and R) as a labelled `api-inclusive` row: it is the
   call a user makes, and it is published beside the primary rows, never divided
   against a vendor row;
@@ -39,7 +39,7 @@ invalidated_by:
   - Cargo.toml
   - Cargo.lock
 stale_after: 20
-# Empty until the first (zen5-cpu, faer-kernels) cell exists: `missing` is a
+# Empty until the first (zen5-cpu, colmat-kernels) cell exists: `missing` is a
 # normal state for a cell with no run, and it becomes an error only for a profile
 # listed as required. The first recorded cell moves `zen5-cpu` in here.
 required_profiles:
@@ -73,9 +73,9 @@ family_groups:
 
 # What the workload is, in a form the result page can print.
 workloads:
-  name: faer dense kernels and decompositions
+  name: colmat dense kernels and decompositions, with upstream faer
   description: >-
-    Direct calls into one faer revision: square and rectangular dense matrices,
+    Direct calls into one colmat revision and its upstream faer baseline: square and rectangular dense matrices,
     C (row-major) and F (column-major) order, `f64` and `c64`. A shape is `N` for
     square, `MxN` for rectangular, or `MxKxN` for `gemm`, which is a three-index
     operation and cannot be written as two. Sizes are the matrix dimensions, not
@@ -90,9 +90,9 @@ workloads:
     seeded from the case, so `verify` and `run` measure the same matrices and a
     rerun is reproducible.
   known_blind_spots:
-    - "Only the faer entry points are measured. tlinalg's packing, batch loop and lane policy, tenferro's tensor construction and dtype dispatch, and the small-`m` decode-projection shapes are other repositories' rows (tlinalg-benchmark, tenferro-benchmark)."
-    - "No row allocates inside its timed `run`: the vendor row calls LAPACKE's `_work` entry points with a workspace the op allocated in `prepare`, and the faer rows call their in-place/`*_into` routes on a prepared matrix, prepared rights and a `MemStack` sized by the library's own `*_scratch`. A vendored driver family is measured column-major only, because LAPACKE's row-major path allocates a transposed copy and transposes in and out of it inside the call in every `_work` variant; a C-order cell of such a family is recorded `skipped` with that reason rather than charged a conversion the faer row does not pay. `gemm` keeps both orders (CBLAS's row-major entry point moves no data)."
-    - "The owning faer routes (`PartialPivLu::new`, `Llt::new`, `qr`, `gesdd`/`syevd` wrappers, `partial_piv_lu().solve()`) allocate their outputs and their scratch inside the timed call. They are kept, as the call a user makes, but labelled `api-inclusive` and published as a separate secondary table: an `api-inclusive` row is never divided against a vendor row, whose route is the prepared one."
+    - "Only the colmat and faer entry points are measured. tlinalg's packing, batch loop and lane policy, tenferro's tensor construction and dtype dispatch, and the small-`m` decode-projection shapes are other repositories' rows (tlinalg-benchmark, tenferro-benchmark)."
+    - "No row allocates inside its timed `run`: the vendor row calls LAPACKE's `_work` entry points with a workspace the op allocated in `prepare`, and the colmat and faer rows call their in-place/`*_into` routes on a prepared matrix, prepared rights and a `MemStack` sized by the library's own `*_scratch`. A vendored driver family is measured column-major only, because LAPACKE's row-major path allocates a transposed copy and transposes in and out of it inside the call in every `_work` variant; a C-order cell of such a family is recorded `skipped` with that reason rather than charged a conversion the colmat row does not pay. `gemm` keeps both orders (CBLAS's row-major entry point moves no data)."
+    - "The owning colmat/faer routes (`PartialPivLu::new`, `Llt::new`, `qr`, `gesdd`/`syevd` wrappers, `partial_piv_lu().solve()`) allocate their outputs and their scratch inside the timed call. They are kept, as the call a user makes, but labelled `api-inclusive` and published as a separate secondary table: an `api-inclusive` row is never divided against a vendor row, whose route is the prepared one."
     - "A library's own allocation inside a timed call is not visible to the harness's allocator probe when it happens in C: LAPACKE's non-`_work` wrappers reach libc `malloc` through `LAPACKE_malloc`. That route is not used by this harness (the probe would not see it), so the `_work` entry points are enforced by construction and by the column-major rule, not by the probe."
     - "`gemm` covers the tall class's two Householder legs (a 16-wide basis and a 240-column target over 4096 rows: the reduction and the write-back) beside a vendor `?gemm` on the same leg. A single leg beside a vendor gemm is a diagnostic reference, not the equivalent implementation of the whole update, and the row is labelled accordingly."
     - "`householder_apply` measures block apply and the one-block sequence form as two distinct rows, labelled with basis width min(m,n) and target width n. QR fixture preparation is outside timing. Independently varied basis/target widths and multi-panel sequences are not covered."
@@ -105,8 +105,8 @@ workloads:
 # One entry per engine name the harness emits. A result page explains every
 # column from this, so a reader needs no context beyond the page.
 engines_doc:
-  faer-fork:
-    provider: faer-fork
+  colmat:
+    provider: colmat
     summary: >-
       The measured library: the tensor4all fork (`colmat`, `[lib] name = "colmat"`)
       at the checkout the harness linked by path. This is the row the campaign
@@ -114,7 +114,7 @@ engines_doc:
       changes land here.
     identity: >-
       the fork revision in this run's manifest (`library.commit`), pinned by
-      `pins/t4a-faer.rev`
+      `pins/colmat.rev`
     caveat: >-
       The fork crate is `colmat` (`[lib] name = "colmat"`); the upstream baseline is
       `faer` (`faer_upstream = { package = "faer" }`). They are distinct Rust crate
@@ -125,8 +125,8 @@ engines_doc:
       measured at 93da6217, colmat-rs main at the 2026-11-17 head: no tag names that
       revision, and the published crates.io colmat 0.34.0 was cut from e1c83482.
       The 2026-11-17 zen5-cpu recordings were taken at this revision.
-  faer-upstream:
-    provider: faer-upstream
+  faer:
+    provider: faer
     summary: >-
       Upstream `faer` at the tag the fork is based on, in the same binary as the
       fork row. The baseline that says whether a fork change moved the number.
@@ -134,7 +134,7 @@ engines_doc:
       the upstream revision in this run's manifest (`upstream.commit`), pinned by
       `pins/upstream-faer.rev`
     caveat: >-
-      Same crate-name and feature-unification caveat as `faer-fork`. A change to
+      Same crate-name and feature-unification caveat as `colmat`. A change to
       upstream at a fixed fork revision produces a different page rather than
       overwriting one.
   lapack-openblas:
@@ -207,7 +207,7 @@ runs:
     # measurements: provider-native allocations may include padding, and physical
     # strides are not columns in the CSV.
     order: [c, f]
-    engines: [faer-fork, faer-upstream, lapack-mkl]
+    engines: [colmat, faer, lapack-mkl]
     populations:
       - regime: gemm-small
         groups: [gemm]

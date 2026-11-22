@@ -9,8 +9,8 @@ every result page and the charts declared in `benchmarks/campaign.yaml` (`figure
 toolkit's (`campaign_toolkit.site`). The throughput charts are one page per recorded
 `(dtype, order)` dataset (`result/throughput-<dtype>-<order>.html`, `benchmarks/throughput.yaml`
 `variants:`), linked from the landing page instead of carried on it. What is this campaign's own is the four-way view: the MKL and
-OpenBLAS arms (and, on AMD profiles once recorded, the AOCL arm) of the current `faer-kernels` pages joined on the cell key by `gen_comparison.py`,
-written to `result/zen5-cpu/faer-kernels/<rev12>-comparison.html` and linked from the landing page.
+OpenBLAS arms (and, on AMD profiles once recorded, the AOCL arm) of the current `colmat-kernels` pages joined on the cell key by `gen_comparison.py`,
+written to `result/zen5-cpu/colmat-kernels/<rev12>-comparison.html` and linked from the landing page.
 
 The site is not written when the pin has no current recording (`campaign_toolkit.pin_recorded`,
 the same rule as `gen_index --check`): a landing page that says nothing is recorded at the pin while
@@ -32,8 +32,8 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import gen_comparison  # noqa: E402
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-PIN = 'pins/t4a-faer.rev'   # historical name; it holds the colmat revision since the 2026-11-17 rename
-SUITE = 'faer-kernels'
+PIN = 'pins/colmat.rev'
+SUITE = 'colmat-kernels'
 # Read from the current arms' manifests, not restated here: a constant outlived the last
 # publication (harness commit, toolkit commit, vendor kernel, coverage) and the reader had no
 # way to tell.
@@ -55,7 +55,7 @@ def limitation_text():
 
 
 def current_arms():
-    """{vendor: run dir} of the current `faer-kernels` pages (the index's own rule), and the newest
+    """{vendor: run dir} of the current `colmat-kernels` pages (the index's own rule), and the newest
     MKL run of an earlier revision, which states the unchanged row's control."""
     descriptor.set_root(ROOT)
     found = gen_index.collect()
@@ -64,6 +64,8 @@ def current_arms():
     arms = {vendor: page['run_dir'] for vendor, page in pages.items()}
     revision = pages['mkl']['commit'] if 'mkl' in pages else None
     # history is newest first; the control is the newest MKL arm of another revision
+    # `r['suite']` is the suite's current id (the index reads runs recorded under `faer-kernels`
+    # into this suite's cell), so the history includes them.
     earlier = [r for r in history if r['suite'] == SUITE and r['vendor'] == 'mkl' and r['commit'] != revision]
     control = earlier[0]['run_dir'] if earlier else None
     return arms, control
@@ -252,7 +254,7 @@ def main(argv=None):
     arms, _control = current_arms()
     extra = provenance_html(arms)
     extra += f'<p><strong>Known limitation:</strong> {html.escape(limitation_text())}</p>\n'
-    # The pages below were recorded by a harness that charged the vendor arms for work the faer arms
+    # The pages below were recorded by a harness that charged the vendor arms for work the colmat arms
     # avoided (#74), so their vendor ratios are not library comparisons. The joined view withdraws
     # those cells (gen_comparison.FAIR_HARNESS); a reader who lands here must not have to infer it
     # from a column, so the landing page says it too -- and stops saying it once the current pages
@@ -261,9 +263,9 @@ def main(argv=None):
            for arm in arms.values()):
         extra += (
             '<h2>Vendor comparisons are withdrawn</h2>\n'
-            '<p>The harness that recorded these pages charged the vendor arms more than the faer arms:\n'
+            '<p>The harness that recorded these pages charged the vendor arms more than the colmat arms:\n'
             'a LAPACKE workspace, output copies and layout transposes inside the timed call, where the\n'
-            'faer rows ran prepared. A <code>MKL/fork</code> or <code>OpenBLAS/fork</code> cell on these\n'
+            'colmat rows ran prepared. A <code>MKL/colmat</code> or <code>OpenBLAS/colmat</code> cell on these\n'
             'pages is therefore not a library comparison. The four-way view marks those cells\n'
             '<em>withdrawn</em>; <a href="https://github.com/tensor4all/colmat-benchmark/blob/main/'
             'docs/dataset-status.md">docs/dataset-status.md</a> is the status of record; the harness\n'

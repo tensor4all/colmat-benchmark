@@ -44,11 +44,11 @@ class CandidateCliTest(unittest.TestCase):
         self.git('-c', 'user.name=fixture', '-c', 'user.email=fixture@example.invalid',
                  '-c', 'commit.gpgsign=false', 'commit', '-qm', 'fixture')
         commit = self.git('rev-parse', 'HEAD').strip()
-        suite_file = self.root / 'benchmarks/suites/faer-kernels.yaml'
+        suite_file = self.root / 'benchmarks/suites/colmat-kernels.yaml'
         suite = yaml.safe_load(suite_file.read_text())
         suite['family_groups']['factor'] = ['lu']
         suite['runs'] = [{'threads': [1], 'cpu_sets': ['0'], 'dtypes': ['f64', 'c64'],
-                          'order': ['c'], 'engines': ['faer-fork', 'faer-upstream'],
+                          'order': ['c'], 'engines': ['colmat', 'faer'],
                           'populations': [
                               {'regime': 'gemm-small', 'groups': ['gemm'],
                                'n': ['32x32x32'], 'batch': [1]},
@@ -56,6 +56,8 @@ class CandidateCliTest(unittest.TestCase):
                                'n': ['32'], 'batch': [1]}]}]
         suite_file.write_text(yaml.safe_dump(suite))
         self.manifest = yaml.safe_load(TEMPLATE.read_text())
+        # The template was recorded before #113; the synthetic runs use the current names.
+        self.manifest.update(suite_id='colmat-kernels', suite_file='benchmarks/suites/colmat-kernels.yaml')
         self.manifest['suite_sha256'] = hashlib.sha256(suite_file.read_bytes()).hexdigest()
         for identity in ('library', 'upstream', 'harness', 'toolkit'):
             self.manifest[identity].update(commit=commit, dirty=False)
@@ -66,7 +68,7 @@ class CandidateCliTest(unittest.TestCase):
         self.manifest['threads'].update(counts=[1], cpu_sets={'1': '0'})
         self.manifest['run_spec'] = {
             'aa': 2, 'dtypes': ['f64', 'c64'], 'order': ['c'],
-            'engines': ['faer-fork', 'faer-upstream'], 'covers_declared_suite': True,
+            'engines': ['colmat', 'faer'], 'covers_declared_suite': True,
             'populations': [{'regime': 'gemm-small', 'families': ['gemm'],
                              'n': ['32x32x32'], 'batch': [1]},
                             {'regime': 'linalg-small', 'families': ['lu'],
@@ -96,9 +98,9 @@ class CandidateCliTest(unittest.TestCase):
             for engine in engines:
                 for dtype in dtypes:
                     for family, regime, k in (('gemm', 'gemm-small', '32'), ('lu', 'linalg-small', '')):
-                        skipped = skip_lu and engine == 'faer-upstream' and family == 'lu'
+                        skipped = skip_lu and engine == 'faer' and family == 'lu'
                         timed = repeat is not None and not skipped
-                        value = fork_ms if engine == 'faer-fork' else 20
+                        value = fork_ms if engine == 'colmat' else 20
                         rows.append(dict(zip(FIELDS, [regime, family, dtype, 'c', '32', '32', k,
                             '1', engine, '1', 'unsupported' if skipped else '',
                             'skipped' if skipped else 'ok', json.dumps([value] * 5) if timed else '',

@@ -2,7 +2,7 @@
 """Compare a candidate run against a recorded baseline run (candidate mode).
 
     scripts/candidate_compare.py --baseline <run dir> --candidate <run dir> \
-        [--control-engine faer-upstream] [--fork-engine faer-fork] [--cells a,b] [--json out]
+        [--control-engine faer] [--fork-engine colmat] [--cells a,b] [--json out]
 
 Refuses the comparison - exit 1 - when either run is not valid evidence, when the machine, the
 declaration or the harness/toolkit identity changed, when the in-run control row no longer
@@ -120,11 +120,11 @@ def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument('--baseline', required=True, type=pathlib.Path)
     ap.add_argument('--candidate', required=True, type=pathlib.Path)
-    ap.add_argument('--control-engine', default='faer-upstream')
-    ap.add_argument('--fork-engine', default='faer-fork')
+    ap.add_argument('--control-engine', default='faer')
+    ap.add_argument('--fork-engine', default='colmat')
     ap.add_argument('--cells', default=None, help='comma separated substrings of the declared subset')
     ap.add_argument('--json', type=pathlib.Path, default=None)
-    ap.add_argument('--checkout', type=pathlib.Path, default=ROOT / 'extern/t4a-faer',
+    ap.add_argument('--checkout', type=pathlib.Path, default=ROOT / 'extern/colmat',
                     help='the checkout that carries both the measured and the merged revision')
     ap.add_argument('--merged-commit', default=None,
                     help='the revision the candidate was merged into; the comparison is refused when '

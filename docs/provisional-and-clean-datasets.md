@@ -28,7 +28,7 @@ SHA-256, host block including the power state).
 ## The day the measurement host arrives
 
 1. Add its profile with `role: measurement` (CPU, L3 domains, thread sets), and its pins.
-2. Materialise `extern/` at the adopted revisions and record `faer-kernels` and `faer-kernels-large` for
+2. Materialise `extern/` at the adopted revisions and record `colmat-kernels` and `colmat-kernels-large` for
    both arms; the recorder rebuilds and re-verifies by itself.
 3. Publish; the index then holds both the provisional development-host pages and the measurement-host
    dataset, each self-describing through `host.role`.
