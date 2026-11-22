@@ -3,6 +3,9 @@
 # large suite on MKL and AOCL (the large OpenBLAS arm is omitted by decision, see the bottom of this file).
 # The site is built by the Pages workflow from what this wrote.
 #
+# The OpenBLAS arm records cholesky, lu, solve and gemm only (suite `vendor_families`, #111); the recorder
+# reads that from the suite, so the commands below carry no family list. MKL and AOCL record every family.
+#
 # AOCL is AMD's own LAPACK stack and every profile this routine records (zen5-cpu) is an AMD host, so the
 # AOCL arm runs here (#95; its cost, about 3/2 of the two-arm time, is accepted). A host with no AOCL
 # install (scripts/resolve_aocl_root.sh finds none) skips both AOCL arms with the reason printed and
