@@ -16,10 +16,10 @@ import unittest
 
 import yaml
 
-from campaign_toolkit import candidate, descriptor, gen_index, validate_run
+from campaign_toolkit import candidate, descriptor, validate_run
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-# The current MKL arm of the daily suite, recorded under the pre-rename file.
+# The 2026-11-20 MKL arm of the daily suite, recorded under the last pre-rename file.
 BASELINE = ROOT / 'data/results/zen5-cpu/faer-kernels/20261120T064812Z-pub-93da6217-20261120-mkl'
 
 
@@ -27,16 +27,15 @@ class RenameAliasesTest(unittest.TestCase):
     def setUp(self):
         descriptor.set_root(ROOT)
 
-    def test_every_current_page_keeps_its_declaration_checks(self):
-        # Every run behind a current page whose recorded declaration hash is the last pre-rename
-        # file (aliases.suite_sha256) is checked against the renamed declaration, not skipped.
-        found = gen_index.collect()
-        current, _ = gen_index.split_pages(found['pages'], found['declared'], found['resolved'])
+    def test_runs_under_the_pre_rename_declaration_keep_their_declaration_checks(self):
+        # Every committed run whose recorded declaration hash is a pre-rename file named in
+        # aliases.suite_sha256 is checked against the renamed declaration, not skipped as drifted.
+        # Selected by hash, not by "current page": a later re-recording moves the current page to a
+        # new run without making this any less true of these runs.
         aliased = set(descriptor.current().aliases['suite_sha256'])
-        runs = [pathlib.Path(c['page']['run_dir']) for c in current if c['page']]
-        runs = [r for r in runs if yaml.safe_load((r / 'run.yaml').read_text())['suite_sha256'] in aliased]
-        self.assertGreaterEqual(len(runs), 7)
-        self.assertIn(BASELINE, runs)
+        runs = [m.parent for m in sorted((ROOT / 'data/results').glob('*/*/*/run.yaml'))
+                if yaml.safe_load(m.read_text()).get('suite_sha256') in aliased]
+        self.assertIn(BASELINE, runs)       # a committed recording; recordings are never removed
         for run in runs:
             with self.subTest(run=run.name), contextlib.redirect_stderr(io.StringIO()) as err:
                 self.assertEqual(validate_run.validate(str(run / 'run.yaml')), [])

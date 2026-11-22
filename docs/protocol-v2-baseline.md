@@ -30,7 +30,7 @@ checkouts; those pages are not evidence about `bfe4041` and were not re-recorded
 | `--statistic` | `median` |
 | Coverage | the declared suite, fully: all populations, `f64`+`c64`, order `c`+`f`, batch 1, threads 1/4/8 |
 | Small-shape grids | `gemm-small` and `linalg-small` are declared as **8, 64** only: their 4T/8T cells were measured to be thread-region dominated (gemm 32^3 pays a constant +8 to +11 us at 4T/8T; 4^3 never enters a parallel path; MKL +0.3-0.8 us), so they are not worth the machine time at every budget |
-| Rows per arm | MKL: `colmat`, `faer`, `lapack-mkl` (`--engines`/`--rows`). OpenBLAS: `colmat`, `lapack-openblas`. The duplicated colmat rows differ by 2% median (26% worst, the known rotation bump) between arms, so the fork/upstream pair is kept in one arm and the vendor pair in both |
+| Rows per arm | MKL: `colmat`, `faer`, `lapack-mkl` (`--engines`/`--rows`). OpenBLAS: `colmat`, `lapack-openblas`. The colmat row, measured in both arms, differs by 2% median (26% worst, the known rotation bump) between arms, so the fork/upstream pair is kept in one arm and the vendor pair in both |
 
 ## 2. Frozen machine preconditions (enforced, not remembered)
 
