@@ -13,7 +13,7 @@ It is not the baseline and no optimization is adopted from the old scans.
 
 The re-record uses exactly one clean checkout per library:
 
-- `extern/t4a-faer`: `bfe4041cd9918815e3b3f766ac0332b792badb7d`.
+- `extern/colmat`: `bfe4041cd9918815e3b3f766ac0332b792badb7d`.
 - `extern/upstream-faer`: `0539947ffb757a739d7e703a7d2fa0c792a909c1`.
 
 Both vendor builds link these same paths/revisions. The faer adapters share a
