@@ -1,0 +1,253 @@
+schema_version: 1
+id: faer-kernels-keyaki-os-shared
+description: >-
+  keyaki-64-os-shared (#100): the same populations at 64T on every core, with the explicit os-shared override; the cell is not comparable with the 60T row of faer-kernels-keyaki. MKL arm only.
+    The faer entry points themselves, measured at faer's own API: the fork
+  (`t4a-faer`, lib name `faer`) and upstream `faer` are separate dependency keys
+  in the harness, so they are separate engine rows in one binary, and the
+  LAPACK/BLAS vendor arms link their own separate binaries. Rows are declared as
+  populations (regime x family group x shape grid x order x thread budget), not
+  one Cartesian product over every family and size, because a universal product
+  is dominated by priming alone. Each family names the call it makes, so two runs
+  of the same family measure the same work:
+  `gemm` is `linalg::matmul::matmul` into a caller-prepared destination with
+  `Accum::Replace`; `qr_factor` is the compact `qr_in_place`; `qr` is the
+  composite returning explicit Q and R on both sides: the faer rows time
+  `qr_in_place` followed by the block-Householder apply into a prepared `Q`, and
+  the vendor row times `geqrf_work` followed by `ormqr_work` into a prepared
+  identity block, so `R` is the factor buffer's upper trapezoid and `Q` is the
+  compact `m x min(m, n)` factor that this suite's own check consumes -- not the
+  full `m x m` completion, which on a tall shape is eight times the work and is
+  not what either row would be buying. The faer rows also keep the owning call
+  (`qr`, returning owned Q and R) as a labelled `api-inclusive` row: it is the
+  call a user makes, and it is published beside the primary rows, never divided
+  against a vendor row;
+  `upgrade_factor` is the public but
+  `#[doc(hidden)]` `upgrade_householder_factor`; `householder_apply` is the
+  block apply and the one-block sequence form, as two rows, with basis width
+  min(m,n) and target width n; QR fixture preparation is outside timing.
+  The rest are the corresponding public composite.
+# Only paths in the *measured* fork whose change can alter a measured result. The
+# harness and the timing protocol live in this repository, not in the fork, so
+# they cannot appear here; see docs/results.md for how a harness change is
+# recorded. Deliberately not `docs/**` or `tests/**`: an edit there does not make
+# a measurement stale.
+invalidated_by:
+  - faer/src/**
+  - faer-traits/src/**
+  - faer-macros/src/**
+  - Cargo.toml
+  - Cargo.lock
+stale_after: 20
+# Empty until the first (zen5-cpu, faer-kernels) cell exists: `missing` is a
+# normal state for a cell with no run, and it becomes an error only for a profile
+# listed as required. The first recorded cell moves `zen5-cpu` in here.
+required_profiles:
+  - keyaki-64-os-shared
+optional_profiles: []
+
+# Family groups. A group is a set of families worth measuring on the same shape
+# grid; the runs below say which groups are measured per regime. A family whose
+# declared shape a provider cannot take is emitted by the harness as `skipped`
+# and recorded in the run's own CSV, never dropped silently.
+family_groups:
+  gemm:
+    - gemm
+  factor:
+    - lu
+    - full_piv_lu
+    - cholesky
+    - triangular_solve
+    - solve
+  decompose:
+    - qr_factor
+    - qr
+    - svd_values
+    - svd_thin
+    - eigh
+  heavy:
+    - eig
+  householder:
+    - upgrade_factor
+    - householder_apply
+
+# What the workload is, in a form the result page can print.
+workloads:
+  name: faer dense kernels and decompositions
+  description: >-
+    Direct calls into one faer revision: square and rectangular dense matrices,
+    C (row-major) and F (column-major) order, `f64` and `c64`. A shape is `N` for
+    square, `MxN` for rectangular, or `MxKxN` for `gemm`, which is a three-index
+    operation and cannot be written as two. Sizes are the matrix dimensions, not
+    a memory budget, so a case name says exactly what was factored. `gemm`
+    measures `linalg::matmul::matmul` into a caller-prepared destination with
+    `Accum::Replace`; there is no operator path, so one shape is one work.
+  source: >-
+    The fork's own public API (`faer/src/linalg`): `matmul`, the QR factor and
+    composite, `upgrade_householder_factor`, the block/sequence Householder
+    apply, LU and full-pivot LU, Cholesky, triangular solve, solve, thin SVD,
+    singular values and the symmetric/nonsymmetric eigensolvers. Inputs are
+    seeded from the case, so `verify` and `run` measure the same matrices and a
+    rerun is reproducible.
+  known_blind_spots:
+    - "Only the faer entry points are measured. tlinalg's packing, batch loop and lane policy, tenferro's tensor construction and dtype dispatch, and the small-`m` decode-projection shapes are other repositories' rows (tlinalg-benchmark, tenferro-benchmark)."
+    - "No row allocates inside its timed `run`: the vendor row calls LAPACKE's `_work` entry points with a workspace the op allocated in `prepare`, and the faer rows call their in-place/`*_into` routes on a prepared matrix, prepared rights and a `MemStack` sized by the library's own `*_scratch`. A vendored driver family is measured column-major only, because LAPACKE's row-major path allocates a transposed copy and transposes in and out of it inside the call in every `_work` variant; a C-order cell of such a family is recorded `skipped` with that reason rather than charged a conversion the faer row does not pay. `gemm` keeps both orders (CBLAS's row-major entry point moves no data)."
+    - "The owning faer routes (`PartialPivLu::new`, `Llt::new`, `qr`, `gesdd`/`syevd` wrappers, `partial_piv_lu().solve()`) allocate their outputs and their scratch inside the timed call. They are kept, as the call a user makes, but labelled `api-inclusive` and published as a separate secondary table: an `api-inclusive` row is never divided against a vendor row, whose route is the prepared one."
+    - "A library's own allocation inside a timed call is not visible to the harness's allocator probe when it happens in C: LAPACKE's non-`_work` wrappers reach libc `malloc` through `LAPACKE_malloc`. That route is not used by this harness (the probe would not see it), so the `_work` entry points are enforced by construction and by the column-major rule, not by the probe."
+    - "`gemm` covers the tall class's two Householder legs (a 16-wide basis and a 240-column target over 4096 rows: the reduction and the write-back) beside a vendor `?gemm` on the same leg. A single leg beside a vendor gemm is a diagnostic reference, not the equivalent implementation of the whole update, and the row is labelled accordingly."
+    - "`householder_apply` measures block apply and the one-block sequence form as two distinct rows, labelled with basis width min(m,n) and target width n. QR fixture preparation is outside timing. Independently varied basis/target widths and multi-panel sequences are not covered."
+    - "A copy a library makes inside its own call is that library's cost, and it is never divided against a vendor row: on a row-major matrix the fork's LU factors into a column-major copy it allocates (`lu/partial_pivoting/factor.rs:396-418`), and a row-major cell of a vendored driver family is a `skipped` cell, so no vendor ratio is formed there. Allocation performed inside the measured call stays inside the clock, and no _primary_ row does it. The fork's two row splits allocate their partial buffers inside the public call and the public scratch function does not expose them; that is the fork's cost, charged to the fork, and the owning routes that pay it are published as `api-inclusive` rows rather than divided against a vendor row."
+    - "`cholesky`, `eigh`, `solve` and `triangular_solve` are measured on square shapes only: the matrix they factor or solve with is square by definition (self-adjoint for the first two, a triangular factor for the last). `lu` and `full_piv_lu` are not gated that way -- they take the declared rectangular shapes too, with `min(m, n)` pivots and a trapezoidal `L` or `U`, which is what `dgetrf` does as well -- so a rectangular LU cell is measured in both orders beside its square one."
+    - "`f32`/`c32` are declared and measured as of `docs/harness-dtype-axis.md`; the vendor arm has a route for `gemm` in those two dtypes and reports the LAPACK families as skipped for them. The large regime's 1024 shapes, BLIS, sparse, iterative and GPU arms are later declarations, not machinery built now."
+    - "A vendor arm records the library it linked. OpenBLAS and AOCL report the kernel their runtime dispatched to (AOCL for BLIS and libflame separately); MKL names no kernel and no processor count, so its manifest leaves both empty rather than inferring them."
+    - "Known limitation: Coverage is the declared grid: f64/c64/f32/c32 at 1/4/8T for the small suite, f64/c64 at 4/8T for the large suite's 1024/1536 + boundary tier; the adoption-only 2048/3072/4096 tiers are not measured."
+
+# One entry per engine name the harness emits. A result page explains every
+# column from this, so a reader needs no context beyond the page.
+engines_doc:
+  faer-fork:
+    provider: faer-fork
+    summary: >-
+      The measured library: the tensor4all fork (`colmat`, `[lib] name = "colmat"`)
+      at the checkout the harness linked by path. This is the row the campaign
+      exists for; the fork's three perf experiments and the two correctness
+      changes land here.
+    identity: >-
+      the fork revision in this run's manifest (`library.commit`), pinned by
+      `pins/t4a-faer.rev`
+    caveat: >-
+      The fork crate is `colmat` (`[lib] name = "colmat"`); the upstream baseline is
+      `faer` (`faer_upstream = { package = "faer" }`). They are distinct Rust crate
+      identities, but their `Mat`, `Par` and trait types are not interchangeable:
+      every adapter is written per arm, and shared transitive dependencies can unify
+      Cargo features, so both arms declare equivalent feature sets and the resolved
+      lock is recorded.
+      measured at 93da6217, colmat-rs main at the 2026-11-17 head: no tag names that
+      revision, and the published crates.io colmat 0.34.0 was cut from e1c83482.
+      The 2026-11-17 zen5-cpu recordings were taken at this revision.
+  faer-upstream:
+    provider: faer-upstream
+    summary: >-
+      Upstream `faer` at the tag the fork is based on, in the same binary as the
+      fork row. The baseline that says whether a fork change moved the number.
+    identity: >-
+      the upstream revision in this run's manifest (`upstream.commit`), pinned by
+      `pins/upstream-faer.rev`
+    caveat: >-
+      Same crate-name and feature-unification caveat as `faer-fork`. A change to
+      upstream at a fixed fork revision produces a different page rather than
+      overwriting one.
+  lapack-openblas:
+    provider: openblas
+    summary: >-
+      CBLAS `?gemm` plus LAPACK drivers linked against OpenBLAS: vendor calls and
+      their marshalling, vendor-owned threading. The vendor's own thread budget
+      is set by the harness before the row and read back, and the vendor identity
+      and the dispatched kernel are recorded in the manifest.
+    identity: the OpenBLAS build recorded in this run's manifest (`providers[openblas]`)
+    caveat: >-
+      LAPACK and BLAS own their threading, so this row's thread budget is the
+      vendor's, not the harness pool's. Where a family has no LAPACK route the
+      row is absent and the CSV says the case was skipped for it.
+  lapack-mkl:
+    provider: mkl
+    summary: >-
+      The same calls against Intel oneAPI MKL, linked from the installation
+      `MKLROOT` names. One binary links one vendor library, so this row is
+      measured by its own build of the harness and recorded as its own run; no
+      page carries two vendor arms. The LP64 interface layer and the threading
+      layer are pinned by the harness before the first MKL call, because MKL
+      otherwise lets the environment choose them and the interface layer is an ABI.
+    identity: the MKL build recorded in this run's manifest (`providers[mkl]`)
+    caveat: >-
+      MKL reports no dispatched-kernel name and no processor count, so its
+      manifest records neither rather than inferring them. Its threading is
+      vendor-owned, as for OpenBLAS.
+  lapack-aocl:
+    provider: aocl
+    summary: >-
+      The same calls against AMD AOCL, the vendor-native LAPACK stack on AMD hosts:
+      LAPACKE from AOCL-LAPACK (`libflame`), CBLAS from the threaded AOCL-BLAS
+      (`libblis-mt`), linked from the versioned tree `AOCL_ROOT` names and loaded
+      through the rpath the build records. One binary links one vendor library, so
+      this row is measured by its own build of the harness and recorded as its own
+      run. Measured on AMD profiles only.
+    identity: the AOCL build recorded in this run's manifest (`providers[aocl]`)
+    caveat: >-
+      One AOCL call is governed by three per-thread counts (OpenMP, BLIS, libflame);
+      the harness sets the budget through OpenMP and refuses the cell unless all
+      three read back equal to it, before each row and after its timed loop. The
+      manifest records both libraries' versions, the files the loader mapped, and
+      the dispatched kernels (`blis=<config>, flame=<isa>`). Threading is
+      vendor-owned, as for OpenBLAS and MKL.
+
+# Populations are sampled as the shape classes the issue names: the ends of each
+# axis, with the middle dropped where it buys nothing. Historical v1 used a 0.5 s
+# priming floor. V2 budgets are explicit in each manifest and are frozen only after
+# representative controls; per-operation priming makes the case count itself a
+# resource cost, so the population is intentionally bounded. `gemm` and the linalg
+# families cannot share one population: a gemm shape is a triple and a linalg
+# shape is not, and the schema's shape grammar is per population. A regime label
+# is therefore the *population's* identity, not a bare shape class, and it must
+# be unique among the populations: the harness's raw-data names, its skip keys
+# and the report's tables are all keyed by it, so two populations under one label
+# would overwrite each other's CSVs. CI asserts uniqueness (see
+# .github/workflows/ci.yml).
+runs:
+  - threads: [64]
+    cpu_sets: {keyaki-64-os-shared: ["0-63"]}
+    # All four native dtypes: `f32`/`c32` reach the same kernels and the harness can
+    # measure them since `docs/harness-dtype-axis.md`. The optimization loop selects the
+    # 64 and 32 cells explicitly; a full run measures the whole grid for every dtype.
+    dtypes: [f64, c64]
+    # C (row-major) and F (column-major) for every case, as a declared axis: faer's
+    # gemm and its Householder paths dispatch differently on layout, and the fork's
+    # row-split gates were chosen on F-order shapes. The order is part of the cell
+    # identity. It names the primary input view's layout, not explicit stride
+    # measurements: provider-native allocations may include padding, and physical
+    # strides are not columns in the CSV.
+    order: [c, f]
+    engines: [faer-fork, faer-upstream, lapack-mkl]
+    populations:
+      - regime: gemm-small
+        groups: [gemm]
+        # Sizes follow faer's own published benchmark distribution (faer-bench tables: powers of
+        # two plus the x1.5 intermediates), minus 4,8,16 which belong to a separate small-matrix
+        # loop bench. linalg-mid keeps only 128/256/512 because the EVD/SVD calls there are the
+        # expensive ones; the 192/384/768 steps stay in the gemm tier and in adoption runs.
+        n: ["32x32x32", "64x64x64", "96x96x96"]
+        batch: [1]
+      - regime: gemm-mid
+        groups: [gemm]
+        n: ["128x128x128", "192x192x192", "256x256x256", "384x384x384", "512x512x512", "768x768x768"]
+        batch: [1]
+      # The tall class carries both legs of the Householder update that
+      # tlinalg-rs#46 separates, because they are different work and the
+      # reduction is the one whose row split was the experiment: with a 16-wide
+      # basis and a 240-column target over 4096 rows, `tmp = V^H C` is
+      # 16x4096x240 and the write-back `C -= V tmp` is 4096x16x240.
+      - regime: gemm-tall
+        groups: [gemm]
+        n: ["4096x64x64", "16x4096x240", "4096x16x240"]
+        batch: [1]
+      - regime: gemm-wide
+        groups: [gemm]
+        n: ["64x64x4096"]
+        batch: [1]
+      - regime: linalg-small
+        groups: [factor, decompose, heavy, householder]
+        # 32/64 are the overhead and regression-check tier; 4,8,16 are not measured here.
+        n: ["32", "64", "96"]
+        batch: [1]
+      - regime: linalg-mid
+        groups: [factor, decompose, heavy, householder]
+        n: ["128", "256", "512"]
+        batch: [1]
+      - regime: linalg-tall
+        groups: [factor, decompose, householder]
+        n: ["1024x64", "4096x256"]
+        batch: [1]
+      - regime: linalg-wide
+        groups: [factor, decompose]
+        n: ["64x1024", "256x4096"]
+        batch: [1]
