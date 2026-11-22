@@ -5,7 +5,7 @@ description: >-
   budget of one ISSP fat node (`c18fat*`, 112 cores, 3 TB): 16, 32, 64 and 112 threads. One
   population per suite, so one population per 30-minute debug-queue allocation (`i1fat`): the whole
   4096 tier with two process sets does not fit 30 minutes, and the LU, Cholesky and QR factor rows
-  are their own suite (`faer-kernels-ohtaka-fat-linalg`). The census runs on the population's 2048
+  are their own suite (`faer-kernels-ohtaka-fat-factor / faer-kernels-ohtaka-fat-qr`). The census runs on the population's 2048
   companion, because one 4096 reference product is minutes of one core. The shapes are written as
   plain sizes: the recorder compares the narrowed grid with the declaration and the validator with
   the census, and the two only agree on the harness's own `2048` form. The 8192 tier is
@@ -28,7 +28,7 @@ invalidated_by:
   - Cargo.toml
   - Cargo.lock
 stale_after: 20
-# Empty until the first (ohtaka-fat, faer-kernels-ohtaka-fat-large) cell exists: `missing` is a
+# Empty until the first (ohtaka-fat, <this suite>) cell exists: `missing` is a
 # normal state for a cell with no run, and it becomes an error only for a profile listed as
 # required. The first recorded cell moves `ohtaka-fat` in here.
 required_profiles: []
@@ -64,7 +64,7 @@ workloads:
     rerun is reproducible.
   known_blind_spots:
     - "Only the faer entry points are measured. tlinalg's packing, batch loop and lane policy, tenferro's tensor construction and dtype dispatch, and the small-`m` decode-projection shapes are other repositories' rows (tlinalg-benchmark, tenferro-benchmark)."
-    - "gemm only: the LU, Cholesky and compact QR factor rows of this profile are `faer-kernels-ohtaka-fat-linalg`, and the 8192 tier is `faer-kernels-ohtaka-fat-xlarge`. Rectangular shapes, the 255/257/511/513 boundary shapes, the Householder apply rows, SVD and the eigensolvers are declared in other suites of this campaign and are not measured here; a reader must not carry a conclusion from this page to those shapes."
+    - "gemm only: the LU, Cholesky and compact QR factor rows of this profile are `faer-kernels-ohtaka-fat-factor / faer-kernels-ohtaka-fat-qr`, and the 8192 tier is `faer-kernels-ohtaka-fat-xlarge`. Rectangular shapes, the 255/257/511/513 boundary shapes, the Householder apply rows, SVD and the eigensolvers are declared in other suites of this campaign and are not measured here; a reader must not carry a conclusion from this page to those shapes."
     - "F (column-major) order only, because the issue fixes it for this profile: the recorder passes `FBENCH_ORDER=f` in the environment of both the census and the timing pass, so the harness emits no C-order cell. A C-order reading of the same sizes is the other ohtaka suite's business, not this one's."
     - "A vendor arm records the library it linked. MKL names no dispatched kernel and no processor count, so its manifest leaves both empty rather than inferring them. C-order vendor cells do not exist here (F order only), which is also the layout where LAPACKE has a route that leaves the clock free of allocation and layout conversion."
     - "The upstream faer row is not measured on this profile: the 2-process-set budget (`--aa 2`) needs a 2-row arm, so only the colmat fork and MKL are measured. The upstream faer revision printed in the page header is the pinned baseline of the campaign, not a measured column."

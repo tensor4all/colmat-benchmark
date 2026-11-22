@@ -5,7 +5,7 @@ description: >-
   on one ISSP fat node (`c18fat*`, 112 cores, 3 TB, B2fat partition), with a 4096 companion that
   carries the verification census, because the census product at 8192 is minutes of one core per
   case. Sized for a 12 h Slurm limit: it does not fit the 30-minute debug queue, which is why the
-  4096 tier is its own suite (`faer-kernels-ohtaka-fat-large`). 112T is the whole node: every core
+  4096 tier is its own suite (`faer-kernels-ohtaka-fat-xlarge`). 112T is the whole node: every core
   is measured, no observer CPU is left, and the row is recorded os-shared. Families: gemm, LU, Cholesky and the compact QR factor, measured at faer's
   own API against Intel oneAPI MKL (the upstream faer row is not measured: the 2-process-set budget
   needs a 2-row arm). This suite is its own page, never joined with the F1cpu `ohtaka-cpu` profile
@@ -23,7 +23,7 @@ invalidated_by:
   - Cargo.toml
   - Cargo.lock
 stale_after: 20
-# Empty until the first (ohtaka-fat, faer-kernels-ohtaka-fat-large) cell exists: `missing` is a
+# Empty until the first (ohtaka-fat, <this suite>) cell exists: `missing` is a
 # normal state for a cell with no run, and it becomes an error only for a profile listed as
 # required. The first recorded cell moves `ohtaka-fat` in here.
 required_profiles: []
@@ -115,7 +115,9 @@ engines_doc:
 # per case at 8192, so the census is narrowed to the 4096 companion cells of every population at
 # every thread budget. A timed process still checks its last call at the cell's own size; see `known_blind_spots`.
 verify:
-  n: ["4096", "4096x4096x4096"]
+  # Plain sizes only: the recorder compares the narrowed grid with the declaration and the
+  # validator with the census, and the two agree on the harness's own form (see the gemm suite).
+  n: ["4096"]
 
 runs:
   - threads: [16, 32, 64, 112]
