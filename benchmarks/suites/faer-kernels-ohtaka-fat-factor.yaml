@@ -1,11 +1,12 @@
 schema_version: 1
-id: faer-kernels-ohtaka-fat-linalg
+id: faer-kernels-ohtaka-fat-factor
 description: >-
-  The ohtaka-fat linalg chunk (colmat-benchmark#101): f64, F order, LU, Cholesky and the compact QR
-  factor at every thread budget of one ISSP fat node (`c18fat*`, 112 cores, 3 TB): 16, 32, 64 and
-  112 threads. One population per suite, so one population per 30-minute debug-queue allocation
-  (`i1fat`): the whole 4096 tier with two process sets does not fit 30 minutes, and the square gemm
-  rows are their own suite (`faer-kernels-ohtaka-fat-gemm`). The census runs on the population's
+  The ohtaka-fat factor chunk (colmat-benchmark#101): f64, F order, LU and Cholesky at every thread
+  budget of one ISSP fat node (`c18fat*`, 112 cores, 3 TB): 16, 32, 64 and 112 threads. One
+  population per suite, so one population per 30-minute debug-queue allocation (`i1fat`): the whole
+  4096 tier with two process sets does not fit 30 minutes, the square gemm rows are
+  `faer-kernels-ohtaka-fat-gemm`, and the compact QR factor is
+  `faer-kernels-ohtaka-fat-qr`. The census runs on the population's
   2048 companion, because one 4096 reference product is minutes of one core. The 8192 tier is
   `faer-kernels-ohtaka-fat-xlarge`, which needs a 12 h B2fat allocation: the per-cell residual check
   at 8192 costs minutes of one core per cell. 112T is the whole node: every core is measured, no
@@ -62,7 +63,7 @@ workloads:
     rerun is reproducible.
   known_blind_spots:
     - "Only the faer entry points are measured. tlinalg's packing, batch loop and lane policy, tenferro's tensor construction and dtype dispatch, and the small-`m` decode-projection shapes are other repositories' rows (tlinalg-benchmark, tenferro-benchmark)."
-    - "LU, Cholesky and the compact QR factor only: the square gemm rows of this profile are `faer-kernels-ohtaka-fat-gemm`, and the 8192 tier is `faer-kernels-ohtaka-fat-xlarge`. Rectangular LU, the 255/257/511/513 boundary shapes, the Householder apply rows, SVD and the eigensolvers are declared in other suites of this campaign and are not measured here; a reader must not carry a conclusion from this page to those shapes."
+    - "LU and Cholesky only: the square gemm rows of this profile are `faer-kernels-ohtaka-fat-gemm`, the compact QR factor is `faer-kernels-ohtaka-fat-qr`, and the 8192 tier is `faer-kernels-ohtaka-fat-xlarge`. Rectangular LU, the 255/257/511/513 boundary shapes, the Householder apply rows, SVD and the eigensolvers are declared in other suites of this campaign and are not measured here; a reader must not carry a conclusion from this page to those shapes."
     - "F (column-major) order only, because the issue fixes it for this profile: the recorder passes `FBENCH_ORDER=f` in the environment of both the census and the timing pass, so the harness emits no C-order cell. A C-order reading of the same sizes is the other ohtaka suite's business, not this one's."
     - "A vendor arm records the library it linked. MKL names no dispatched kernel and no processor count, so its manifest leaves both empty rather than inferring them. C-order vendor cells do not exist here (F order only), which is also the layout where LAPACKE has a route that leaves the clock free of allocation and layout conversion."
     - "The upstream faer row is not measured on this profile: the 2-process-set budget (`--aa 2`) needs a 2-row arm, so only the colmat fork and MKL are measured. The upstream faer revision printed in the page header is the pinned baseline of the campaign, not a measured column."
@@ -73,7 +74,7 @@ workloads:
       `host.power`, and records the deviation instead of refusing. A boost-off comparison needs the
       switch turned off by the operator and another run of this suite."
     - "Machine state not shown elsewhere: the fat node's layout is 4 sockets of 28 cores, 4 NUMA nodes with CPUs interleaved across them by stride 4, SMT off, 39424 KiB of L3 per socket, 774 GB of memory per node (see the profile for how each row's CPUs are named). Its cpufreq exposes turbo and the governor, so the recorder records the power state from sysfs. Timing settings are reps 3, 2 process sets, priming 100 ms, below the 250 ms of the frozen v2 baseline (150 ms was rejected there because one cell read about 3% fast), so single cells may read a few percent fast."
-    - "Known limitation: Coverage is the declared grid only (see `runs`): LU, Cholesky and QR factor at the sizes and thread budgets of the ohtaka-fat profile."
+    - "Known limitation: Coverage is the declared grid only (see `runs`): LU and Cholesky at the sizes and thread budgets of the ohtaka-fat profile."
     - "Residual-check coverage narrowed: the verification census (`verify`) covers the population's 2048 cells at every thread budget, not its 4096 cells. The reference product is the harness's single-threaded cache-blocked loop on this harness revision, so one 4096 case costs minutes and a 4096 census would not fit the 30-minute queue. A timed process also checks the result of its last timed call at the cell's own size (the harness's `timing::measure` ends in the cell's check), so a wrong 4096 result fails its row, but that check records no residual and is not part of the census. Where this page says every timed cell matches a verification census, read it with this limit."
 
 # One entry per engine name the harness emits. A result page explains every
@@ -142,7 +143,7 @@ runs:
     # here; the F1cpu ohtaka suites use OpenBLAS, so their vendor rows do not compare with these).
     engines: [faer-fork, lapack-mkl]
     populations:
-      - regime: linalg-ohtaka-fat
-        groups: [factor, decompose]
+      - regime: factor-ohtaka-fat
+        groups: [factor]
         n: ["2048", "4096"]
         batch: [1]
