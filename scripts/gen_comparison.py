@@ -43,14 +43,16 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 COLMAT, FAER = 'colmat', 'faer'
 
 
-def campaign():
-    """This repository's descriptor (its `aliases` name the old rows), loaded once.
+# This repository, fixed at import: its descriptor's `aliases` name the old rows. Not `ROOT`, which
+# is where harness commits are resolved and which tests/test_comparison.py patches to a scratch git
+# repository that has no descriptor.
+CAMPAIGN = pathlib.Path(__file__).resolve().parents[1]
 
-    Loaded explicitly rather than from the working directory, so the page is the same wherever
-    the script is run from.
-    """
-    if descriptor._current is None or descriptor._current.root != ROOT:
-        descriptor.set_root(ROOT)
+
+def campaign():
+    """This repository's descriptor, loaded explicitly (not from the working directory), once."""
+    if descriptor._current is None or descriptor._current.root != CAMPAIGN:
+        descriptor.set_root(CAMPAIGN)
     return descriptor.current()
 
 
