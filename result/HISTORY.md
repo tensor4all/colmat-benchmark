@@ -8,7 +8,7 @@ revisions it measured. The current pages are in [INDEX.md](INDEX.md).
 
 - Reference fork revision (`pins/t4a-faer.rev`): `93da62172a96260ae3d5ed7481690f440f58d904`
 - Reference upstream revision (`pins/upstream-faer.rev`): `faer-v0.24.4`
-- Newest recorded run: `2026-11-19T20:40:33.832619Z`
+- Newest recorded run: `2026-11-22T14:56:14.365519Z`
 - Every page below is one `(suite, hardware profile, fork revision, upstream revision,
   vendor arm)` and carries its commits, its hardware and the vendor library it linked.
 

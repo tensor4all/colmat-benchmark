@@ -7,7 +7,7 @@ Older pages (29): [HISTORY.md](HISTORY.md).
 
 - Reference fork revision (`pins/t4a-faer.rev`): `93da62172a96260ae3d5ed7481690f440f58d904`
 - Reference upstream revision (`pins/upstream-faer.rev`): `faer-v0.24.4`
-- Newest recorded run: `2026-11-19T20:40:33.832619Z`
+- Newest recorded run: `2026-11-22T14:56:14.365519Z`
 - Every page below is one `(suite, hardware profile, fork revision, upstream revision,
   vendor arm)` and carries its commits, its hardware and the vendor library it linked.
 
@@ -19,6 +19,8 @@ rather than being implied by the other arm's page.
 
 | suite | profile | vendor | fork/upstream | version | date | coverage | status | page |
 |---|---|---|---|---|---|---|---|---|
+| `faer-kernels-keyaki-os-shared` | `keyaki-64-os-shared` | `mkl` | - | - | - | - | missing | - |
+| `faer-kernels-keyaki` | `keyaki-64` | `mkl` | `93da62172a96/0539947ffb75` | 0.34.0 | 2026-11-22 | full | current | [result/keyaki-64/faer-kernels-keyaki/93da62172a96-0539947ffb75-mkl-timing-v2.md](keyaki-64/faer-kernels-keyaki/93da62172a96-0539947ffb75-mkl-timing-v2.md) |
 | `faer-kernels-large` | `zen5-cpu` (optional) | `openblas` | - | - | - | - | missing | - |
 | `faer-kernels-large` | `zen5-cpu` (optional) | `mkl` | `93da62172a96/0539947ffb75` | 0.34.0 | 2026-11-18 | partial | current | [result/zen5-cpu/faer-kernels-large/93da62172a96-0539947ffb75-mkl-timing-v2.md](zen5-cpu/faer-kernels-large/93da62172a96-0539947ffb75-mkl-timing-v2.md) |
 | `faer-kernels-large` | `zen5-cpu` (optional) | `aocl` | - | - | - | - | missing | - |
