@@ -6,7 +6,9 @@ description: >-
   population per suite, so one population per 30-minute debug-queue allocation (`i1fat`): the whole
   4096 tier with two process sets does not fit 30 minutes, and the LU, Cholesky and QR factor rows
   are their own suite (`faer-kernels-ohtaka-fat-linalg`). The census runs on the population's 2048
-  companion, because one 4096 reference product is minutes of one core. The 8192 tier is
+  companion, because one 4096 reference product is minutes of one core. The shapes are written as
+  plain sizes: the recorder compares the narrowed grid with the declaration and the validator with
+  the census, and the two only agree on the harness's own `2048` form. The 8192 tier is
   `faer-kernels-ohtaka-fat-xlarge`, which needs a 12 h B2fat allocation: the per-cell residual check
   at 8192 costs minutes of one core per cell. 112T is the whole node: every core is measured, no
   observer CPU is left, and the row is recorded os-shared. Measured at faer's
@@ -118,7 +120,7 @@ engines_doc:
 # per case at 4096, so the census is narrowed to the 4096 cells of every population at every thread
 # budget. A timed process still checks its last call at the cell's own size; see `known_blind_spots`.
 verify:
-  n: ["2048x2048x2048"]
+  n: ["2048"]
 
 runs:
   - threads: [16, 32, 64, 112]
@@ -144,5 +146,5 @@ runs:
     populations:
       - regime: gemm-ohtaka-fat
         groups: [gemm]
-        n: ["2048x2048x2048", "4096x4096x4096"]
+        n: ["2048", "4096"]
         batch: [1]
