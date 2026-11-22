@@ -104,6 +104,17 @@ aliases:
   engines:
     faer-fork: colmat
     faer-upstream: faer
+  # The rename changed names only: each suite's runs[0] grid, family groups, profiles,
+  # invalidated_by and stale_after are identical before and after (checked on #120), so a run
+  # recorded under the last pre-rename file (origin/main at 39b8e83) keeps its declaration-derived
+  # checks and stays comparable with a candidate recorded after it. An entry lapses by itself as
+  # soon as the renamed file is edited (its hash moves); then those runs read as drifted, as any
+  # edit makes them.
+  suite_sha256:
+    cf51b7654fd6494040e6b9ebb05c08c07a0843cb86c62418ba538089fc19c047: b52bde95920ee09c90139fb1fabdf3f99f4f05dc73e89315daf45162b97fd822  # faer-kernels
+    d8f17bb3e0828b3cb2ae47ce0ebe943bb213238afa28d86005ca6ffd886cf44d: 3bc96693b9ffef2e12d6058d2558e65705d9c317f17aa24b7d23589901a1712b  # faer-kernels-large
+    779956658fb8eb5cf1a28663cbbcd8b122a13d9e217cbd40b1a3b3cad0f3453f: 5ba86eea1ab8718421762b075da7babdd77ba09407f0cc1e1c3beee9916326cc  # faer-kernels-keyaki
+    58d3c6602dd1439db7e632b14df9f3fc2afec113d0599f2bbbacaecb333b6e79: 45626afeea02a37676775cb3946986d1deca432451ce0e8c384b45e5c4cc5457  # faer-kernels-keyaki-os-shared
 
 # Providers that own the BLAS/LAPACK symbols; they are mutually exclusive in one process,
 # so they are the axis a run -- and a page -- is split on.

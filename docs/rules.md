@@ -59,9 +59,12 @@ python3 scripts/record_run.py zen5-cpu colmat-kernels \
     --label acceptance-<revision> --no-publish
 # 2. the pinned baseline is measured once and kept (baseline-ref-* runs under data/results/), never re-run
 #    per candidate: the same command with --checkout extern/colmat
-# 3. compare, and let the tool refuse a merge that changed the measured code:
+# 3. compare, and let the tool refuse a merge that changed the measured code. A baseline recorded
+#    before #113 stays under data/results/zen5-cpu/faer-kernels/ (recordings are not moved); one
+#    recorded after it is under colmat-kernels/. Either compares with a candidate under the renamed
+#    suite (benchmarks/campaign.yaml aliases.suite_sha256):
 python3 scripts/candidate_compare.py \
-    --baseline data/results/zen5-cpu/colmat-kernels/<baseline-ref run> \
+    --baseline data/results/zen5-cpu/faer-kernels/<baseline-ref run> \
     --candidate data/probes/acceptance/<candidate run> \
     --checkout ../faer --merged-commit <merge commit> --json /tmp/acceptance.json
 ```

@@ -230,11 +230,11 @@ budget (coverage partial) instead of implying the whole declaration.
 
 ```sh
 PINNED_RETRIES=8 python3 scripts/record_run.py zen5-cpu colmat-kernels \
-  --checkout extern/t4a-faer --upstream extern/upstream-faer --vendor mkl \
+  --checkout extern/colmat --upstream extern/upstream-faer --vendor mkl \
   --engines colmat,faer,lapack-mkl --threads 1,4,8 --dtypes f64,c64 \
   --reps 5 --aa 3 --prime-ms 250
 PINNED_RETRIES=8 python3 scripts/record_run.py zen5-cpu colmat-kernels \
-  --checkout extern/t4a-faer --upstream extern/upstream-faer --vendor openblas \
+  --checkout extern/colmat --upstream extern/upstream-faer --vendor openblas \
   --engines colmat,lapack-openblas --threads 1,4,8 --dtypes f64,c64 \
   --reps 5 --aa 2 --prime-ms 250
 ```

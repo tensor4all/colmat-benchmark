@@ -43,22 +43,27 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 COLMAT, FAER = 'colmat', 'faer'
 
 
+# The descriptor that names the aliases is always this repository's, fixed at import. `ROOT` is
+# only where harness commits are resolved (a test points it at a scratch git repository); it is
+# not where the campaign's names come from.
+CAMPAIGN = pathlib.Path(__file__).resolve().parents[1]
+
+
+def campaign():
+    """This repository's descriptor, loaded once (and again if something else replaced it)."""
+    if descriptor._current is None or descriptor._current.root != CAMPAIGN:
+        descriptor.set_root(CAMPAIGN)
+    return descriptor.current()
+
+
 def current_suite(suite_id):
     """A recorded suite id under its current id (the descriptor's `aliases`)."""
-    engine('')
-    return descriptor.current().canonical_suite(suite_id)
-
-
-# The campaign whose descriptor names the aliases: this repository, fixed at import (`ROOT` is
-# where harness commits are resolved, and a test may point it at another repository).
-CAMPAIGN = pathlib.Path(__file__).resolve().parents[1]
+    return campaign().canonical_suite(suite_id)
 
 
 def engine(name):
     """A recorded row name under its current engine name (the descriptor's `aliases`)."""
-    if descriptor._current is None or descriptor._current.root != CAMPAIGN:
-        descriptor.set_root(CAMPAIGN)
-    return descriptor.current().canonical_engine(name)
+    return campaign().canonical_engine(name)
 
 # The harness revision that first measured both sides of a vendor ratio on one contract: no
 # allocation and no layout conversion inside the timed run, the vendored drivers in column order
