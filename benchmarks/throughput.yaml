@@ -20,18 +20,18 @@ page:
     - "The `c64` pages are drawn from the recorded `c64` cells of the same runs as the `f64` pages, with a complex element counting four times the real operations."
     - "**Nominal** GFLOP/s: one algorithmic operation count per family, so sizes are comparable within a family and absolute values are not comparable across families. The count is stated under every chart and in each data table."
     - "Error bars are the between-start sample SD of the process medians, not a confidence interval. The `!` cells of the measured pages are included as they were recorded."
-    - "`faer-fork`, `faer-upstream` and `lapack-mkl` come from one recorded run and therefore from one process each; `lapack-openblas` and `lapack-aocl` come from their own binaries, so their absolute levels carry the between-arm uncertainty."
+    - "`colmat`, `faer` and `lapack-mkl` come from one recorded run and therefore from one process each; `lapack-openblas` and `lapack-aocl` come from their own binaries, so their absolute levels carry the between-arm uncertainty."
     - "Recorded sizes: the daily suite's grid (32-768, no boundary shapes) at 1T/4T/8T; the large-tier run adds the 2^k±1 boundary shapes (255/257/511/513) and 1024/1536 at 4T/8T, in every `(dtype, order)` these pages show. A line stops where a size was not measured - nothing is interpolated."
-    - "The 1024 points are a separate recording from the 32-768 points, so they carry their own run-to-run uncertainty on top of the between-start bars. Where the large-tier run is at the same fork revision as the daily run, the code is the same at 1024 (the row-major copy floor, `faer#23`, only changes shapes below 4096 elements)."
+    - "The 1024 points are a separate recording from the 32-768 points, so they carry their own run-to-run uncertainty on top of the between-start bars. Where the large-tier run is at the same colmat revision as the daily run, the code is the same at 1024 (the row-major copy floor, `faer#23`, only changes shapes below 4096 elements)."
 series:
-  - engine: faer-fork
-    label: colmat     # the display name; the engine row stays what the runs record
+  - engine: colmat    # runs recorded before #113 wrote `faer-fork`; the toolkit reads it as `colmat`
+    label: colmat
     run: [0, 3]       # positions 0/3: the daily and the large-tier MKL run
     colour: "#9467bd"
     marker: circle
     width: 1.9        # the fork is the subject of the campaign: solid, thicker, drawn last
     size: 4.2
-  - engine: faer-upstream
+  - engine: faer      # recorded as `faer-upstream` before #113
     label: faer
     run: [0, 3]
     colour: "#1f77b4"

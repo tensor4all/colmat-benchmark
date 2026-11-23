@@ -19,12 +19,12 @@ harness `cf51a3ea`, which is at or after the fairness change (#74) and at or aft
 that followed (#77/#78 verify products, #80 the wide-shape `orgqr` workspace query). On the terms of
 the 2026-11-09 entry above, that is the bar this dataset had to clear, so:
 
-- **`faer-kernels` (both vendor arms) is current, not withdrawn.** Its vendor ratios are formed
+- **`faer-kernels` (both vendor arms; the suite is `colmat-kernels` since #113) is current, not withdrawn.** Its vendor ratios are formed
   between rows of one contract: the vendor row runs column-major only, with a caller-owned workspace
   and prepared outputs, and the faer row it is divided against is the allocation-free route. The
   `api-inclusive` faer route stays in the labelled API-cost columns and is never divided against a
   vendor row.
-- **`faer-kernels-large` (MKL) is new**, and covers the declared 1024/1536 + boundary tier at 4/8T.
+- **`faer-kernels-large` (MKL; now `colmat-kernels-large`) is new**, and covers the declared 1024/1536 + boundary tier at 4/8T.
   Its OpenBLAS arm was deliberately not recorded (the fork arm is ahead in essentially every 1024
   cell, so the ~7 h had no decision value — `docs/worklog.md` states the qualification); the large
   suite therefore forms no vendor ratio here, and its OpenBLAS row is simply unrecorded rather than

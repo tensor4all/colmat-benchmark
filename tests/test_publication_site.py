@@ -20,9 +20,9 @@ from campaign_toolkit.stack import rev_file_value  # noqa: E402
 # #95; the large OpenBLAS arm, once dropped by decision on 2026-11-18, is back in the same-pin Docker
 # refresh #99). `benchmarks/campaign.yaml` `figures.runs` declares the same six positions; adding an
 # arm here without its run would make this test assert a page that does not exist.
-RECORDED = {('faer-kernels', 'mkl'), ('faer-kernels', 'openblas'), ('faer-kernels', 'aocl'),
-            ('faer-kernels-large', 'mkl'), ('faer-kernels-large', 'openblas'),
-            ('faer-kernels-large', 'aocl')}
+RECORDED = {('colmat-kernels', 'mkl'), ('colmat-kernels', 'openblas'), ('colmat-kernels', 'aocl'),
+            ('colmat-kernels-large', 'mkl'), ('colmat-kernels-large', 'openblas'),
+            ('colmat-kernels-large', 'aocl')}
 
 
 def unrecorded_throughput_runs():
@@ -68,8 +68,8 @@ class PublicationSiteTest(unittest.TestCase):
 
     def test_keyaki_pages_are_their_own_profiles_and_the_64t_one_carries_its_caveat(self):
         pin = rev_file_value((ROOT / gen_site.PIN).read_text())
-        for profile, suite in (('keyaki-64', 'faer-kernels-keyaki'),
-                               ('keyaki-64-os-shared', 'faer-kernels-keyaki-os-shared')):
+        for profile, suite in (('keyaki-64', 'colmat-kernels-keyaki'),
+                               ('keyaki-64-os-shared', 'colmat-kernels-keyaki-os-shared')):
             pages = current_pages(profile)
             self.assertEqual({(p['suite'], p['vendor']) for p in pages}, {(suite, 'mkl')})
             self.assertEqual({p['library_commit'] for p in pages}, {pin})
@@ -85,7 +85,7 @@ class PublicationSiteTest(unittest.TestCase):
                      references=dict(found['references'], library=unrecorded))
         problems = pin_recorded.campaign_problems(moved)
         self.assertEqual(len(problems), 1)
-        self.assertIn(f'pins/t4a-faer.rev = {unrecorded}', problems[0])
+        self.assertIn(f'pins/colmat.rev = {unrecorded}', problems[0])
         self.assertIn('no current recording', problems[0])
         # The site refuses to publish in that state rather than saying nothing was recorded.
         with mock.patch.object(gen_site.gen_index, 'collect', return_value=moved), \
@@ -149,9 +149,14 @@ class PublicationSiteTest(unittest.TestCase):
         # The page states the suite's own limitation and the provenance of the runs it shows.
         self.assertIn(html.escape(gen_site.limitation_text()), index)
         self.assertIn('Current recordings: scope and provenance', index)
+        pages = {(p['suite'], p['vendor']): p for p in current_pages()}
         for suite, vendor in RECORDED:
-            link = f'zen5-cpu/{suite}/{revision[:12]}-0539947ffb75-{vendor}-timing-v2.html'
+            # The page file stays where it was recorded (a run recorded before #113 sits under
+            # `faer-kernels*`); the link text names the suite by its current id.
+            link = pathlib.PurePosixPath(pages[(suite, vendor)]['page']).relative_to('result').with_suffix('.html')
+            self.assertEqual(link.name, f'{revision[:12]}-0539947ffb75-{vendor}-timing-v2.html')
             self.assertIn(f'href="{link}"', index)
+            self.assertIn(f'>zen5-cpu/{suite}/{link.with_suffix(".md").name}</a>', index)
             self.assertTrue((ROOT / 'result' / link).is_file(), link)
         # The two daily arms of this recording were recorded either side of a data commit: their
         # harness commits differ, the paths the harness is built from do not, so the join is accepted
@@ -160,7 +165,7 @@ class PublicationSiteTest(unittest.TestCase):
         self.assertNotIn('The four-way view is withheld', index)
         self.assertIn(f'href="{comparison}"', index)
         joined = (ROOT / 'result' / comparison).read_text()
-        for column in ('fork MKL (ms)', 'fork OpenBLAS (ms)', 'MKL (ms)', 'OpenBLAS (ms)'):
+        for column in ('colmat MKL (ms)', 'colmat OpenBLAS (ms)', 'MKL (ms)', 'OpenBLAS (ms)'):
             self.assertIn(f'<th>{column}</th>', joined)
         self.assertIn('<tr><td class="k">', joined)
         images = re.findall(r'<img src="([^"]+)"', index)
@@ -172,14 +177,14 @@ class PublicationSiteTest(unittest.TestCase):
         # The site repeats these from the declarations instead of restating them, so what is
         # checked is that each declaration states them at all and names the revision it measures.
         pin = rev_file_value((ROOT / gen_site.PIN).read_text())
-        for suite in ('faer-kernels', 'faer-kernels-large'):
+        for suite in ('colmat-kernels', 'colmat-kernels-large'):
             with self.subTest(suite=suite):
                 data = yaml.safe_load((ROOT / 'benchmarks/suites' / (suite + '.yaml')).read_text())
-                self.assertIn(pin[:7], data['engines_doc']['faer-fork']['caveat'])
+                self.assertIn(pin[:7], data['engines_doc']['colmat']['caveat'])
                 self.assertTrue(any(s.startswith(gen_site.LIMITATION_PREFIX)
                                     for s in data['workloads']['known_blind_spots']))
         # One limitation, stated once: the landing page's text is the measured suite's bullet.
-        small = yaml.safe_load((ROOT / 'benchmarks/suites/faer-kernels.yaml').read_text())
+        small = yaml.safe_load((ROOT / 'benchmarks/suites/colmat-kernels.yaml').read_text())
         self.assertTrue(any(gen_site.limitation_text() in spot
                             for spot in small['workloads']['known_blind_spots']))
 
@@ -248,13 +253,13 @@ class ThroughputPagesTest(unittest.TestCase):
         # recorded c64 cells with the complex x4 count, recomputed here from the current
         # large-tier MKL run's own CSV -- an f64 copy, or a forgotten x4, fails this.
         from campaign_toolkit import throughput
-        run = current_run_dir('faer-kernels-large', 'mkl')
+        run = current_run_dir('colmat-kernels-large', 'mkl')
         self.assertIsNotNone(run)
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(gen_site.main([]), 0)
         cells = throughput.load_run(run, dtype='c64', order='c')
         points = dict((n, gflops) for n, gflops, _ in
-                      throughput.points(cells, 4, 'gemm', 'faer-fork', 2.0, complex_dtype=True))
+                      throughput.points(cells, 4, 'gemm', 'colmat', 2.0, complex_dtype=True))
         table = (ROOT / 'result' / 'figures' / 'throughput' / 'zen5-cpu' / 'c64-c'
                  / 'throughput-gemm-v2.md').read_text()
         shown = float(re.search(r'^\| 1024 \| ([0-9.e+-]+) ', table, re.M).group(1))

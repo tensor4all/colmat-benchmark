@@ -1,7 +1,7 @@
 schema_version: 1
 id: colmat-benchmark
 
-# The measured project. The harness (`fbench`) lives in *this* repository -- faer has
+# The measured project. The harness (`fbench`) lives in *this* repository -- colmat has
 # no `benchmarks/` directory and the fork's AGENTS.md forbids adding one, because
 # campaign infrastructure there would be a rebase cost -- and links both libraries by
 # path out of their checkouts. So the recorded commits describe the libraries, and the
@@ -9,8 +9,8 @@ id: colmat-benchmark
 measured:
   name: colmat
   url: https://github.com/tensor4all/colmat-rs
-  pin_file: pins/t4a-faer.rev
-  extern_dir: extern/t4a-faer
+  pin_file: pins/colmat.rev
+  extern_dir: extern/colmat
   build_script: scripts/build_for_faer_rev.sh
   binary: fbench
   # One binary links one vendor library, so the arm decides the feature. The three arms
@@ -78,17 +78,51 @@ result_dir: result
 case_axes: [order]
 case_label: "`{family}/{dims}/b{batch}` {order} {threads}T {row}"
 
-# Engine name the harness emits -> provider. Both faer rows are measured in one binary:
-# the fork (package `colmat`) and upstream (package `faer`) are distinct dependency keys
-# and therefore distinct engines, so their providers are the fork and upstream
+# Engine name the harness emits -> provider. The colmat and faer rows are measured in one
+# binary: the fork (package `colmat`) and upstream (package `faer`) are distinct dependency
+# keys and therefore distinct engines, so their providers are the fork and upstream
 # themselves. A vendor arm names its vendor twice: once here, and once in the engine
 # string itself, because the harness derives it from the vendor library it linked.
 engines:
-  faer-fork: faer-fork
-  faer-upstream: faer-upstream
+  colmat: colmat
+  faer: faer
   lapack-openblas: openblas
   lapack-mkl: mkl
   lapack-aocl: aocl
+
+# The names this campaign recorded under before #113 named the measured library after itself.
+# The recordings are not rewritten: runs under data/results/<profile>/faer-kernels*/ keep their
+# directories, their `faer-fork` / `faer-upstream` rows and their reports. The toolkit's readers
+# map these names to the current ones when they load data, so an old run and a new run of one suite
+# share a cell, a chart line and a trend series.
+aliases:
+  suites:
+    faer-kernels: colmat-kernels
+    faer-kernels-large: colmat-kernels-large
+    faer-kernels-keyaki: colmat-kernels-keyaki
+    faer-kernels-keyaki-os-shared: colmat-kernels-keyaki-os-shared
+  engines:
+    faer-fork: colmat
+    faer-upstream: faer
+  # The rename changed the measured grid not at all: each suite's runs[0] grid, family groups,
+  # profiles, invalidated_by and stale_after are identical before and after with the engines
+  # renamed (checked on #120); the prose (description, workloads, engines_doc text) did change,
+  # which is why a regenerated old report is not byte-identical. So a run
+  # recorded under the last pre-rename file (origin/main at 39b8e83) keeps its declaration-derived
+  # checks, and the suite rename alone does not refuse a candidate comparison. (A pre-#113
+  # baseline is still refused against a later candidate on `harness commit`: #113 changed
+  # fbench/ and benchmarks/. docs/rules.md: re-record the baseline.) An entry lapses by itself as
+  # soon as the renamed file is edited (its hash moves); then those runs read as drifted, as any
+  # edit makes them.
+  # Report labels as the pre-rename runs printed them, so their reports still regenerate byte for
+  # byte (campaign-check-generated renders a changed run against its recorded declaration).
+  report:
+    provider_label: faer rows
+  suite_sha256:
+    cf51b7654fd6494040e6b9ebb05c08c07a0843cb86c62418ba538089fc19c047: b52bde95920ee09c90139fb1fabdf3f99f4f05dc73e89315daf45162b97fd822  # faer-kernels
+    d8f17bb3e0828b3cb2ae47ce0ebe943bb213238afa28d86005ca6ffd886cf44d: 3bc96693b9ffef2e12d6058d2558e65705d9c317f17aa24b7d23589901a1712b  # faer-kernels-large
+    779956658fb8eb5cf1a28663cbbcd8b122a13d9e217cbd40b1a3b3cad0f3453f: 5ba86eea1ab8718421762b075da7babdd77ba09407f0cc1e1c3beee9916326cc  # faer-kernels-keyaki
+    58d3c6602dd1439db7e632b14df9f3fc2afec113d0599f2bbbacaecb333b6e79: 45626afeea02a37676775cb3946986d1deca432451ce0e8c384b45e5c4cc5457  # faer-kernels-keyaki-os-shared
 
 # Providers that own the BLAS/LAPACK symbols; they are mutually exclusive in one process,
 # so they are the axis a run -- and a page -- is split on.
@@ -156,11 +190,11 @@ report:
   library_version_label: colmat version
   upstream_label: upstream faer commit
   upstream_ref_label: upstream faer ref/version
-  provider_label: faer rows
+  provider_label: colmat / faer rows
   harness_label: harness commit
   index_generator: scripts/gen_index.py
   setup_script: scripts/setup_extern_deps.sh
-  # What the page says about the verify pass above its tables. faer's checks are per provider
+  # What the page says about the verify pass above its tables. The checks are per provider
   # against that provider's own contract -- residual, reconstruction, orthonormality and no
   # NaN -- never provider against provider, and the order axis is part of the cell identity
   # because it decides which path each provider takes.
@@ -181,24 +215,24 @@ figures:
   throughput:
     config: benchmarks/throughput.yaml
     runs:
-      - {suite: faer-kernels, vendor: mkl}
-      - {suite: faer-kernels, vendor: openblas}
-      - {suite: faer-kernels, vendor: aocl}
-      - {suite: faer-kernels-large, vendor: mkl}
-      - {suite: faer-kernels-large, vendor: openblas}
-      - {suite: faer-kernels-large, vendor: aocl}
+      - {suite: colmat-kernels, vendor: mkl}
+      - {suite: colmat-kernels, vendor: openblas}
+      - {suite: colmat-kernels, vendor: aocl}
+      - {suite: colmat-kernels-large, vendor: mkl}
+      - {suite: colmat-kernels-large, vendor: openblas}
+      - {suite: colmat-kernels-large, vendor: aocl}
 
 # Representative cases followed across pins (tensor4all-meta#76 D4: gemm and lu at n = 1024, f64).
 # n = 1024 is recorded only by the large tier, at 4T and 8T, on the MKL arm (which also carries
 # upstream); there is no 1T row at that size.
 trend:
-  - suite: faer-kernels-large
+  - suite: colmat-kernels-large
     case: gemm-large:gemm/1024x1024x1024/b1 f64 c
     vendor: mkl
-    engines: [faer-fork, faer-upstream, lapack-mkl]
+    engines: [colmat, faer, lapack-mkl]
     threads: [4, 8]
-  - suite: faer-kernels-large
+  - suite: colmat-kernels-large
     case: linalg-large:lu/n1024/b1 f64 c
     vendor: mkl
-    engines: [faer-fork, faer-upstream, lapack-mkl]
+    engines: [colmat, faer, lapack-mkl]
     threads: [4, 8]

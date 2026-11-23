@@ -30,7 +30,7 @@ checkouts; those pages are not evidence about `bfe4041` and were not re-recorded
 | `--statistic` | `median` |
 | Coverage | the declared suite, fully: all populations, `f64`+`c64`, order `c`+`f`, batch 1, threads 1/4/8 |
 | Small-shape grids | `gemm-small` and `linalg-small` are declared as **8, 64** only: their 4T/8T cells were measured to be thread-region dominated (gemm 32^3 pays a constant +8 to +11 us at 4T/8T; 4^3 never enters a parallel path; MKL +0.3-0.8 us), so they are not worth the machine time at every budget |
-| Rows per arm | MKL: `faer-fork`, `faer-upstream`, `lapack-mkl` (`--engines`/`--rows`). OpenBLAS: `faer-fork`, `lapack-openblas`. The duplicated faer rows differ by 2% median (26% worst, the known rotation bump) between arms, so the fork/upstream pair is kept in one arm and the vendor pair in both |
+| Rows per arm | MKL: `colmat`, `faer`, `lapack-mkl` (`--engines`/`--rows`). OpenBLAS: `colmat`, `lapack-openblas`. The colmat row, measured in both arms, differs by 2% median (26% worst, the known rotation bump) between arms, so the fork/upstream pair is kept in one arm and the vendor pair in both |
 
 ## 2. Frozen machine preconditions (enforced, not remembered)
 
@@ -86,7 +86,7 @@ runs in three steps, and a comparison is published only if all three pass.
    and timing policy must equal the frozen baseline run's. A difference in the
    machine state refuses the comparison before any timing.
 2. **In-run machine-state control.** The candidate binary carries the *unchanged*
-   `faer-upstream` row. A predeclared overlap set of cells — at minimum
+   `faer` row. A predeclared overlap set of cells — at minimum
    `gemm 256^3 f64 1T`, `lu 256^2 c64 4T`, `cholesky 512^2 f64 8T`,
    `qr_factor 4096x256 f64 8T`, `svd_thin 64x1024 c64 4T`, `householder_apply
    4096x256 f64 8T` — is measured and the upstream row compared with its recorded
@@ -94,7 +94,7 @@ runs in three steps, and a comparison is published only if all three pass.
    warning threshold), the machine is not in the baseline state and the comparison
    is refused rather than reported.
 3. **Fork-only measurement of the selected cells.** Once step 2 passes, only the
-   `faer-fork` row (plus the upstream control row) is measured on the chosen
+   `colmat` row (plus the upstream control row) is measured on the chosen
    subset. The comparison is the rotation-averaged ratio of the candidate fork to
    the recorded baseline fork per cell, with the candidate's own process spread
    recorded beside it.
@@ -130,7 +130,7 @@ little work" side-effect check belongs.
   `--shapes 64,64x64x64,256,256x256x256,1024,1024x1024x1024,1024x64,4096x256,64x1024,256x4096,4096x64x64,16x4096x240,4096x16x240,64x64x4096`
   with `--regimes` naming the daily tiers. A run records the subset it covered, so
   a daily subset is never mistaken for the whole declaration.
-- **Large tiers are their own suite** (`faer-kernels-large`, `threads: [4, 8]`):
+- **Large tiers are their own suite** (`colmat-kernels-large`, `threads: [4, 8]`):
   1024, and the adoption-only 2048/4096 and the diagnostic 255/257/511/513. A run
   time dominated by the biggest shapes is not worth a 1T pass, and splitting by
   thread budget keeps each page a full cover of its own declaration instead of two
@@ -167,7 +167,7 @@ hold, and the evidence for each is recorded in the campaign.
    The target set is never widened after the numbers are seen.
 3. **No regression outside the target, checked on a declared guard set.** A guard set - the same
    families in the other memory order, neighbouring sizes, other thread budgets, and the unchanged
-   `faer-upstream` row as the machine-state control - is measured in the same runs. The change is
+   `faer` row as the machine-state control - is measured in the same runs. The change is
    adopted only if no guard cell is slower beyond the recorded spread, and the control row reproduces
    the baseline. The control reproduction is decided on the **median** of the unchanged row's per-cell
    ratios, which must be within 2% of 1; every cell's own between-start range is printed beside it as
@@ -229,13 +229,13 @@ budget (coverage partial) instead of implying the whole declaration.
 ## 6. How the two arms are invoked
 
 ```sh
-PINNED_RETRIES=8 python3 scripts/record_run.py zen5-cpu faer-kernels \
-  --checkout extern/t4a-faer --upstream extern/upstream-faer --vendor mkl \
-  --engines faer-fork,faer-upstream,lapack-mkl --threads 1,4,8 --dtypes f64,c64 \
+PINNED_RETRIES=8 python3 scripts/record_run.py zen5-cpu colmat-kernels \
+  --checkout extern/colmat --upstream extern/upstream-faer --vendor mkl \
+  --engines colmat,faer,lapack-mkl --threads 1,4,8 --dtypes f64,c64 \
   --reps 5 --aa 3 --prime-ms 250
-PINNED_RETRIES=8 python3 scripts/record_run.py zen5-cpu faer-kernels \
-  --checkout extern/t4a-faer --upstream extern/upstream-faer --vendor openblas \
-  --engines faer-fork,lapack-openblas --threads 1,4,8 --dtypes f64,c64 \
+PINNED_RETRIES=8 python3 scripts/record_run.py zen5-cpu colmat-kernels \
+  --checkout extern/colmat --upstream extern/upstream-faer --vendor openblas \
+  --engines colmat,lapack-openblas --threads 1,4,8 --dtypes f64,c64 \
   --reps 5 --aa 2 --prime-ms 250
 ```
 

@@ -16,7 +16,7 @@ revision, vendor arm)`, and it carries all three revisions and the hardware
 itself: the fork commit, version, dirty state and features; the upstream commit,
 version and the ref it was pinned by; the harness commit; host CPU, logical CPU
 count, L3 and arch; the CPU set used at each thread count; the timing policy; the
-two faer rows and the vendor library with its kernel; and the guards. Measuring a
+colmat and faer rows and the vendor library with its kernel; and the guards. Measuring a
 new revision -- of either library -- adds a page rather than replacing the
 previous one. A dirty checkout gets its own `-dirty` page, because those numbers
 are not comparable with a clean build of the same commits.
@@ -27,7 +27,7 @@ A result depends on **three** independently moving revisions, and the page name
 carries the two that name a *comparison*:
 
 ```text
-<t4a-faer12>-<upstream-faer12>[-<vendor>]
+<colmat12>-<upstream-faer12>[-<vendor>]
 ```
 
 The harness revision is recorded in `run.yaml` and repeated in the page header,
@@ -38,7 +38,7 @@ fixed fork revision produces a different page instead of overwriting one.
 **One vendor per page.** The two vendor arms own the same symbols, so a binary
 that links OpenBLAS and a binary that links MKL cannot be the same binary: an
 *arm* is a build, and a run is one arm. Two arms at the same revision pair are
-therefore two pages, compared side by side, each carrying its own two faer rows
+therefore two pages, compared side by side, each carrying its own colmat and faer rows
 and its own vendor identity. The vendor is in the page name because it is part of
 what was measured, and the engine rows are named after the vendor the binary
 actually linked -- `lapack-mkl`, not a label chosen when the row was written.
@@ -98,7 +98,7 @@ records:
 - `threads`: the counts, the CPU set used for each, the ambient thread variables
   (removed for the measured process), and how the budget was enforced;
 - `timing_policy`: version, priming, statistic, repetitions;
-- `providers`: what each engine row was — for `faer-fork` and `faer-upstream` the
+- `providers`: what each engine row was — for `colmat` and `faer` the
   revision itself (restated where a reader looks for a provider's identity), and
   for the vendor arm the library the harness read out of the binary it linked;
 - `guards`: the idle window including the SMT-sibling check, the busy threshold,
@@ -144,8 +144,8 @@ not: with one tracked file per cell, a cell that has not been re-measured keeps
 an old file, and a reader sees a commit hash and a table without being able to
 tell whether that cell reflects the current libraries.
 
-`status` is computed against `pins/t4a-faer.rev` **and**
-`pins/upstream-faer.rev`, in the two checkouts `extern/t4a-faer` and
+`status` is computed against `pins/colmat.rev` **and**
+`pins/upstream-faer.rev`, in the two checkouts `extern/colmat` and
 `extern/upstream-faer`:
 
 | status | meaning |
@@ -178,7 +178,7 @@ consistent. This is a known gap rather than an implied guarantee.
 spec *for that vendor arm* and the declaration has not moved since, `partial`
 when it covered a subset, and `declaration-changed` when the declaration itself
 changed after the measurement, so the two have to be compared by hand. "The whole
-declared spec for that arm" is the two faer rows the declaration names plus that
+declared spec for that arm" is the colmat and faer rows the declaration names plus that
 arm's own LAPACK row: vendor arms are mutually exclusive binaries, so no single
 run could measure two of them, and measuring the projection is what makes a vendor
 cell full instead of partial for ever. `campaign_toolkit/campaign.py` holds that
@@ -202,7 +202,7 @@ A change is judged from two recorded pages, not from one run read twice:
 
 2. The same populations, orders, thread counts and dtypes on both sides, into the
    *same* suite declaration, so the two runs are the same cells:
-   `scripts/record_run.py zen5-cpu faer-kernels --checkout <fork> --upstream
+   `scripts/record_run.py zen5-cpu colmat-kernels --checkout <fork> --upstream
    <upstream> --vendor <arm>`.
 
 3. **At least two complete sets** (`--aa 2`) for anything that will be claimed as

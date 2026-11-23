@@ -1,4 +1,4 @@
-# Merging a candidate into `faer` main
+# Merging a candidate into `colmat` main
 
 The procedure behind criterion 1-3 of `protocol-v2-baseline.md`, written down so a merge does not
 depend on what the last session remembered. `AGENTS.md` links here; the protocol owns the rules and
@@ -6,7 +6,7 @@ this file is the order of operations.
 
 ## What a merge means
 
-A merge moves `faer` `main` to a revision that has already been measured at *that* revision. The
+A merge moves `colmat` `main` to a revision that has already been measured at *that* revision. The
 full declared suite is not part of a merge; it is recorded once at the final frozen candidate and
 published afterwards. A merge is not an adoption claim about cells nobody measured.
 
@@ -14,7 +14,7 @@ published afterwards. A merge is not an adoption claim about cells nobody measur
 
 1. **The branch is a descendant of `main`** - `git rev-list --count <branch>..main` is 0. If it is
    not, rebase first; never merge a branch whose base predates `main`.
-2. **The correctness gate passes** - `cargo test -p t4a-faer --lib` in the branch checkout, with the
+2. **The correctness gate passes** - `cargo test -p colmat --lib` in the branch checkout, with the
    same pass/ignore count as `main` plus the tests the change adds. The change's own focused tests
    are part of this gate, not a substitute for it.
 3. **The measured paths are the merged paths** - `scripts/candidate_compare.py --merged-commit
@@ -59,7 +59,7 @@ three collateral cells of families the change cannot reach.
    frozen policy (250 ms priming, 5 calls, three complete process sets, boost off, observer off the
    measured L3 domain, the whole-domain idle guard).
 3. `scripts/candidate_compare.py --baseline <run> --candidate <run> --merged-commit <rev>`. The
-   control decision is the unchanged `faer-upstream` row's **median** within 2%; the per-cell tail
+   control decision is the unchanged `faer` row's **median** within 2%; the per-cell tail
    is printed and retained but does not refuse, because the unchanged row moves with the linked
    binary and a cell-by-cell rule refuses even two runs of one revision.
 4. A refused comparison means no merge. It is not retried with a relaxed band or a trimmed start.
@@ -71,7 +71,7 @@ three collateral cells of families the change cannot reach.
 - Record in `PATCHSET.md` and the campaign worklog: the measured commit, the tree hashes, the target
   and guard results, the run directories that carry them, and the date. An entry without its run
   directory is not a record.
-- Move `pins/t4a-faer.rev` to the measured revision when the candidate is adopted: the pin names the
+- Move `pins/colmat.rev` to the measured revision when the candidate is adopted: the pin names the
   revision the campaign materialises and the pages quote, so it follows the adoption, not `main`.
   It moved to `2870062` when `0c71ca2` was merged. Re-recording the declared suite at that revision
   is the publication step that follows a merge, and it is a separate, deliberately started run.
