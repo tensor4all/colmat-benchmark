@@ -83,6 +83,8 @@ A v2 run recorded with less than the frozen v2 settings (`--prime-ms 250 --reps 
 `result/INDEX.md` status say it is not comparable with the v2 pages that met them, and a
 verdict on its page also needs a ratio beyond 1.10x, because too little priming reads a few
 percent fast (the ohtaka-fat runs of #101 used 100 ms / 3 reps to fit a 30-minute queue; #109).
+The 1.10x is a judgement (about three times the ~3% measured at 150 ms; the bias at 100 ms
+was never measured), so the marking, not the margin, is what keeps such cells apart.
 
 ## Thread budget
 
