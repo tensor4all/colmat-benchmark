@@ -1973,7 +1973,7 @@ macro_rules! highlevel_ops {
 
 /// The families that the fork rows run through explicit-parallelism entry points only.
 ///
-/// `faer-fork` is measured at two API generations: the baseline, where the high level methods
+/// `colmat` is measured at two API generations: the baseline, where the high level methods
 /// (`partial_piv_lu()`, `thin_svd()`, ...) read a process-wide parallelism setting, and the
 /// 0.25 candidate, where that setting is gone and the same methods take a `Par<'team>`. A call
 /// through a high level method therefore cannot be written once for both. Every family below is

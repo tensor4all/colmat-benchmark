@@ -23,7 +23,7 @@ which own the same job one layer up.
 | Result layout | [`docs/results.md`](docs/results.md) |
 | Timing policy | [`docs/timing-policy.md`](docs/timing-policy.md) |
 | Measurement audit | [`docs/measurement-audit-2026-11-06.md`](docs/measurement-audit-2026-11-06.md) — what each timed call includes, per family and arm |
-| Reference revisions | [`pins/t4a-faer.rev`](pins/t4a-faer.rev) (historical file name; it holds the measured `colmat` revision) and [`pins/upstream-faer.rev`](pins/upstream-faer.rev) (the baseline) — what `status` is measured against |
+| Reference revisions | [`pins/colmat.rev`](pins/colmat.rev) (the measured `colmat` revision) and [`pins/upstream-faer.rev`](pins/upstream-faer.rev) (the baseline) — what `status` is measured against |
 | Rules and runbook | [`docs/rules.md`](docs/rules.md) - acceptance in an hour, the frozen contract, and the commands |
 | Design record | [`docs/worklog.md`](docs/worklog.md) — decisions, fixed failures, open items |
 | Provenance | [`docs/provenance.md`](docs/provenance.md) — what was copied from which sibling and under what terms |
@@ -86,30 +86,30 @@ three are recorded in `run.yaml`:
 
 | identity | what it is | pinned by |
 |---|---|---|
-| `library` | the measured `colmat` checkout (package and library `colmat`) | `pins/t4a-faer.rev` (historical file name) |
+| `library` | the measured `colmat` checkout (package and library `colmat`) | `pins/colmat.rev` |
 | `upstream` | the upstream `faer` release `colmat` is based on | `pins/upstream-faer.rev` |
 | `harness` | this repository, whose commit and dirty state can move a number | per run (`harness.commit`) |
 
 ```bash
 # one vendor arm, build + verify + measure + validate + publish + reindex.
 # One binary links one vendor library, so an arm is a run of its own.
-python3 scripts/record_run.py zen5-cpu faer-kernels --vendor openblas \
+python3 scripts/record_run.py zen5-cpu colmat-kernels --vendor openblas \
     --checkout /path/to/colmat-rs --upstream /path/to/upstream-faer
-python3 scripts/record_run.py zen5-cpu faer-kernels --vendor mkl \
+python3 scripts/record_run.py zen5-cpu colmat-kernels --vendor mkl \
     --checkout /path/to/colmat-rs --upstream /path/to/upstream-faer
 ```
 
-Four arms are compared at the library's own API: `colmat` (CSV engine `faer-fork`),
-upstream `faer` (`faer-upstream`), OpenBLAS and Intel oneAPI MKL; the AOCL arm is described below. The Rust
+Four arms are compared at the library's own API: `colmat` (CSV engine `colmat`),
+upstream `faer` (`faer`), OpenBLAS and Intel oneAPI MKL; the AOCL arm is described below. The Rust
 libraries are separate dependencies named `colmat` and `faer_upstream`; the
 upstream dependency selects package `faer`. Each vendor arm has its own binary.
-The pin file, the checkout directory and the CSV engine names keep their
-pre-rename names (`pins/t4a-faer.rev`, `extern/t4a-faer`, `faer-fork`,
-`faer-upstream`) as historical identities, so existing recordings and tooling keep
-resolving; they name `colmat`, not the old crate.
+Runs recorded before #113 used the older names (suites `faer-kernels*`, engines `faer-fork` /
+`faer-upstream`, `pins/t4a-faer.rev`, `extern/t4a-faer`). They are not rewritten: the
+descriptor's `aliases:` maps them to the current names when the index, the site and the charts
+load data, so an old run and a new run of one suite share a cell.
 
 For library-only diagnostics on a host without a vendor toolchain, the build
-script also accepts `--vendor none`. This links no vendor; use `--rows faer-fork`
+script also accepts `--vendor none`. This links no vendor; use `--rows colmat`
 when running `fbench` for a colmat-only measurement. This diagnostic build option
 is separate from the recorder's vendor arms and does not publish a dataset.
 
@@ -153,7 +153,7 @@ reproduce a number from it:
   flame=avx512` on Zen 5). The `colmat`, upstream and harness revisions come from
   the build script's `--out` file, as for the other arms.
 
-A `colmat` checkout may live inside this repository's tree, at `extern/t4a-faer`:
+A `colmat` checkout may live inside this repository's tree, at `extern/colmat`:
 the linked crate then inherits its package fields from this repository's
 [`Cargo.toml`](Cargo.toml), which declares them.
 
@@ -168,7 +168,7 @@ and every other value the toolkit needs. The `schemas/` copies are gone: the
 toolkit supplies them.
 
 `scripts/setup_extern_deps.sh` materialises the measured `colmat` checkout at
-`extern/t4a-faer` (historical directory name) and `extern/upstream-faer` from the
+`extern/colmat` and `extern/upstream-faer` from the
 pins, which is what `gen_index.py --check` needs to say whether a recorded page is
 current.
 

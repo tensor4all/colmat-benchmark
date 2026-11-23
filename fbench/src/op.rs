@@ -296,7 +296,7 @@ mod tests {
                     k: if family == "gemm" { Some(n) } else { None },
                     batch: 1,
                 };
-                for mut op in crate::ops_for("faer-fork", Dtype::F64, family, case, order).unwrap()
+                for mut op in crate::ops_for(crate::ROW_COLMAT, Dtype::F64, family, case, order).unwrap()
                 {
                     op.prepare().unwrap();
                     let s = colmat::team::with_team(threads, |par| {
@@ -313,7 +313,7 @@ mod tests {
                         + s.gemm_team_kernel;
                     assert!(
                         team > 0,
-                        "faer-fork {family} {} {}: no team dispatch ({s:?})",
+                        "colmat {family} {} {}: no team dispatch ({s:?})",
                         order.label(),
                         op.note
                     );
@@ -347,12 +347,12 @@ mod tests {
                             Ok(ops) => ops,
                             Err(_) => continue,
                         };
-                        // householder_apply times both public forms; a faer row times the
-                        // two-route families through the owning method and the allocation-free
-                        // route.
+                        // householder_apply times both public forms; a colmat or faer row times
+                        // the two-route families through the owning method and the
+                        // allocation-free route.
                         let expected = match family {
                             "householder_apply" => 2,
-                            _ if row.starts_with("faer-")
+                            _ if (row == crate::ROW_COLMAT || row == crate::ROW_FAER)
                                 && TWO_ROUTE_FAMILIES.contains(&family) =>
                             {
                                 2
@@ -391,7 +391,7 @@ mod tests {
     /// outside it on the other. Every row's `run` is executed single-threaded (`Token::none()` is
     /// `Par::Seq`, `backend.rs`), which is what makes the counter exact: the measured call runs on
     /// this thread and allocates nothing there. A library's own threaded-path allocation is not in
-    /// scope here and is declared in `benchmarks/suites/faer-kernels.yaml` (known blind spots).
+    /// scope here and is declared in `benchmarks/suites/colmat-kernels.yaml` (known blind spots).
     #[test]
     fn no_row_allocates_inside_run() {
         let _budget = hold_budget();
@@ -403,9 +403,9 @@ mod tests {
         // The cells a primary ratio is formed from: column-major everywhere (the vendor's driver
         // route), plus row-major `gemm`, the only family the vendor also measures row-major. A
         // row-major LAPACK-driver cell has no vendor counterpart (it is a skip, `lapack.rs`), and
-        // the faer row may allocate its own column-major copy inside the library call there
+        // the colmat row may allocate its own column-major copy inside the library call there
         // (`lu/partial_pivoting/factor.rs:396-418`), a declared blind spot in
-        // benchmarks/suites/faer-kernels.yaml, not a harness allocation.
+        // benchmarks/suites/colmat-kernels.yaml, not a harness allocation.
         for (order, families) in [(Order::F, FAMILIES), (Order::C, &["gemm"][..])] {
             for row in crate::engine_rows() {
                 for family in families {
@@ -522,7 +522,7 @@ mod tests {
             k: None,
             batch: 1,
         };
-        for row in ["faer-fork", "faer-upstream"] {
+        for row in [crate::ROW_COLMAT, crate::ROW_FAER] {
             for family in TWO_ROUTE_FAMILIES {
                 let ops = crate::ops_for(row, Dtype::F64, family, case, Order::F).unwrap();
                 assert_eq!(ops.len(), 2, "{row} {family} must time both routes");

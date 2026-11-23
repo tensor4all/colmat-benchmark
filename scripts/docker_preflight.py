@@ -70,14 +70,14 @@ pushed = sh(["git", "-C", str(ROOT), "branch", "-r", "--contains", head]).stdout
 check("harness commit clean and on a remote", not dirty and bool(pushed), f"{head} {pushed} {dirty}")
 # 6. a smoke cell per arm, through the real path
 smokes = {}
-for arm, engines in (("mkl", "faer-fork,faer-upstream,lapack-mkl"), ("openblas", "faer-fork,lapack-openblas"),
-                     ("aocl", "faer-fork,lapack-aocl")):
+for arm, engines in (("mkl", "colmat,faer,lapack-mkl"), ("openblas", "colmat,lapack-openblas"),
+                     ("aocl", "colmat,lapack-aocl")):
     label = f"preflight-smoke-{arm}"
     r = sh([str(ROOT / "scripts/docker_campaign.sh"), "shell",
-            f"python scripts/record_run.py zen5-cpu faer-kernels --vendor {arm} --engines {engines} "
+            f"python scripts/record_run.py zen5-cpu colmat-kernels --vendor {arm} --engines {engines} "
             f"--regimes gemm-small --families gemm --threads 1,8 --dtypes f64 --reps 2 --aa {len(engines.split(','))} --prime-ms 250 "
             f"--no-publish --label {label}; rc=$?; chown -R {os.getuid()}:{os.getgid()} data .git docs result target; exit $rc"])
-    runs = sorted((ROOT / "data/results/zen5-cpu/faer-kernels").glob(f"*-{label}"))
+    runs = sorted((ROOT / "data/results/zen5-cpu/colmat-kernels").glob(f"*-{label}"))
     detail = {"exit": r.returncode, "tail": r.stderr[-600:]}
     ok = r.returncode == 0 and len(runs) == 1
     if runs:
