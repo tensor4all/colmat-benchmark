@@ -21,7 +21,7 @@ rather than being implied by the other arm's page.
 |---|---|---|---|---|---|---|---|---|
 | `colmat-kernels-keyaki-os-shared` | `keyaki-64-os-shared` | `mkl` | `93da62172a96/0539947ffb75` | 0.34.0 | 2026-11-22 | full | current | [result/keyaki-64-os-shared/faer-kernels-keyaki-os-shared/93da62172a96-0539947ffb75-mkl-timing-v2.md](keyaki-64-os-shared/faer-kernels-keyaki-os-shared/93da62172a96-0539947ffb75-mkl-timing-v2.md) |
 | `colmat-kernels-keyaki` | `keyaki-64` | `mkl` | `93da62172a96/0539947ffb75` | 0.34.0 | 2026-11-22 | full | current | [result/keyaki-64/faer-kernels-keyaki/93da62172a96-0539947ffb75-mkl-timing-v2.md](keyaki-64/faer-kernels-keyaki/93da62172a96-0539947ffb75-mkl-timing-v2.md) |
-| `colmat-kernels-large` | `zen5-cpu` (optional) | `openblas` | `93da62172a96/0539947ffb75` | 0.34.0 | 2026-11-21 | partial | current | [result/zen5-cpu/faer-kernels-large/93da62172a96-0539947ffb75-openblas-timing-v2.md](zen5-cpu/faer-kernels-large/93da62172a96-0539947ffb75-openblas-timing-v2.md) |
+| `colmat-kernels-large` | `zen5-cpu` (optional) | `openblas` | `93da62172a96/0539947ffb75` | 0.34.0 | 2026-11-21 | declaration-changed | current | [result/zen5-cpu/faer-kernels-large/93da62172a96-0539947ffb75-openblas-timing-v2.md](zen5-cpu/faer-kernels-large/93da62172a96-0539947ffb75-openblas-timing-v2.md) |
 | `colmat-kernels-large` | `zen5-cpu` (optional) | `mkl` | `93da62172a96/0539947ffb75` | 0.34.0 | 2026-11-20 | partial | current | [result/zen5-cpu/faer-kernels-large/93da62172a96-0539947ffb75-mkl-timing-v2.md](zen5-cpu/faer-kernels-large/93da62172a96-0539947ffb75-mkl-timing-v2.md) |
 | `colmat-kernels-large` | `zen5-cpu` (optional) | `aocl` | `93da62172a96/0539947ffb75` | 0.34.0 | 2026-11-21 | partial | current | [result/zen5-cpu/faer-kernels-large/93da62172a96-0539947ffb75-aocl-timing-v2.md](zen5-cpu/faer-kernels-large/93da62172a96-0539947ffb75-aocl-timing-v2.md) |
 | `colmat-kernels-large` | `zen2-cpu` (optional) | `openblas` | - | - | - | - | missing | - |
@@ -30,7 +30,7 @@ rather than being implied by the other arm's page.
 | `colmat-kernels-large` | `zen2-64-smt-off` (optional) | `openblas` | - | - | - | - | missing | - |
 | `colmat-kernels-large` | `zen2-64-smt-off` (optional) | `mkl` | - | - | - | - | missing | - |
 | `colmat-kernels-large` | `zen2-64-smt-off` (optional) | `aocl` | - | - | - | - | missing | - |
-| `colmat-kernels` | `zen5-cpu` | `openblas` | `93da62172a96/0539947ffb75` | 0.34.0 | 2026-11-20 | partial | current | [result/zen5-cpu/faer-kernels/93da62172a96-0539947ffb75-openblas-timing-v2.md](zen5-cpu/faer-kernels/93da62172a96-0539947ffb75-openblas-timing-v2.md) |
+| `colmat-kernels` | `zen5-cpu` | `openblas` | `93da62172a96/0539947ffb75` | 0.34.0 | 2026-11-20 | declaration-changed | current | [result/zen5-cpu/faer-kernels/93da62172a96-0539947ffb75-openblas-timing-v2.md](zen5-cpu/faer-kernels/93da62172a96-0539947ffb75-openblas-timing-v2.md) |
 | `colmat-kernels` | `zen5-cpu` | `mkl` | `93da62172a96/0539947ffb75` | 0.34.0 | 2026-11-20 | full | current | [result/zen5-cpu/faer-kernels/93da62172a96-0539947ffb75-mkl-timing-v2.md](zen5-cpu/faer-kernels/93da62172a96-0539947ffb75-mkl-timing-v2.md) |
 | `colmat-kernels` | `zen5-cpu` | `aocl` | `93da62172a96/0539947ffb75` | 0.34.0 | 2026-11-21 | partial | current | [result/zen5-cpu/faer-kernels/93da62172a96-0539947ffb75-aocl-timing-v2.md](zen5-cpu/faer-kernels/93da62172a96-0539947ffb75-aocl-timing-v2.md) |
 | `colmat-kernels` | `zen2-cpu` (optional) | `openblas` | - | - | - | - | missing | - |

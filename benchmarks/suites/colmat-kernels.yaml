@@ -210,6 +210,14 @@ runs:
     # strides are not columns in the CSV.
     order: [c, f]
     engines: [colmat, faer, lapack-openblas, lapack-mkl, lapack-aocl]
+    # The OpenBLAS arm measures four families only (#111). In the published zen5 pair at colmat
+    # 93da6217 OpenBLAS is faster than colmat in 27 of the 276 cells outside them (eigh 8/36, qr_factor
+    # 15/60, qr 2/60, svd_thin 2/60, svd_values 0/60) with a median OpenBLAS/colmat ratio of 1.55, so
+    # those rows cost run time and page space for a baseline that is slower overall. The README
+    # ("Which families each arm measures") names the pair and the other excluded families. MKL and
+    # AOCL keep the full set. A family absent for an arm is "not measured for this arm", not a hole.
+    vendor_families:
+      openblas: [cholesky, lu, solve, gemm]
     populations:
       - regime: gemm-small
         groups: [gemm]

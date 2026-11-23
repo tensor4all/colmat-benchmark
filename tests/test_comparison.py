@@ -172,6 +172,43 @@ class ComparisonTest(unittest.TestCase):
         self.assertIn(f'<td>-</td><td>{fmt(50.0)}</td><td>-</td>', page)
         self.assertNotIn(f'>{fmt(5.0)}<', page)
 
+    def test_a_family_the_suite_does_not_ask_the_arm_for_reads_not_measured_never_a_hole(self):
+        # #111: the suite narrows the OpenBLAS arm to cholesky/lu/solve/gemm. The MKL arm also
+        # measured `qr`; that cell is `n/m` for OpenBLAS -- the suite's declaration -- while an `lu`
+        # cell the arm was asked for and did not carry stays a dash. The join must not refuse the pair.
+        mkl_rows = [cell(f, r, v) for f in ('lu', 'qr')
+                    for r, v in (('faer-fork', 10.0), ('faer-upstream', 12.0), ('lapack-mkl', 100.0))]
+        page = self.generate(mkl_rows, [cell('lu', 'faer-fork', 10.0)])
+        fmt = gen_comparison.fmt
+        nm = gen_comparison.NOT_MEASURED
+        self.assertEqual(page.count(nm), 3)                       # qr: fork, vendor row, ratio
+        self.assertIn(f'<td>{fmt(10.0)}</td><td>-</td><td>-</td>', page)   # lu: asked, not carried
+        self.assertIn('not measured for this arm', page)
+
+    def test_a_focused_run_manifest_cannot_turn_a_hole_into_a_declaration(self):
+        # The declared set is the suite's, not the manifest's `run_spec.populations`: a run narrowed
+        # to `gemm` still leaves `lu` a dash (asked, not carried), because the suite asks for it.
+        pops = {'run_spec': {'populations': [{'regime': 'gemm-small', 'families': ['gemm'],
+                                              'n': ['1024'], 'batch': [1]}]}}
+        mkl_rows = [cell('lu', r, v)
+                    for r, v in (('faer-fork', 10.0), ('faer-upstream', 12.0), ('lapack-mkl', 100.0))]
+        page = self.generate(mkl_rows, [cell('gemm', 'faer-fork', 10.0)], **pops)
+        self.assertNotIn(gen_comparison.NOT_MEASURED, page)
+
+    def test_a_recorded_row_is_never_replaced_by_not_measured(self):
+        # A page recorded under an earlier, wider declaration keeps its numbers for a cell the
+        # suite no longer asks the arm for.
+        mkl_rows = [cell('qr', r, v)
+                    for r, v in (('faer-fork', 10.0), ('faer-upstream', 12.0), ('lapack-mkl', 100.0))]
+        page = self.generate(mkl_rows, [cell('qr', 'faer-fork', 10.0), cell('qr', 'lapack-openblas', 50.0)])
+        self.assertNotIn(gen_comparison.NOT_MEASURED, page)
+        self.assertIn(f'<td>{gen_comparison.fmt(50.0)}</td>', page)
+
+    def test_a_manifest_of_an_undeclared_suite_never_reads_not_measured(self):
+        page = self.generate([cell('qr', 'faer-fork', 10.0), cell('qr', 'lapack-mkl', 100.0)],
+                             [cell('lu', 'faer-fork', 10.0)], suite_id='no-such-suite')
+        self.assertNotIn(gen_comparison.NOT_MEASURED, page)
+
     def harness_repo(self):
         """A throw-away repository carrying the measured harness paths, at three commits.
 
