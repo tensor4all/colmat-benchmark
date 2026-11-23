@@ -30,6 +30,7 @@
   Known blind spot: The 112T row is os-shared: it measures every core of the node, so the operating system, Slurm and the recorder itself share the measured CPUs with the cells, and the recorder (pinned to NUMA node 3) sits inside the measured set for that row. The profile declares the row with no observer CPU, the recorder records the caveat in its observer block, and the page repeats it. Rows 16T, 32T and 64T keep the observing side in NUMA node 3 (CPUs 3,7,...,111), a domain none of them measures.
   Known blind spot: Boost is ON for this run and is not comparable with a boost-off run: the fat node exposes `intel_pstate/no_turbo` = 0, an unprivileged job cannot switch it off, and the recorder was started with `FBENCH_ALLOW_BOOST=1`, which prints the warning, keeps the raw switch in `host.power`, and records the deviation instead of refusing. A boost-off comparison needs the switch turned off by the operator and another run of this suite.
   Known blind spot: Machine state not shown elsewhere: the fat node's layout is 4 sockets of 28 cores, 4 NUMA nodes with CPUs interleaved across them by stride 4, SMT off, 39424 KiB of L3 per socket, 774 GB of memory per node (see the profile for how each row's CPUs are named). Its cpufreq exposes turbo and the governor, so the recorder records the power state from sysfs. Timing settings are reps 3, 2 process sets, priming 100 ms, below the 250 ms of the frozen v2 baseline (150 ms was rejected there because one cell read about 3% fast), so single cells may read a few percent fast.
+  Known blind spot: In the run recorded 2026-11-22 (`20261122T035033Z`, job 3223469) the MKL gemm row is erratic on this node from 32T up, and only there (tensor4all/colmat-benchmark#121). For 4096^3, MKL's per-process medians are 118.5/118.9 ms at 16T, 178.0/158.1 ms at 32T (calls 150.4-181.8 ms, slower than its own 16T row), 136.9/475.9 ms at 64T (calls 90.6-626.0 ms) and 91.0/45.9 ms at 112T. In the same four 4096^3 cells the faer-fork row's two process medians differ by 0.23%, 0.08%, 3.97% and 3.91% (16T/32T/64T/112T); this does not hold for faer at every shape (its 112T 2048^3 cell is 8.63 +/- 1.24 ms). The idle gate passed before and after every 64T process on the first attempt, and the harness read MKL's thread count back as the row's budget (`vendor=Some(64)`), so neither load that the gate sees nor an oversubscribed budget explains the 64T row. The cause is not identified; MKL's OpenMP placement over a CPU set that spans three NUMA nodes, and the boost-on clock, are untested candidates. In that run the 64T 4096^3 cell therefore carries no verdict: the 237.6 ms difference is smaller than MKL's +/- 239.7 ms. The 112T 4096^3 cell carries none either. Its 32T 4096^3 verdict clears its spread (63.8 ms against +/- 14.0 ms), but it describes that run's MKL at 32T on this node, not MKL's gemm capability. A later run of this suite must be read from its own table, not from this paragraph.
   Known blind spot: Known limitation: Coverage is the declared grid only (see `runs`): gemm at the sizes and thread budgets of the ohtaka-fat profile.
   Known blind spot: Residual-check coverage narrowed: the verification census (`verify`) covers the population's 2048 cell at every thread budget, not its 4096 cell. The reference product is the harness's single-threaded cache-blocked loop on this harness revision, so one 4096 case costs minutes and a 4096 census would not fit the 30-minute queue. A timed process also checks the result of its last timed call at the cell's own size (the harness's `timing::measure` ends in the cell's check), so a wrong 4096 result fails its row, but that check records no residual and is not part of the census. Where this page says every timed cell matches a verification census, read it with this limit.
 - **Rows** — one row per engine in every table below:
@@ -71,9 +72,10 @@ per-start median range exceeds 5% of its median, and `p` a balanced cell whose e
 position-effect ratio exceeds 1.05. Flagged cells are retained, not discarded; the
 between-start variation can exceed the difference being compared.
 The `vs` columns mark only differences larger than the spread this run recorded for those
-two rows (combined between-start SD, floored at 5%), always with the measured library as the subject:
+two rows (combined between-start SD, floored at 5%) and larger than each of the two rows' `±`,
+always with the measured library as the subject:
 `🔵 <row> X faster than <row>` / `🔴 <row> X slower than <row>` (the subject is the first column of the table, the compared row is named in
-the cell, not only in the column header), `·` inside the band, `-` that row is not
+the cell, not only in the column header), `·` inside the band or within a row's `±`, `-` that row is not
 measured in this arm. `notes` carries the cell warnings (`*` a declared row has no measurement,
 `!` between-start range over 5%, `p` position effect over 5%, dispatch-dominated means the
 row is under 20 us so 4T/8T pay thread-region start-up). Per-start ratios and every
@@ -99,7 +101,7 @@ These describe the recorded revisions; they are not a regression claim.
 | case | faer-fork (ms) | lapack-mkl (ms) | vs `lapack-mkl` | notes |
 |---|---|---|---|---|
 | `gemm/2048x2048x2048/b1` | 10.8219 ± 0.0445513 (W 0.0590501) | 11.5082 ± 0.646019 (W 2.28353) | 🔵 faer-fork 1.06× faster than `lapack-mkl` | `!` between-start range over 5% |
-| `gemm/4096x4096x4096/b1` | 68.7415 ± 1.92995 (W 0.226943) | 306.381 ± 239.682 (W 120.609) | 🔵 faer-fork 4.46× faster than `lapack-mkl` | `!` between-start range over 5%; `p` position effect over 5% |
+| `gemm/4096x4096x4096/b1` | 68.7415 ± 1.92995 (W 0.226943) | 306.381 ± 239.682 (W 120.609) | · | `!` between-start range over 5%; `p` position effect over 5% |
 
 ## gemm-ohtaka-fat, f64, f order, 112T (CPU 0-111)
 
