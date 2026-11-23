@@ -74,9 +74,10 @@ per-start median range exceeds 5% of its median, and `p` a balanced cell whose e
 position-effect ratio exceeds 1.05. Flagged cells are retained, not discarded; the
 between-start variation can exceed the difference being compared.
 The `vs` columns mark only differences larger than the spread this run recorded for those
-two rows (combined between-start SD, floored at 5%), always with the measured library as the subject:
+two rows (combined between-start SD, floored at 5%) and larger than each of the two rows' `±`,
+always with the measured library as the subject:
 `🔵 <row> X faster than <row>` / `🔴 <row> X slower than <row>` (the subject is the first column of the table, the compared row is named in
-the cell, not only in the column header), `·` inside the band, `-` that row is not
+the cell, not only in the column header), `·` inside the band or within a row's `±`, `-` that row is not
 measured in this arm. `notes` carries the cell warnings (`*` a declared row has no measurement,
 `!` between-start range over 5%, `p` position effect over 5%, dispatch-dominated means the
 row is under 20 us so 4T/8T pay thread-region start-up). Per-start ratios and every
@@ -1568,7 +1569,7 @@ Not applicable to this population's shapes and reported as skipped: `cholesky/32
 | `solve/n128/b1 [api-inclusive]` | 0.2037 ± 0.00661049 (W 0.00205753) | 8.95819 ± 5.02202 (W 0.0299721) | - | 🔵 faer-fork 43.98× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
 | `solve/n256/b1` | 0.662432 ± 0.0255125 (W 0.00401979) | 2.05846 ± 0.21638 (W 0.04525) | 1.12182 ± 0.129702 (W 0.0216995) | 🔵 faer-fork 3.11× faster than `faer-upstream` | 🔵 faer-fork 1.69× faster than `lapack-mkl` | `!` between-start range over 5%; `p` position effect over 5% |
 | `solve/n256/b1 [api-inclusive]` | 0.838359 ± 0.0137107 (W 0.00318788) | 1.4254 ± 0.149998 (W 0.0366694) | - | 🔵 faer-fork 1.70× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
-| `solve/n512/b1` | 2.56506 ± 0.197169 (W 0.016276) | 7.98918 ± 0.00526197 (W 0.11472) | 3.59514 ± 1.01801 (W 0.0374595) | 🔵 faer-fork 3.11× faster than `faer-upstream` | · | `!` between-start range over 5%; `p` position effect over 5% |
+| `solve/n512/b1` | 2.56506 ± 0.197169 (W 0.016276) | 7.98918 ± 0.00526197 (W 0.11472) | 3.59514 ± 1.01801 (W 0.0374595) | 🔵 faer-fork 3.11× faster than `faer-upstream` | 🔵 faer-fork 1.40× faster than `lapack-mkl` | `!` between-start range over 5%; `p` position effect over 5% |
 | `solve/n512/b1 [api-inclusive]` | 3.18521 ± 0.0900428 (W 0.0197608) | 6.25133 ± 3.00618 (W 0.163294) | - | 🔵 faer-fork 1.96× faster than `faer-upstream` | - | `*` one row has no measurement here; `!` between-start range over 5% |
 | `svd_thin/n128/b1` | 3.01996 ± 0.0146887 (W 0.00810874) | 4.48387 ± 0.212383 (W 0.137128) | 4.08355 ± 0.00634105 (W 0.00719566) | 🔵 faer-fork 1.48× faster than `faer-upstream` | 🔵 faer-fork 1.35× faster than `lapack-mkl` | `!` between-start range over 5% |
 | `svd_thin/n128/b1 [api-inclusive]` | 3.05907 ± 0.00351136 (W 0.0102331) | 3.98192 ± 0.013208 (W 0.0308833) | - | 🔵 faer-fork 1.30× faster than `faer-upstream` | - | `*` one row has no measurement here |
