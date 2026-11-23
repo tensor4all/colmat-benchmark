@@ -46,6 +46,11 @@ measured:
     bin_dir: BIN_DIR
   # The timing protocol belongs to the harness, and the harness lives here.
   protocol: campaign
+  # Harness variables that change the measured grid. FBENCH_ORDER narrows the layout axis (set
+  # by scripts/record_run.py from a suite that declares one order) and FBENCH_PROFILE names the
+  # profile in the CSV; the manifest records both as `harness_env`, so the recorded command plus
+  # that block reproduce the grid (#109).
+  recorded_env: [FBENCH_ORDER, FBENCH_PROFILE]
 
 # The second recorded identity: the upstream faer release the fork is based on, linked
 # by path in the same binary as the fork row. `pins/upstream-faer.rev` holds the release
@@ -183,6 +188,17 @@ csv_columns:
 # Explicit v2 opt-in; protocol budgets are fixed only after representative pilots.
 timing:
   version: 2
+  # The settings frozen for v2 (docs/protocol-v2-baseline.md section 1). A v2 run recorded with
+  # less priming or fewer reps still publishes, but its page header and its index status say it
+  # is not comparable with the pages that met these (#109: the ohtaka-fat runs at 100 ms / 3
+  # reps). 150 ms already read ~3% fast in one of four calibration cells; 100 ms is less priming
+  # and was not calibrated, so a verdict on such a page also needs a ratio beyond 1.10x - about
+  # three times the bias measured at 150 ms - rather than the 5% floor every page has.
+  baseline:
+    prime_ms: 250
+    reps: 5
+    min_verdict_ratio: 1.10
+    reference: docs/protocol-v2-baseline.md
 
 # The strings the generated index and report headers print.
 report:

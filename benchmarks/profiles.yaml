@@ -117,17 +117,19 @@ profiles:
   # records the power state instead of this profile declaring it (contrast ohtaka-cpu, which
   # exposes no cpufreq and must say it does not).
   - name: ohtaka-fat
-    # Every CPU is measured on the 112T row, so there is no observer to audit; the
-    # recorder refuses such a row unless the profile says so.
-    os_shared: true
+    # No `os_shared`: that flag turns the two observer refusals into no-ops for every row of the
+    # profile (scripts/record_run.py `allow_os_shared`), including 16T/32T/64T, which do have an
+    # observer. The 112T row's `observer: ""` below is the per-row declaration, and the recorder
+    # admits exactly that case (`unobserved_rows`) and records "observer unavailable" itself.
     role: measurement
     description: >-
       4x Intel Xeon Platinum 8280 (Cascade Lake), 112 physical / 112 logical cores (SMT off),
       4 NUMA nodes of 28 cores of 774 GB each, 39424 KiB of L3 per socket. Rows fill one node
       before the next: 16T is the first 16 cores of node 0, 32T all of node 0 and 4 cores of node
       1, 64T nodes 0-1 and 8 cores of node 2, 112T the whole machine. The 112T row measures every
-      core, so no CPU is left for the observing side: it is declared with no observer and the run
-      is recorded os-shared (shared with the operating system, Slurm and the recorder).
+      core, so no CPU is left for the observing side: it is declared with no observer, and a run
+      that includes it records "observer unavailable" (the operating system, Slurm and the
+      recorder share the measured cores) for the whole invocation.
     cpu: Intel Xeon Platinum 8280
     logical_cpus: 112
     l3: "39424 KiB per socket: 4 domains of 28 CPUs, one per NUMA node, node k = CPUs = k mod 4"

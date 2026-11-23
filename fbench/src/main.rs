@@ -1221,19 +1221,17 @@ fn main() -> ExitCode {
     if n_rows > 0 {
         rows.rotate_left(args.rotate_rows % n_rows);
     }
-    // Both layouts by default. `FBENCH_ORDER=f` (or `c`) restricts the grid to one layout: a suite
-    // that declares `order: [f]` (the ohtaka suites) sets it in the recorder's environment, because
-    // the recorder invokes this binary with the population's families and shapes and no layout
-    // argument, so the declaration alone cannot keep the other layout out of the CSV
-    // (tensor4all/colmat-benchmark#97, #101). The recorder's validation still compares the CSVs
-    // with the declared order axis, so a mismatch between the declaration and this variable is
-    // refused rather than published.
-    let orders: Vec<Order> = match std::env::var("FBENCH_ORDER").ok().as_deref() {
-        None | Some("") | Some("both") => vec![Order::C, Order::F],
-        Some("f") => vec![Order::F],
-        Some("c") => vec![Order::C],
-        Some(other) => {
-            eprintln!("FBENCH_ORDER must be f, c or both, not {other:?}");
+    // Both layouts by default. `FBENCH_ORDER=f` (or `c`) restricts the grid to one layout: for a
+    // suite that declares one order (`order: [f]`, the ohtaka suites) `scripts/record_run.py`
+    // exports it from that axis, because the recorder invokes this binary with the population's
+    // families and shapes and no layout argument, so the declaration alone cannot keep the other
+    // layout out of the CSV (tensor4all/colmat-benchmark#97, #101, #109). The manifest records the
+    // value (`harness_env`), and the recorder's v2 evidence check compares the CSVs with the
+    // declared order axis, so a mismatch is refused rather than published.
+    let orders = match orders_from_env(std::env::var("FBENCH_ORDER").ok().as_deref()) {
+        Ok(orders) => orders,
+        Err(message) => {
+            eprintln!("{message}");
             return ExitCode::from(2);
         }
     };
@@ -1468,9 +1466,34 @@ fn emit(
     });
 }
 
+/// The layouts `FBENCH_ORDER` selects: unset, empty or `both` is both; `f` or `c` is that one.
+/// Anything else is refused, so a typo cannot silently measure both layouts.
+fn orders_from_env(value: Option<&str>) -> Result<Vec<Order>, String> {
+    match value {
+        None | Some("") | Some("both") => Ok(vec![Order::C, Order::F]),
+        Some("f") => Ok(vec![Order::F]),
+        Some("c") => Ok(vec![Order::C]),
+        Some(other) => Err(format!("FBENCH_ORDER must be f, c or both, not {other:?}")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fbench_order_selects_one_layout_or_both() {
+        let names = |v: Option<&str>| {
+            orders_from_env(v).map(|o| o.iter().map(|x| x.label()).collect::<Vec<_>>())
+        };
+        assert_eq!(names(None), Ok(vec!["c", "f"]));
+        assert_eq!(names(Some("")), Ok(vec!["c", "f"]));
+        assert_eq!(names(Some("both")), Ok(vec!["c", "f"]));
+        assert_eq!(names(Some("f")), Ok(vec!["f"]));
+        assert_eq!(names(Some("c")), Ok(vec!["c"]));
+        assert!(names(Some("F")).is_err());
+        assert!(names(Some("cf")).is_err());
+    }
 
     fn cli(extra: &[&str]) -> Result<Args, String> {
         let mut args: Vec<String> = [

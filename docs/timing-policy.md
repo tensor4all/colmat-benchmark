@@ -77,6 +77,13 @@ has been established by the current controls. The sibling harness in `tlinalg-rs
 warm-up call; `fbench` measures the priming time instead, and the recorder records
 the value it was asked for.
 
+A v2 run recorded with less than the frozen v2 settings (`--prime-ms 250 --reps 5`,
+[protocol-v2-baseline.md](protocol-v2-baseline.md) section 1) still publishes, but
+`benchmarks/campaign.yaml` `timing.baseline` marks it: its page header and its
+`result/INDEX.md` status say it is not comparable with the v2 pages that met them, and a
+verdict on its page also needs a ratio beyond 1.10x, because too little priming reads a few
+percent fast (the ohtaka-fat runs of #101 used 100 ms / 3 reps to fit a 30-minute queue; #109).
+
 ## Thread budget
 
 `--threads N` is required. At `N=1` both faer adapters select `Par::Seq`. At larger

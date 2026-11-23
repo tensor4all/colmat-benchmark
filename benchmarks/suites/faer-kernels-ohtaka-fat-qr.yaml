@@ -10,7 +10,7 @@ description: >-
   2048 companion, because one 4096 reference product is minutes of one core. The 8192 tier is
   `faer-kernels-ohtaka-fat-xlarge`, which needs a 12 h B2fat allocation: the per-cell residual check
   at 8192 costs minutes of one core per cell. 112T is the whole node: every core is measured, no
-  observer CPU is left, and the row is recorded os-shared. Measured at faer's
+  observer CPU is left, and that row is declared with no observer CPU. Measured at faer's
   own API against Intel oneAPI MKL (the upstream faer row is not measured: the 2-process-set budget
   needs a 2-row arm). This suite is its own page, never joined with the F1cpu `ohtaka-cpu` profile
   or with `zen5-cpu`: a different machine (112 Intel cores in 4 sockets against 128 EPYC cores in
@@ -64,16 +64,16 @@ workloads:
   known_blind_spots:
     - "Only the faer entry points are measured. tlinalg's packing, batch loop and lane policy, tenferro's tensor construction and dtype dispatch, and the small-`m` decode-projection shapes are other repositories' rows (tlinalg-benchmark, tenferro-benchmark)."
     - "The compact QR factor only: the square gemm rows of this profile are `faer-kernels-ohtaka-fat-gemm`, LU with Cholesky is `faer-kernels-ohtaka-fat-factor`, and the 8192 tier is `faer-kernels-ohtaka-fat-xlarge`. Rectangular LU, the 255/257/511/513 boundary shapes, the Householder apply rows, SVD and the eigensolvers are declared in other suites of this campaign and are not measured here; a reader must not carry a conclusion from this page to those shapes."
-    - "F (column-major) order only, because the issue fixes it for this profile: the recorder passes `FBENCH_ORDER=f` in the environment of both the census and the timing pass, so the harness emits no C-order cell. A C-order reading of the same sizes is the other ohtaka suite's business, not this one's."
+    - "F (column-major) order only, because the issue fixes it for this profile: `scripts/record_run.py` derives `FBENCH_ORDER=f` from this suite's `order: [f]` and exports it to the census and the timing pass, so the harness emits no C-order cell, and the manifest records the value as `harness_env` (printed in the header as `harness environment`). The runs recorded on 2026-11-22 (jobs 3223469/3223470/3223471) predate that: their Slurm job script exported `FBENCH_ORDER=f` by hand and is not committed, so their manifests and headers do not show it. Their CSVs carry `order=f` on every row, and their recorded `command` run from this repository now reproduces the same F-only grid. A C-order reading of the same sizes is the other ohtaka suite's business, not this one's."
     - "A vendor arm records the library it linked. MKL names no dispatched kernel and no processor count, so its manifest leaves both empty rather than inferring them. C-order vendor cells do not exist here (F order only), which is also the layout where LAPACKE has a route that leaves the clock free of allocation and layout conversion."
     - "The upstream faer row is not measured on this profile: the 2-process-set budget (`--aa 2`) needs a 2-row arm, so only the colmat fork and MKL are measured. The upstream faer revision printed in the page header is the pinned baseline of the campaign, not a measured column."
-    - "The 112T row is os-shared: it measures every core of the node, so the operating system, Slurm and the recorder itself share the measured CPUs with the cells, and the recorder (pinned to NUMA node 3) sits inside the measured set for that row. The profile declares the row with no observer CPU, the recorder records the caveat in its observer block, and the page repeats it. Rows 16T, 32T and 64T keep the observing side in NUMA node 3 (CPUs 3,7,...,111), a domain none of them measures."
+    - "The 112T row shares its cores with the operating system: it measures every core of the node, so the operating system, Slurm and the recorder itself share the measured CPUs with the cells, and the recorder (pinned to NUMA node 3) sits inside the measured set for that row. The profile declares that row with no observer CPU (`observer: \"\"`); the recorder admits exactly that declared case, records `observer unavailable` in the manifest's observer block, and the page header repeats it. No profile-wide override is involved. Rows 16T, 32T and 64T pin the observing side to NUMA node 3 (CPUs 3,7,...,111), a domain none of them measures, but a recording that includes the 112T row leaves no CPU outside the measured domains of the whole invocation, so the recorder's observer audit runs for none of its rows: in such a run the node-3 split of the 16T/32T/64T rows is the recorded affinity, not an audited one. Recording 16T/32T/64T in an invocation without 112T (`--threads 16,32,64`) keeps the audit for them."
     - "Boost is ON for this run and is not comparable with a boost-off run: the fat node exposes
       `intel_pstate/no_turbo` = 0, an unprivileged job cannot switch it off, and the recorder was
       started with `FBENCH_ALLOW_BOOST=1`, which prints the warning, keeps the raw switch in
       `host.power`, and records the deviation instead of refusing. A boost-off comparison needs the
       switch turned off by the operator and another run of this suite."
-    - "Machine state not shown elsewhere: the fat node's layout is 4 sockets of 28 cores, 4 NUMA nodes with CPUs interleaved across them by stride 4, SMT off, 39424 KiB of L3 per socket, 774 GB of memory per node (see the profile for how each row's CPUs are named). Its cpufreq exposes turbo and the governor, so the recorder records the power state from sysfs. Timing settings are reps 3, 2 process sets, priming 100 ms, below the 250 ms of the frozen v2 baseline (150 ms was rejected there because one cell read about 3% fast), so single cells may read a few percent fast."
+    - "Machine state not shown elsewhere: the fat node's layout is 4 sockets of 28 cores, 4 NUMA nodes with CPUs interleaved across them by stride 4, SMT off, 39424 KiB of L3 per socket, 774 GB of memory per node (see the profile for how each row's CPUs are named). Its cpufreq exposes turbo and the governor, so the recorder records the power state from sysfs. The runs recorded on 2026-11-22 used reps 3, 2 process sets and priming 100 ms (chosen to fit the 30-minute `i1fat` queue), below the frozen v2 settings of 250 ms and 5 reps (`docs/protocol-v2-baseline.md`; 150 ms was rejected there because one cell read about 3% fast) and the 0.5 s `docs/timing-policy.md` asks for, so single cells may read a few percent fast. The campaign's `timing.baseline` therefore marks such a run as not comparable with the v2 pages: its header and its `result/INDEX.md` status say so, and a verdict on its page also needs a ratio beyond 1.10x, so a ratio the short priming could create is printed as `·`. A run that should be compared with the other v2 pages is recorded at `--prime-ms 250 --reps 5`."
     - "Known limitation: Coverage is the declared grid only (see `runs`): the compact QR factor at the sizes and thread budgets of the ohtaka-fat profile."
     - "Residual-check coverage narrowed: the verification census (`verify`) covers the population's 2048 cell at every thread budget, not its 4096 cells. The reference product is the harness's single-threaded cache-blocked loop on this harness revision, so one 4096 case costs minutes and a 4096 census would not fit the 30-minute queue. A timed process also checks the result of its last timed call at the cell's own size (the harness's `timing::measure` ends in the cell's check), so a wrong 4096 result fails its row, but that check records no residual and is not part of the census. Where this page says every timed cell matches a verification census, read it with this limit."
 
@@ -116,7 +116,7 @@ engines_doc:
 
 # The verification census (`fbench verify`) recomputes each case's reference with a cache-blocked
 # product (`fbench/src/shared.rs` `mm`), which is single-threaded on this harness revision: minutes
-# per case at 4096, so the census is narrowed to the 4096 cells of every population at every thread
+# per case at 4096, so the census is narrowed to the 2048 cells of every population at every thread
 # budget. A timed process still checks its last call at the cell's own size; see `known_blind_spots`.
 verify:
   n: ["2048"]
@@ -126,8 +126,8 @@ runs:
     # The CPUs of each thread row are the profile's own `thread_rows`, restated here because the
     # schema asks the suite for them: the fat node numbers its CPUs across the four sockets
     # (NUMA node k = CPUs = k mod 4), so `0-15` would straddle all four nodes. Rows fill one node
-    # before the next; 112T is the whole node and has no observer CPU left (that row is
-    # recorded os-shared).
+    # before the next; 112T is the whole node and has no observer CPU left (the profile declares
+    # that row with `observer: ""`).
     cpu_sets:
       ohtaka-fat:
         - "0,4,8,12,16,20,24,28,32,36,40,44,48,52,56,60"
@@ -136,8 +136,9 @@ runs:
         - "0-111"
     dtypes: [f64]
     # F (column-major) only: the issue fixes the order for this profile. The recorder passes no
-    # layout argument, so the run script exports FBENCH_ORDER=f; without it the harness emits the
-    # C-order cells too and the CSVs would not match this axis.
+    # layout argument, so scripts/record_run.py exports FBENCH_ORDER=f from this axis (and the
+    # manifest records it as harness_env); without it the harness emits the C-order cells too and
+    # the CSVs would not match this axis.
     order: [f]
     # One vendor arm per run (AGENTS.md): MKL is the arm built on the fat node (no OpenBLAS arm
     # here; the F1cpu ohtaka suites use OpenBLAS, so their vendor rows do not compare with these).
