@@ -141,14 +141,20 @@ class PublicationSiteTest(unittest.TestCase):
         # against, on the landing page's title and heading and in every page's title prefix.
         self.assertIn('<title>colmat benchmark</title>', index)
         self.assertIn('<h1>colmat benchmark</h1>', index)
-        # The measured profile lists its recordings; zen2 profiles were never recorded and say so.
+        # Each recorded machine has a folded provenance section with its run pages; the zen2
+        # profiles were never recorded and share one line instead of a section each (#116).
         revision = rev_file_value((ROOT / gen_site.PIN).read_text())
-        zen5 = index.split('<h2 id="zen5-cpu">', 1)[1].split('<h2', 1)[0]
-        self.assertNotIn('Nothing recorded at the current pin', zen5)
+        zen5 = index.split('<details class="machine" id="runs-zen5-cpu">', 1)[1].split('<details class="machine"', 1)[0]
         self.assertIn(f'<code>{revision[:12]}</code>', zen5)
-        # The page states the suite's own limitation and the provenance of the runs it shows.
-        self.assertIn(html.escape(gen_site.limitation_text()), index)
-        self.assertIn('Current recordings: scope and provenance', index)
+        line = index.split('Not recorded yet:', 1)[1].split('</p>', 1)[0]
+        self.assertIn('<code>zen2-cpu</code>', line)
+        self.assertIn('<code>zen2-64-smt-off</code>', line)
+        self.assertNotIn('id="runs-zen2-cpu"', index)
+        # The zen5 section states the suite's own limitation and the provenance of its runs, folded
+        # and named for its profile rather than as a site-wide block.
+        self.assertIn(html.escape(gen_site.limitation_text()), zen5)
+        self.assertIn('<summary>Current zen5-cpu recordings: scope and provenance</summary>', zen5)
+        self.assertNotIn('<h2>Current', index)
         pages = {(p['suite'], p['vendor']): p for p in current_pages()}
         for suite, vendor in RECORDED:
             # The page file stays where it was recorded (a run recorded before #113 sits under
@@ -156,7 +162,10 @@ class PublicationSiteTest(unittest.TestCase):
             link = pathlib.PurePosixPath(pages[(suite, vendor)]['page']).relative_to('result').with_suffix('.html')
             self.assertEqual(link.name, f'{revision[:12]}-0539947ffb75-{vendor}-timing-v2.html')
             self.assertIn(f'href="{link}"', index)
-            self.assertIn(f'>zen5-cpu/{suite}/{link.with_suffix(".md").name}</a>', index)
+            # titled by suite and vendor, not by the file name
+            label = gen_site.family_matrix.VENDOR_LABELS[vendor]
+            self.assertIn(f'href="{link}">{suite} &middot; {label}</a>', zen5)
+            self.assertNotIn(f'>{link.with_suffix(".md").name}<', index)
             self.assertTrue((ROOT / 'result' / link).is_file(), link)
         # The two daily arms of this recording were recorded either side of a data commit: their
         # harness commits differ, the paths the harness is built from do not, so the join is accepted
@@ -199,15 +208,17 @@ class ThroughputPagesTest(unittest.TestCase):
             self.assertEqual(gen_site.main([]), 0)
         index = (ROOT / 'result' / 'index.html').read_text()
         # The landing page links the four dataset pages in the declared order -- f64 / F, the
-        # column-major default view, first -- and no throughput chart is carried inline any
-        # more; what is left on it is the trend section.
-        links = re.findall(r'<li><a href="(throughput-\w+-\w\.html)">([^<]+)</a>', index)
+        # column-major default view, first -- on one line of the zen5-cpu section, not as a bullet
+        # list of its own (#116); no throughput chart is carried inline, only the trend section.
+        links = re.findall(r'<a href="(throughput-\w+-\w\.html)">(\w+ / \w order)</a>', index)
+        # the tile and the top nav reach the default view in one click
+        self.assertIn('<a href="throughput-f64-f.html">Throughput charts &rarr;</a>', index)
         self.assertEqual(links, [('throughput-f64-f.html', 'f64 / F order'),
                                  ('throughput-f64-c.html', 'f64 / C order'),
                                  ('throughput-c64-f.html', 'c64 / F order'),
                                  ('throughput-c64-c.html', 'c64 / C order')])
-        self.assertIn('the column-major default view', index)
-        self.assertIn('The four-way view', index)
+        self.assertIn('(default view)', index)
+        self.assertIn('joined comparison', index)
         inline = re.findall(r'<img src="([^"]+)"', index)
         self.assertTrue(inline)
         for image in inline:
@@ -223,7 +234,7 @@ class ThroughputPagesTest(unittest.TestCase):
             self.assertIn(f'<h1>{title}</h1>', page)
             self.assertEqual(len(re.findall(r'href="throughput-\w+-\w\.html"', page)), 3)
             self.assertIn('<strong>%s / %s order</strong>' % (dtype, order.upper()), page)
-            self.assertIn('Current recordings: scope and provenance', page)
+            self.assertIn('<h2>Current zen5-cpu recordings: scope and provenance</h2>', page)
             self.assertIn(html.escape(gen_site.limitation_text()), page)
             missing = unrecorded_throughput_runs()
             if missing:
@@ -242,7 +253,7 @@ class ThroughputPagesTest(unittest.TestCase):
             # name, and the arm not recorded).
             self.assertLess(page.index('<nav class="muted">dataset:'), page.index('<img src='))
             last_chart = page.rindex('<img src=')
-            for below in ('Current recordings: scope and provenance',
+            for below in ('Current zen5-cpu recordings: scope and provenance',
                           html.escape(gen_site.limitation_text()),
                           'Generated by the Pages deploy',   # the notes' own first words
                           'Revisions:'):
@@ -275,6 +286,143 @@ class ThroughputPagesTest(unittest.TestCase):
             rows = [line for line in four_t.splitlines() if re.match(r'^\| \d+ \|', line)]
             self.assertTrue(rows, (dtype, order, family))
             self.assertEqual(('. |' in rows[0]), not has_mkl, rows[0])
+
+
+class LandingPageTest(unittest.TestCase):
+    """The landing page is the maintainer's mockup on #116, generated from the data."""
+
+    @classmethod
+    def setUpClass(cls):
+        with contextlib.redirect_stdout(io.StringIO()):
+            assert gen_site.main([]) == 0
+        cls.index = (ROOT / 'result' / 'index.html').read_text()
+        fm = gen_site.family_matrix
+        cls.order, cls.pages, cls.history = fm.collect()
+        cls.machines = {m['profile']: m for m in fm.machines(cls.order, cls.pages)}
+
+    def test_the_sections_come_in_the_mockups_order(self):
+        index = self.index
+        marks = ['class="headline"', '<div class="tiles">', 'Not recorded yet:', '<table class="share">',
+                 '<h2 id="pins">', '<h2 id="method">', '<h2 id="runs">', 'History of published records']
+        positions = [index.index(m) for m in marks]
+        self.assertEqual(positions, sorted(positions))
+        # one tile and one column per recorded machine, the os-shared run folded into its machine
+        self.assertEqual(list(self.machines), ['zen5-cpu', 'keyaki-64', 'ohtaka-fat'])
+        head = index.split('<table class="share">', 1)[1].split('</thead>', 1)[0]
+        self.assertEqual(re.findall(r'<a href="#([^"]+)">', head), list(self.machines))
+        self.assertEqual(index.count('<div class="tile" id='), 3)
+
+    def test_the_headline_names_its_comparison_set(self):
+        headline = self.index.split('class="headline">', 1)[1].split('</p>', 1)[0]
+        fm = gen_site.family_matrix
+        for m in self.machines.values():
+            split = gen_site._split(fm.share(m['total']))
+            self.assertEqual(sum(split), 100)
+            self.assertIn(f'<b>{split[0]}%</b>', headline)
+            self.assertIn(f'{split[0]} / {split[1]} / {split[2]} (win / tie / lose', self.index)
+            self.assertIn(f"{m['arch']} (vs {gen_site._vendors(m['compared'])}", headline)
+        # Cascade Lake covers 4 of the 9 families and the sentence says so
+        self.assertIn('Intel Cascade Lake (vs MKL, 4 of 9 families measured)', headline)
+        self.assertIn('<code>lu</code>', headline)
+
+    def test_tiles_carry_counts_vendors_coverage_threads_date_and_pin(self):
+        tile = self.index.split('<div class="tile" id="keyaki-64">', 1)[1].split('<div class="tile"', 1)[0]
+        m = self.machines['keyaki-64']
+        self.assertIn('AMD Zen 2', tile)
+        self.assertIn('(AVX2)', tile)
+        self.assertIn('EPYC 7702P &middot; 64 cores', tile)
+        self.assertIn('vs MKL (OpenBLAS, AOCL not measured)', tile)
+        self.assertIn('9 of 9 families &middot; 16&ndash;60 threads &middot; 2026-11-22 &middot; current pin', tile)
+        # the os-shared 64T run is listed with its machine and never counted
+        self.assertIn('64T os-shared run listed, not counted', tile)
+        self.assertEqual(sorted({t for a in m['arms'] for t in a.manifest['threads']['counts']}), [16, 32, 60])
+        ohtaka = self.index.split('<div class="tile" id="ohtaka-fat">', 1)[1].split('</div>\n', 1)[0]
+        self.assertIn('vs MKL (OpenBLAS not measured)', ohtaka)      # AOCL is an AMD-host arm
+        self.assertIn('<b>4 of 9 families</b>', ohtaka)
+        self.assertIn('below the timing baseline', ohtaka)
+
+    def test_an_older_pin_stays_visible_with_its_badge(self):
+        m = dict(self.machines['zen5-cpu'], behind=7)
+        families = gen_site.family_matrix.family_order(m['families'])
+        tile = gen_site.tile_html(m, families, {})
+        self.assertIn('<span class="badge">older pin: 7 commits behind</span>', tile)
+        # and a profile whose pages all sit in the history still yields a machine
+        older = [r for r in self.history if r['profile'] == 'zen5-cpu']
+        order, pages, _ = gen_site.family_matrix.collect()
+        pages = {'zen5-cpu': []}
+        newest = older[0]['library_commit']
+        for r in older:
+            if r['library_commit'] == newest and not any(c['suite'] == r['suite'] and c['vendor'] == r['vendor']
+                                                         for c, _ in pages['zen5-cpu']):
+                pages['zen5-cpu'].append(({'suite': r['suite'], 'vendor': r['vendor'], 'profile': 'zen5-cpu'}, r))
+        [machine] = gen_site.family_matrix.machines(['zen5-cpu'], pages)
+        self.assertGreater(machine['behind'], 0)
+
+    def test_cells_are_the_recorded_verdicts_and_not_measured_is_white_and_dashed(self):
+        index = self.index
+        self.assertIn('table.share td.na{background:#fff;border:1px dashed', index)
+        body = index.split('<table class="share">', 1)[1].split('</table>', 1)[0]
+        rows = dict(re.findall(r'<th scope="row">([^<]+)</th>(.*?)</tr>', body))
+        # ohtaka-fat recorded gemm, lu, cholesky and qr_factor only
+        for family, cells in rows.items():
+            last = re.findall(r'<td class="([^"]+)"', cells)[-1]
+            self.assertEqual(last == 'na', family not in ('gemm', 'lu', 'cholesky', 'qr_factor'), family)
+        # every coloured cell carries its word as well as its colour
+        for cls, word in re.findall(r'<td class="(w|t|l)"><a [^>]*>\d+% &middot; ([a-z ]+)</a>', body):
+            self.assertIn(word, {'w': ['mostly win'], 't': ['mixed', 'mostly tie'],
+                                 'l': ['mostly lose']}[cls])
+        # a counted cell is the page's own verdict: zen5 lu 1024 f64 8T loses to MKL by 1.09x on
+        # the large-tier MKL page, and the tally records it as a loss against MKL
+        lu = self.machines['zen5-cpu']['families']['lu']['cells']
+        [cell] = [c for c in lu if c['at'] == ('lu', (1024, 1024, ''), 'f64', 8)]
+        self.assertEqual((cell['vendor'], cell['result']), ('mkl', 'lose'))
+        page = (ROOT / cell['page']).read_text()
+        row = re.search(r'^## linalg-large, f64, f order, 8T.*?^\| `lu/n1024/b1` \|([^\n]*)', page,
+                        re.M | re.S).group(1)
+        self.assertIn('slower than `lapack-mkl`', row)
+
+    def test_no_share_outlives_its_evidence(self):
+        fm = gen_site.family_matrix
+        self.assertEqual(fm.outcome(None), 'no_spread')
+        self.assertEqual(fm.outcome(False), 'tie')
+        self.assertEqual(fm.outcome((0.8, 0.05)), 'win')
+        self.assertEqual(fm.outcome((1.2, 0.05)), 'lose')
+        counts = {r: 0 for r in fm.RESULTS}
+        self.assertIsNone(fm.share({**counts, 'no_spread': 4, 'withdrawn': 3}))
+        self.assertEqual(fm.leaning({**counts, 'win': 3, 'tie': 1, 'lose': 2}), 'mixed')
+        self.assertEqual(fm.leaning({**counts, 'win': 4, 'lose': 3}), 'win')
+        # a row at n < 256, in C order, or of the api-inclusive route is never a cell
+        row = {'status': 'ok', 'dtype': 'f64', 'order': 'f', 'batch': '1', 'note': '', 'm': '512',
+               'n': '512', 'k': ''}
+        self.assertTrue(fm.comparable(row))
+        for change in ({'n': '128'}, {'order': 'c'}, {'note': 'api-inclusive'}, {'dtype': 'f32'}):
+            self.assertFalse(fm.comparable({**row, **change}), change)
+
+    def test_win_share_across_pins_starts_at_the_second_pin(self):
+        index = self.index
+        pins = index.split('<h2 id="pins">', 1)[1].split('<h2', 1)[0]
+        # every older zen5 pin was recorded before the fair harness: no second share yet
+        self.assertIn('appearing from the second pin', pins)
+        self.assertIn('vendor rows withdrawn', pins)
+        # with two pins the section draws the lines and their table
+        fm = gen_site.family_matrix
+        m = self.machines['zen5-cpu']
+        points = {'zen5-cpu': [{'commit': 'a' * 40, 'date': '2026-11-01', 'counts': m['total'], 'why': None},
+                               {'commit': m['commit'], 'date': m['date'], 'counts': m['total'], 'why': None}]}
+        drawn = gen_site.across_pins_html(points, [m])
+        self.assertIn('<polyline', drawn)
+        self.assertIn('table: the plotted numbers', drawn)
+        self.assertEqual(drawn.count('<tr><td>zen5-cpu</td>'), 2)
+        self.assertTrue(fm.across_pins(self.history, [m])['zen5-cpu'])
+
+    def test_how_the_numbers_are_made(self):
+        method = self.index.split('<h2 id="method">', 1)[1].split('<h2', 1)[0]
+        toolkit = re.search(r'campaign-toolkit@([0-9a-f]{40})', (ROOT / 'requirements.txt').read_text())
+        pin = rev_file_value((ROOT / gen_site.PIN).read_text())
+        for words in ('scripts/gen_site.py', 'scripts/family_matrix.py', 'run.yaml', toolkit.group(1),
+                      pin, 'scripts/setup_extern_deps.sh', 'comparison_verdict', 'floored at 5%',
+                      'Noise floor', 'os-shared', 'OS-SHARED, NOT COMPARABLE WITH THE 60T ROW'):
+            self.assertIn(words, method)
 
 
 if __name__ == '__main__':
