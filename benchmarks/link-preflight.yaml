@@ -24,3 +24,17 @@ arms:
       mkl_intel_thread: "export MKLROOT={prefix}"
       mkl_core: "export MKLROOT={prefix}"
       iomp5: "export MKL_THREADING_LIB={path}"
+  aocl:
+    source: fbench/build.rs (feature link-aocl); AOCL_ROOT as scripts/build_for_faer_rev.sh resolves it
+    when: {vendor: aocl}
+    env:
+      AOCL_ROOT: {required: true, default_glob: "/opt/AMD/aocl/*/gcc/MT"}
+    search: ["$AOCL_ROOT/lib_LP64"]
+    libs: [flame, blis-mt, aoclutils]
+    # fbench/build.rs records lib_LP64 as an inherited -rpath (DT_RPATH): the recorder runs the
+    # binary with no loader path, and AOCL is kept out of ldconfig.
+    rpath: true
+    fix:
+      flame: "export AOCL_ROOT={prefix}"
+      blis-mt: "export AOCL_ROOT={prefix}"
+      aoclutils: "export AOCL_ROOT={prefix}"

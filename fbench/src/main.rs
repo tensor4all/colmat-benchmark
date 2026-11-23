@@ -425,6 +425,9 @@ fn info(threads: Option<usize>) {
     if let Some(n) = vendor::reported_threads() {
         println!("threads.vendor_reported={n}");
     }
+    if let Some(detail) = vendor::thread_detail() {
+        println!("threads.vendor_detail={detail}");
+    }
 }
 
 fn configure_threads(n: usize) -> Result<(), String> {
@@ -670,7 +673,19 @@ fn child_main(spec_text: &str) -> ExitCode {
         if index < spec.from {
             continue;
         }
-        let line = match measure_row(&spec.row, spec.threads, &mut op, spec.prime_ms, spec.reps) {
+        // Compare-and-abort on every vendor thread knob before and after each variant's prime and
+        // timed loop (AOCL has three: OpenMP, BLIS, libflame): a budget that moved is refused, not
+        // recorded. A non-zero exit without a `RESULT` makes the parent write a failed row.
+        if let Err(e) = require_threads(spec.threads) {
+            eprintln!("before {} {}: {e}", spec.row, spec.family);
+            return ExitCode::from(2);
+        }
+        let measured = measure_row(&spec.row, spec.threads, &mut op, spec.prime_ms, spec.reps);
+        if let Err(e) = require_threads(spec.threads) {
+            eprintln!("after {} {}: {e}", spec.row, spec.family);
+            return ExitCode::from(2);
+        }
+        let line = match measured {
             Ok(samples) => format!(
                 "RESULT\t{index}\tok\t{}\t{}",
                 op.note,

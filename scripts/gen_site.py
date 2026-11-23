@@ -9,7 +9,7 @@ every result page and the charts declared in `benchmarks/campaign.yaml` (`figure
 toolkit's (`campaign_toolkit.site`). The throughput charts are one page per recorded
 `(dtype, order)` dataset (`result/throughput-<dtype>-<order>.html`, `benchmarks/throughput.yaml`
 `variants:`), linked from the landing page instead of carried on it. What is this campaign's own is the four-way view: the MKL and
-OpenBLAS arms of the current `faer-kernels` pages joined on the cell key by `gen_comparison.py`,
+OpenBLAS arms (and, on AMD profiles once recorded, the AOCL arm) of the current `faer-kernels` pages joined on the cell key by `gen_comparison.py`,
 written to `result/zen5-cpu/faer-kernels/<rev12>-comparison.html` and linked from the landing page.
 
 The site is not written when the pin has no current recording (`campaign_toolkit.pin_recorded`,
@@ -89,6 +89,15 @@ def write_comparison():
     argv = ['--mkl', str(arms['mkl']), '--openblas', str(arms['openblas']), '--out', str(out)]
     if control is not None:
         argv += ['--control-mkl', str(control)]
+    # The AOCL arm (AMD profiles, #95) is joined as a third arm when it has a current page. If the
+    # guard refuses it, the MKL/OpenBLAS view is still written and the AOCL refusal is reported:
+    # the third arm's disagreement says nothing about whether the first two are one session.
+    if 'aocl' in arms:
+        try:
+            gen_comparison.main(argv + ['--aocl', str(arms['aocl'])])
+            return out, None
+        except gen_comparison.PairingRefused as refusal:
+            print(f'the AOCL arm is not joined: {refusal}', file=sys.stderr)
     try:
         gen_comparison.main(argv)
     except gen_comparison.PairingRefused as refusal:
@@ -182,9 +191,10 @@ def write_throughput_pages(generated, arms):
     """One HTML page per declared (dtype, order) dataset of the throughput charts.
 
     The landing page links these instead of carrying every dataset's charts inline: a chart on
-    it named no dataset, and the recorded c64 cells had no page at all. Each page repeats the
-    landing page's provenance and the suite's limitation beside the charts of its own dataset,
-    with the four-way nav; the charts are the toolkit's (`figures.site_figures` wrote one set
+    it named no dataset, and the recorded c64 cells had no page at all. Each page opens with its
+    title, a one-line dataset nav and then the charts of its own dataset; the landing page's
+    provenance, the suite's limitation, the chart notes and the revisions line follow below them
+    (#106). The charts are the toolkit's (`figures.site_figures` wrote one set
     per variant, from that variant's own cells), and so are the frame and the chart block
     (`site.write_page`, `figures.grid_html`), so no result page is duplicated here.
     """
@@ -205,8 +215,9 @@ def write_throughput_pages(generated, arms):
             f'<strong>{html.escape(variant_label(other))}</strong>' if other == variant else
             f'<a href="throughput-{other[0]}-{other[1]}.html">{html.escape(variant_label(other))}</a>'
             for other in variants)
-        body = (f'<nav class="muted">dataset: {nav}</nav>\n{provenance}\n{notes}\n'
-                f'{revisions}\n' + figures.grid_html(ROOT / 'result', entries))
+        body = (f'<nav class="muted">dataset: {nav}</nav>\n'
+                + figures.grid_html(ROOT / 'result', entries)
+                + f'\n{provenance}\n{notes}\n{revisions}\n')
         pages[variant] = site.write_page(
             ROOT / 'result', f'throughput-{variant[0]}-{variant[1]}.html',
             f'Throughput charts: {variant_label(variant)}', body)
@@ -221,8 +232,8 @@ def throughput_index_html(pages):
         + '</li>\n'
         for variant, page in pages.items())
     return ('<h2>Throughput charts</h2>\n'
-            '<p>One page per recorded dataset, each with its own provenance, chart notes and '
-            'charts:</p>\n<ul>\n' + items + '</ul>\n')
+            '<p>One page per recorded dataset, each with its own charts first, then its provenance '
+            'and chart notes:</p>\n<ul>\n' + items + '</ul>\n')
 
 
 def main(argv=None):

@@ -2,7 +2,7 @@
 # Build the campaign harness (`fbench`) with both faer libraries linked *by path*.
 #
 #   build_for_faer_rev.sh --checkout <fork-dir> --upstream <upstream-dir> \
-#                         --vendor <openblas|mkl|none> --out <var-file> [--bin fbench]...
+#                         --vendor <openblas|mkl|aocl|none> --out <var-file> [--bin fbench]...
 #
 # Writes shell assignments to <var-file>:
 #   FAER_FORK_REV, FAER_FORK_DIRTY, FAER_FORK_DIR, FAER_FORK_VERSION, FAER_FORK_FEATURES,
@@ -47,7 +47,7 @@ PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
 usage() {
     echo "usage: build_for_faer_rev.sh --checkout <fork-dir> --upstream <upstream-dir>" >&2
-    echo "                            --vendor <openblas|mkl|none> --out <var-file> [--bin <name>]..." >&2
+    echo "                            --vendor <openblas|mkl|aocl|none> --out <var-file> [--bin <name>]..." >&2
 }
 
 FORK_DIR=""
@@ -60,9 +60,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --checkout) FORK_DIR="${2:?--checkout needs a path}"; shift 2 ;;
         --upstream) UPSTREAM_DIR="${2:?--upstream needs a path}"; shift 2 ;;
-        # The recorder passes `--vendor ""` for a suite that declares no vendor arm (its `{vendor}`
-        # token is empty and its var file is `pin-none.env`), so an empty name is that arm: `none`.
-        --vendor) VENDOR="${2-}"; VENDOR="${VENDOR:-none}"; shift 2 ;;
+        --vendor) VENDOR="${2:?--vendor needs a name}"; shift 2 ;;
         --out) OUT_FILE="${2:?--out needs a file}"; shift 2 ;;
         --bin) BINS+=("${2:?--bin needs a name}"); shift 2 ;;
         --profile) PROFILE="${2:?--profile needs a name}"; shift 2 ;;
@@ -203,8 +201,20 @@ case "$VENDOR" in
     export MKLROOT MKL_THREADING_LIB
     VENDOR_BUILD_ENV="MKLROOT=$MKLROOT MKL_THREADING_LIB=$MKL_THREADING_LIB"
     ;;
+  aocl)
+    FEATURES="fbench/link-aocl"
+    # AMD AOCL (libflame + threaded BLIS + aocl-utils), named by its versioned install tree: 5.x
+    # `<prefix>/<ver>/gcc`, 6.x `<prefix>/<ver>/gcc/MT`. The newest installed version wins, as for
+    # MKL, `AOCL_ROOT` overrides, and the manifest records the resolved physical path; see
+    # scripts/resolve_aocl_root.sh for the search order. The binary records the library directory
+    # as an rpath (`fbench/build.rs`), because AOCL is not registered with `ldconfig`.
+    AOCL_ROOT="$("$PROJECT_DIR/scripts/resolve_aocl_root.sh")" || {
+      echo "ERROR: the AOCL arm has no AOCL to link (see above)" >&2; exit 1; }
+    export AOCL_ROOT
+    VENDOR_BUILD_ENV="AOCL_ROOT=$AOCL_ROOT rpath=$AOCL_ROOT/lib_LP64"
+    ;;
   *)
-    echo "ERROR: unknown --vendor '$VENDOR'; this harness knows openblas, mkl and none" >&2; exit 1 ;;
+    echo "ERROR: unknown --vendor '$VENDOR'; this harness knows openblas, mkl, aocl and none" >&2; exit 1 ;;
 esac
 
 # ------------------------------------------------------------ fork API generation
@@ -289,6 +299,7 @@ for bin in "${BINS[@]}"; do bin_args+=(--bin "$bin"); done
 RUSTC_WRAPPER= CARGO_TARGET_DIR="$target" \
     env -u OPENBLAS_NUM_THREADS -u OMP_NUM_THREADS -u RAYON_NUM_THREADS -u MKL_NUM_THREADS \
         -u MKL_DOMAIN_NUM_THREADS -u MKL_INTERFACE_LAYER -u MKL_THREADING_LAYER -u MKL_DYNAMIC \
+        -u BLIS_NUM_THREADS -u FLA_NUM_THREADS \
         OPENBLAS_DYNAMIC_ARCH=1 \
     cargo build --manifest-path "$PROJECT_DIR/Cargo.toml" "${profile_flag[@]}" \
     -p fbench ${NO_DEFAULT[@]+"${NO_DEFAULT[@]}"} --features "$FEATURES" "${PATCH_ARGS[@]}" "${bin_args[@]}" >&2

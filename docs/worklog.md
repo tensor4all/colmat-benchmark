@@ -2,6 +2,32 @@
 
 Decisions, fixed failures and open items for this campaign. Newest first.
 
+## 2026-11-22 — the dataset pages open with their charts (#106)
+
+On `result/throughput-f64-f.html` the charts started below the fold: the page opened with
+`Current recordings: scope and provenance`, the release and OpenBLAS-kernel caveats, the
+suite's limitation and the chart notes, and only then the nine family charts. Each dataset
+page now reads title, the one-line dataset nav, then `Throughput against size` and its
+charts; the provenance section, the limitation, the chart notes and the `Revisions:` line
+follow below the charts. The change is the `body` order of `write_throughput_pages`
+(`scripts/gen_site.py`) alone: no chart, cell, table, run, revision or manifest changed, the
+per-chart `data` link to its plotted table stays in its caption, and the landing page's
+sentence about the pages now states the same order. `ThroughputPagesTest` asserts the order
+per dataset page (nav before the first chart, provenance, limitation, chart notes and
+revisions after the last one) instead of only that each is present.
+
+The finished diff was reviewed by `openai/gpt-6.1-sol` (independent-review skill): no
+BLOCKER. Its two test findings are fixed (the chart notes joined the below-chart order
+assertions, one redundant assertion deleted); the third - the toolkit's one-line
+`Throughput against size` note still preceding the first chart - is the pinned toolkit's
+block, a toolkit change plus a pin bump, and stays open
+(`docs/reviews/20261122-throughput-charts-first-post-review.md`). Local gates: benchmark
+unittest 10/10 OK against the pinned toolkit `ec1366c`; `py_compile`; declarations;
+`gen_index.py --check`; `campaign-check-pin-recorded`; `campaign-check-generated --base
+origin/main --no-index` (35 pages, 0 regenerated); `campaign-sync-pins --check`; and
+`gen_site.py` regenerated locally, with all four dataset pages checked for the order and
+their nine charts (f64 / F included).
+
 ## 2026-11-19 — four throughput pages, one per recorded (dtype, order) dataset (#90)
 
 The landing page carried every throughput chart inline - both orders, f64 only - so a chart
@@ -165,7 +191,7 @@ touched, and the workspace size — and therefore every recorded number — is u
 | `faer-kernels` MKL | `f64`/`c64`/`f32`/`c32`, 1/4/8T, all 8 regimes | 3 | 4 h 13 min, rc=0, no idle-guard rejection |
 | `faer-kernels` OpenBLAS | same | 6 | 4 h 28 min, rc=0, no idle-guard rejection |
 | `faer-kernels-large` MKL | `f64`/`c64`, 4/8T, 1024/1536 + boundary | 3 | 7 h 20 min, rc=0, no idle-guard rejection |
-| `faer-kernels-large` OpenBLAS | — | — | **not recorded (decision, 2026-11-18)** |
+| `faer-kernels-large` OpenBLAS | — | — | **not recorded (decision, 2026-11-18)**; recorded at the same pin in the Docker refresh #99 |
 
 The daily suite now records its full declaration — `f64`, `c64`, `f32`, `c32` at 1/4/8T, all eight
 regimes — where the 2026-11-13 pages covered `f64`/`c64` only, so its MKL arm reports

@@ -9,7 +9,15 @@
 #
 #   pinned.sh CPUS -- COMMAND [ARGS...]
 #
-# Exits 75 when no valid run was obtained. CPU affinity is Linux-only: on
+# Exits 75 when no valid run was obtained.
+#
+# Container mode (#99): with BENCH_CONTAINER=<name> the measured command runs *inside* that
+# running container as `docker exec <name> taskset -c CPUS COMMAND...` instead of under a
+# host `taskset`. The recorder, this script and the idle guard stay on the observing side
+# (outside the container's cpuset); only the measured process is confined to the container's
+# cpuset and then to CPUS inside it. The repository is mounted at the same path on both
+# sides, so COMMAND's paths mean the same thing. The container's image and cpuset are
+# echoed to stderr, hence into the guard log of every run. CPU affinity is Linux-only: on
 # other hosts the command runs unpinned and a note goes to stderr.
 #
 # This copy lives in the harness repository, not in the measured library: faer
@@ -30,6 +38,11 @@ max_busy=${PINNED_MAX_BUSY:-0.05}
 retries=${PINNED_RETRIES:-3}
 wait=${PINNED_WAIT:-30}
 check() { python3 "$here/idle_cpus.py" check "$cpus" --seconds "$seconds" --max-busy "$max_busy" 2> "$guard"; }
+runner=(taskset -c "$cpus")
+if [[ -n ${BENCH_CONTAINER:-} ]]; then
+    runner=(docker exec "$BENCH_CONTAINER" taskset -c "$cpus")
+    echo "pinned.sh: measured in container $BENCH_CONTAINER: $(docker inspect -f 'image={{.Config.Image}} image_id={{.Image}} cpuset={{.HostConfig.CpusetCpus}}' "$BENCH_CONTAINER")" >&2
+fi
 if [[ $(uname -s) != Linux ]] || [[ ! -r /proc/stat ]] || ! command -v taskset >/dev/null; then
     echo "pinned.sh: CPU pinning unavailable on this host (Linux only); running unpinned" >&2
     exec "$@"
@@ -53,7 +66,7 @@ for attempt in $(seq 1 "$retries"); do
         sleep "$wait"; continue
     fi
     keep=1  # Retain through command execution, post-check and fallible archival.
-    if taskset -c "$cpus" "$@" > "$tmp"; then
+    if "${runner[@]}" "$@" > "$tmp"; then
         :
     else
         status=$?

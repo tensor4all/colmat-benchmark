@@ -84,3 +84,52 @@ profiles:
       - {threads: 32, measured: "0-31", observer: "32-127"}
       - {threads: 64, measured: "0-63", observer: "64-127"}
       - {threads: 128, measured: "0-127", observer: ""}
+  # keyaki (tensor4all/colmat-benchmark#100): the same EPYC 7702P as `zen2-64-smt-off`, run
+  # in the Docker image the stack's benchmarks use, on a host that also runs dockerd and the
+  # login session. 64 logical / 64 physical, SMT off, 1 NUMA node, 16 L3 domains of 4 cores
+  # (CPUs 4k-4k+3), 251 GB. Its numbers are filed under this name and are never pooled with
+  # `zen2-64-smt-off`, `zen5-cpu` or the ohtaka profiles.
+  - name: keyaki-64
+    role: development
+    description: >-
+      keyaki: AMD EPYC 7702P (Zen 2), 1 socket, 64 physical / 64 logical cores (SMT off),
+      1 NUMA node, 16 L3 domains of 16 MiB (one per 4-core CCX, CPUs 4k-4k+3), measured
+      inside Docker. CPUs 0-3 (CCX 0) are the observing side for the 16/32/60T rows; 60T is
+      the clean full-machine figure. The 64T row is recorded under its own profile,
+      `keyaki-64-os-shared`, because it cannot meet this profile's observer rule.
+    cpu: AMD EPYC 7702P
+    logical_cpus: 64
+    l3: "16 MiB shared per 4-core CCX, 16 CCXs (CPUs 4k-4k+3)"
+    smt: {threads_per_core: 1, sibling_offset: 64}
+    record_numa: true
+    power:
+      cpufreq_boost: "0"
+      governor: performance
+    thread_rows:
+      - {threads: 16, measured: "4-19", observer: "0-3"}
+      - {threads: 32, measured: "4-35", observer: "0-3"}
+      - {threads: 60, measured: "4-63", observer: "0-3"}
+  # The 64T row of keyaki-64 (tensor4all/colmat-benchmark#100), kept in a profile of its own
+  # so its page can never be read next to, or pooled with, the clean 16/32/60T rows.
+  - name: keyaki-64-os-shared
+    role: development
+    os_shared: true
+    description: >-
+      keyaki, same machine as `keyaki-64` (AMD EPYC 7702P, 64 physical / 64 logical cores,
+      SMT off, 1 NUMA node, Docker). CAVEAT - OS-SHARED: the 64T row measures every core, so
+      no CPU is left to the observing side. dockerd, tailscaled, sshd, the recorder and the
+      agent share the measured cores. `scripts/record_run.py` runs this profile only with its
+      explicit os-shared override: it skips the observer-off-measured-cores refusals (the
+      observer overlap and the quiet-observing-side audit) and says so on stderr; the idle
+      guard, the boost gate and every other check stay in force. The cell is NOT comparable
+      with the 60T row of `keyaki-64`.
+    cpu: AMD EPYC 7702P
+    logical_cpus: 64
+    l3: "16 MiB shared per 4-core CCX, 16 CCXs (CPUs 4k-4k+3)"
+    smt: {threads_per_core: 1, sibling_offset: 64}
+    record_numa: true
+    power:
+      cpufreq_boost: "0"
+      governor: performance
+    thread_rows:
+      - {threads: 64, measured: "0-63", observer: ""}

@@ -7,7 +7,7 @@ Older pages (29): [HISTORY.md](HISTORY.md).
 
 - Reference fork revision (`pins/t4a-faer.rev`): `93da62172a96260ae3d5ed7481690f440f58d904`
 - Reference upstream revision (`pins/upstream-faer.rev`): `faer-v0.24.4`
-- Newest recorded run: `2026-11-18T01:23:16.189189Z`
+- Newest recorded run: `2026-11-22T16:04:54.266672Z`
 - Every page below is one `(suite, hardware profile, fork revision, upstream revision,
   vendor arm)` and carries its commits, its hardware and the vendor library it linked.
 
@@ -19,24 +19,26 @@ rather than being implied by the other arm's page.
 
 | suite | profile | vendor | fork/upstream | version | date | coverage | status | page |
 |---|---|---|---|---|---|---|---|---|
-| `faer-kernels-large` | `zen5-cpu` (optional) | `openblas` | - | - | - | - | missing | - |
-| `faer-kernels-large` | `zen5-cpu` (optional) | `mkl` | `93da62172a96/0539947ffb75` | 0.34.0 | 2026-11-18 | partial | current | [result/zen5-cpu/faer-kernels-large/93da62172a96-0539947ffb75-mkl-timing-v2.md](zen5-cpu/faer-kernels-large/93da62172a96-0539947ffb75-mkl-timing-v2.md) |
+| `faer-kernels-keyaki-os-shared` | `keyaki-64-os-shared` | `mkl` | `93da62172a96/0539947ffb75` | 0.34.0 | 2026-11-22 | full | current | [result/keyaki-64-os-shared/faer-kernels-keyaki-os-shared/93da62172a96-0539947ffb75-mkl-timing-v2.md](keyaki-64-os-shared/faer-kernels-keyaki-os-shared/93da62172a96-0539947ffb75-mkl-timing-v2.md) |
+| `faer-kernels-keyaki` | `keyaki-64` | `mkl` | `93da62172a96/0539947ffb75` | 0.34.0 | 2026-11-22 | full | current | [result/keyaki-64/faer-kernels-keyaki/93da62172a96-0539947ffb75-mkl-timing-v2.md](keyaki-64/faer-kernels-keyaki/93da62172a96-0539947ffb75-mkl-timing-v2.md) |
+| `faer-kernels-large` | `zen5-cpu` (optional) | `openblas` | `93da62172a96/0539947ffb75` | 0.34.0 | 2026-11-21 | partial | current | [result/zen5-cpu/faer-kernels-large/93da62172a96-0539947ffb75-openblas-timing-v2.md](zen5-cpu/faer-kernels-large/93da62172a96-0539947ffb75-openblas-timing-v2.md) |
+| `faer-kernels-large` | `zen5-cpu` (optional) | `mkl` | `93da62172a96/0539947ffb75` | 0.34.0 | 2026-11-20 | partial | current | [result/zen5-cpu/faer-kernels-large/93da62172a96-0539947ffb75-mkl-timing-v2.md](zen5-cpu/faer-kernels-large/93da62172a96-0539947ffb75-mkl-timing-v2.md) |
+| `faer-kernels-large` | `zen5-cpu` (optional) | `aocl` | `93da62172a96/0539947ffb75` | 0.34.0 | 2026-11-21 | partial | current | [result/zen5-cpu/faer-kernels-large/93da62172a96-0539947ffb75-aocl-timing-v2.md](zen5-cpu/faer-kernels-large/93da62172a96-0539947ffb75-aocl-timing-v2.md) |
 | `faer-kernels-large` | `zen2-cpu` (optional) | `openblas` | - | - | - | - | missing | - |
 | `faer-kernels-large` | `zen2-cpu` (optional) | `mkl` | - | - | - | - | missing | - |
+| `faer-kernels-large` | `zen2-cpu` (optional) | `aocl` | - | - | - | - | missing | - |
 | `faer-kernels-large` | `zen2-64-smt-off` (optional) | `openblas` | - | - | - | - | missing | - |
 | `faer-kernels-large` | `zen2-64-smt-off` (optional) | `mkl` | - | - | - | - | missing | - |
-| `faer-kernels-ohtaka-c64` | `ohtaka-cpu` (optional) | `openblas` | - | - | - | - | missing | - |
-| `faer-kernels-ohtaka-large` | `ohtaka-cpu` (optional) | `openblas` | - | - | - | - | missing | - |
-| `faer-kernels-ohtaka-large` | `ohtaka-cpu` (optional) | `mkl` | - | - | - | - | missing | - |
-| `faer-kernels-ohtaka-small` | `ohtaka-cpu` (optional) | `openblas` | - | - | - | - | missing | - |
-| `faer-kernels-ohtaka-xlarge` | `ohtaka-cpu` (optional) | `openblas` | - | - | - | - | missing | - |
-| `faer-kernels-ohtaka-xlarge` | `ohtaka-cpu` (optional) | `mkl` | - | - | - | - | missing | - |
-| `faer-kernels` | `zen5-cpu` | `openblas` | `93da62172a96/0539947ffb75` | 0.34.0 | 2026-11-17 | partial | current | [result/zen5-cpu/faer-kernels/93da62172a96-0539947ffb75-openblas-timing-v2.md](zen5-cpu/faer-kernels/93da62172a96-0539947ffb75-openblas-timing-v2.md) |
-| `faer-kernels` | `zen5-cpu` | `mkl` | `93da62172a96/0539947ffb75` | 0.34.0 | 2026-11-17 | full | current | [result/zen5-cpu/faer-kernels/93da62172a96-0539947ffb75-mkl-timing-v2.md](zen5-cpu/faer-kernels/93da62172a96-0539947ffb75-mkl-timing-v2.md) |
+| `faer-kernels-large` | `zen2-64-smt-off` (optional) | `aocl` | - | - | - | - | missing | - |
+| `faer-kernels` | `zen5-cpu` | `openblas` | `93da62172a96/0539947ffb75` | 0.34.0 | 2026-11-20 | partial | current | [result/zen5-cpu/faer-kernels/93da62172a96-0539947ffb75-openblas-timing-v2.md](zen5-cpu/faer-kernels/93da62172a96-0539947ffb75-openblas-timing-v2.md) |
+| `faer-kernels` | `zen5-cpu` | `mkl` | `93da62172a96/0539947ffb75` | 0.34.0 | 2026-11-20 | full | current | [result/zen5-cpu/faer-kernels/93da62172a96-0539947ffb75-mkl-timing-v2.md](zen5-cpu/faer-kernels/93da62172a96-0539947ffb75-mkl-timing-v2.md) |
+| `faer-kernels` | `zen5-cpu` | `aocl` | `93da62172a96/0539947ffb75` | 0.34.0 | 2026-11-21 | partial | current | [result/zen5-cpu/faer-kernels/93da62172a96-0539947ffb75-aocl-timing-v2.md](zen5-cpu/faer-kernels/93da62172a96-0539947ffb75-aocl-timing-v2.md) |
 | `faer-kernels` | `zen2-cpu` (optional) | `openblas` | - | - | - | - | missing | - |
 | `faer-kernels` | `zen2-cpu` (optional) | `mkl` | - | - | - | - | missing | - |
+| `faer-kernels` | `zen2-cpu` (optional) | `aocl` | - | - | - | - | missing | - |
 | `faer-kernels` | `zen2-64-smt-off` (optional) | `openblas` | - | - | - | - | missing | - |
 | `faer-kernels` | `zen2-64-smt-off` (optional) | `mkl` | - | - | - | - | missing | - |
+| `faer-kernels` | `zen2-64-smt-off` (optional) | `aocl` | - | - | - | - | missing | - |
 
 `missing` is a normal cell, not an error: the campaign is not run on every
 profile for every commit. A cell is listed here only with a page measured at the

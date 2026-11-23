@@ -242,7 +242,7 @@ fn a_final_child_that_hangs_is_killed_and_the_run_fails() {
 }
 
 /// Library-only builds must accept parallel budgets without configuring an absent vendor.
-#[cfg(not(any(feature = "link-mkl", feature = "link-openblas")))]
+#[cfg(not(any(feature = "link-mkl", feature = "link-openblas", feature = "link-aocl")))]
 #[test]
 fn library_only_svd_accepts_parallel_budgets() {
     for threads in ["4", "8"] {

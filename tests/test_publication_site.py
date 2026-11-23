@@ -16,11 +16,19 @@ import gen_site  # noqa: E402
 from campaign_toolkit import pin_recorded  # noqa: E402
 from campaign_toolkit.stack import rev_file_value  # noqa: E402
 
-# The arms this publication recorded: the daily suite on both vendor arms, the large suite on MKL
-# only. The large OpenBLAS arm was dropped by decision (2026-11-18) and is stated as unrecorded
-# on the landing page and in docs/worklog.md; adding it here without adding the run would make
-# this test assert a page that does not exist.
-RECORDED = {('faer-kernels', 'mkl'), ('faer-kernels', 'openblas'), ('faer-kernels-large', 'mkl')}
+# The arms this publication recorded: both suites on the MKL, OpenBLAS and AOCL arms (AOCL added by
+# #95; the large OpenBLAS arm, once dropped by decision on 2026-11-18, is back in the same-pin Docker
+# refresh #99). `benchmarks/campaign.yaml` `figures.runs` declares the same six positions; adding an
+# arm here without its run would make this test assert a page that does not exist.
+RECORDED = {('faer-kernels', 'mkl'), ('faer-kernels', 'openblas'), ('faer-kernels', 'aocl'),
+            ('faer-kernels-large', 'mkl'), ('faer-kernels-large', 'openblas'),
+            ('faer-kernels-large', 'aocl')}
+
+
+def unrecorded_throughput_runs():
+    """`run N` labels of the declared throughput runs that have no current page, in order."""
+    runs = yaml.safe_load((ROOT / 'benchmarks/campaign.yaml').read_text())['figures']['throughput']['runs']
+    return [f'run {i}' for i, r in enumerate(runs) if (r['suite'], r['vendor']) not in RECORDED]
 
 
 def collect():
@@ -28,10 +36,11 @@ def collect():
     return gen_site.gen_index.collect()
 
 
-def current_pages():
+def current_pages(profile='zen5-cpu'):
+    """The current pages of one hardware profile: zen5-cpu is the publication; keyaki has its own."""
     found = collect()
     current, _ = gen_site.gen_index.split_pages(found['pages'], found['declared'], found['resolved'])
-    return [c['page'] for c in current if c['page'] is not None]
+    return [c['page'] for c in current if c['page'] is not None and c['page']['profile'] == profile]
 
 
 def current_run_dir(suite, vendor):
@@ -56,6 +65,17 @@ class PublicationSiteTest(unittest.TestCase):
         for page in current_pages():
             self.assertEqual(page['profile'], 'zen5-cpu')
         self.assertEqual(len({p['upstream_commit'] for p in current_pages()}), 1)
+
+    def test_keyaki_pages_are_their_own_profiles_and_the_64t_one_carries_its_caveat(self):
+        pin = rev_file_value((ROOT / gen_site.PIN).read_text())
+        for profile, suite in (('keyaki-64', 'faer-kernels-keyaki'),
+                               ('keyaki-64-os-shared', 'faer-kernels-keyaki-os-shared')):
+            pages = current_pages(profile)
+            self.assertEqual({(p['suite'], p['vendor']) for p in pages}, {(suite, 'mkl')})
+            self.assertEqual({p['library_commit'] for p in pages}, {pin})
+        # the 64T cell is os-shared and says so on its page, where a reader of the table sees it
+        shared = pathlib.Path(current_pages('keyaki-64-os-shared')[0]['run_dir']) / 'report.md'
+        self.assertIn('OS-SHARED, NOT COMPARABLE WITH THE 60T ROW', shared.read_text())
 
     def test_guard_passes_at_the_pin_and_fails_at_the_unrecorded_release(self):
         found = collect()
@@ -189,8 +209,8 @@ class ThroughputPagesTest(unittest.TestCase):
             self.assertTrue((ROOT / 'result' / image).is_file(), image)
             self.assertIn('trend/', image)
         # Each dataset page carries its own title, the four-way nav (the current page bold,
-        # the others links), the landing page's provenance and the suite's limitation, and only
-        # the charts of its own dataset.
+        # the others links) and only the charts of its own dataset; the landing page's provenance
+        # and the suite's limitation follow the charts (#106).
         for dtype, order in self.PAGES:
             page = (ROOT / 'result' / f'throughput-{dtype}-{order}.html').read_text()
             title = f'Throughput charts: {dtype} / {order.upper()} order'
@@ -200,15 +220,28 @@ class ThroughputPagesTest(unittest.TestCase):
             self.assertIn('<strong>%s / %s order</strong>' % (dtype, order.upper()), page)
             self.assertIn('Current recordings: scope and provenance', page)
             self.assertIn(html.escape(gen_site.limitation_text()), page)
-            # The runs behind the charts are stated on the page itself, including the
-            # large-tier arm the daily provenance does not name and the arm not recorded.
-            self.assertIn('Revisions:', page)
-            self.assertIn('No run was given for large-tier OpenBLAS', page)
+            missing = unrecorded_throughput_runs()
+            if missing:
+                self.assertIn('No run was given for ' + ', '.join(missing), page)
+            else:
+                self.assertNotIn('No run was given for', page)
             images = re.findall(r'<img src="([^"]+)"', page)
             self.assertEqual(len(images), 9, (dtype, order))   # every declared family
             for image in images:
                 self.assertTrue((ROOT / 'result' / image).is_file(), image)
                 self.assertIn(f'/{dtype}-{order}/', image)
+            # #106: the charts start where the page opens -- title, one line of dataset nav, then
+            # the charts -- and everything a reader consults after reading them follows below:
+            # the provenance, the limitation, the config's chart notes and the revisions line that
+            # states the runs behind the charts (the large-tier arm the daily provenance does not
+            # name, and the arm not recorded).
+            self.assertLess(page.index('<nav class="muted">dataset:'), page.index('<img src='))
+            last_chart = page.rindex('<img src=')
+            for below in ('Current recordings: scope and provenance',
+                          html.escape(gen_site.limitation_text()),
+                          'Generated by the Pages deploy',   # the notes' own first words
+                          'Revisions:'):
+                self.assertGreater(page.index(below), last_chart, below)
 
     def test_the_c64_charts_come_from_the_recorded_c64_cells(self):
         # The c64 page is not the f64 page under another name: its plotted numbers are the

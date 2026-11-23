@@ -13,11 +13,13 @@ measured:
   extern_dir: extern/t4a-faer
   build_script: scripts/build_for_faer_rev.sh
   binary: fbench
-  # One binary links one vendor library, so the arm decides the feature. The two arms
-  # are mutually exclusive binaries, built into separate target directories.
+  # One binary links one vendor library, so the arm decides the feature. The three arms
+  # are mutually exclusive binaries, built into separate target directories. AOCL is an
+  # AMD-host arm (#95): AMD's own LAPACK stack beside the fork.
   features:
     openblas: fbench/link-openblas
     mkl: fbench/link-mkl
+    aocl: fbench/link-aocl
   # How the recorder invokes the build script: both checkouts are named, because the
   # harness links the measured fork and the upstream baseline by path.
   build_argv:
@@ -86,10 +88,11 @@ engines:
   faer-upstream: faer-upstream
   lapack-openblas: openblas
   lapack-mkl: mkl
+  lapack-aocl: aocl
 
 # Providers that own the BLAS/LAPACK symbols; they are mutually exclusive in one process,
 # so they are the axis a run -- and a page -- is split on.
-vendor_providers: [openblas, mkl]
+vendor_providers: [openblas, mkl, aocl]
 
 # Preserve v1 historical pages when the measured workload/timing contract changes.
 # {timing} is empty for v1 and -timing-v2 for the revised contract.
@@ -114,6 +117,8 @@ vendor_env:
   - MKL_DYNAMIC
   - MKL_ENABLE_INSTRUCTIONS
   - MKL_CBWR
+  - BLIS_NUM_THREADS
+  - FLA_NUM_THREADS
   - OMP_NUM_THREADS
   - OMP_THREAD_LIMIT
   - OMP_PROC_BIND
@@ -169,17 +174,19 @@ report:
     decides which path each provider takes.
 
 # Charts the Pages site draws at deploy time from the runs behind the current pages (not committed;
-# campaign_toolkit.figures). The throughput config numbers its runs 0-3: the daily MKL and OpenBLAS
-# arms, then the large-tier MKL and OpenBLAS arms; a position with no run at the pin is left out and
-# its series stops at 768.
+# campaign_toolkit.figures). The throughput config numbers its runs 0-5: the daily MKL, OpenBLAS and
+# AOCL arms, then the large-tier MKL, OpenBLAS and AOCL arms; a position with no run at the pin is left
+# out and its series stops at 768.
 figures:
   throughput:
     config: benchmarks/throughput.yaml
     runs:
       - {suite: faer-kernels, vendor: mkl}
       - {suite: faer-kernels, vendor: openblas}
+      - {suite: faer-kernels, vendor: aocl}
       - {suite: faer-kernels-large, vendor: mkl}
       - {suite: faer-kernels-large, vendor: openblas}
+      - {suite: faer-kernels-large, vendor: aocl}
 
 # Representative cases followed across pins (tensor4all-meta#76 D4: gemm and lu at n = 1024, f64).
 # n = 1024 is recorded only by the large tier, at 4T and 8T, on the MKL arm (which also carries
