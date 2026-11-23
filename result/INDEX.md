@@ -39,9 +39,9 @@ rather than being implied by the other arm's page.
 | `colmat-kernels` | `zen2-64-smt-off` (optional) | `openblas` | - | - | - | - | missing | - |
 | `colmat-kernels` | `zen2-64-smt-off` (optional) | `mkl` | - | - | - | - | missing | - |
 | `colmat-kernels` | `zen2-64-smt-off` (optional) | `aocl` | - | - | - | - | missing | - |
-| `faer-kernels-ohtaka-fat-factor` | `ohtaka-fat` (optional) | `mkl` | `93da62172a96/0539947ffb75` | 0.34.0 | 2026-11-22 | full | current | [result/ohtaka-fat/faer-kernels-ohtaka-fat-factor/93da62172a96-0539947ffb75-mkl-timing-v2.md](ohtaka-fat/faer-kernels-ohtaka-fat-factor/93da62172a96-0539947ffb75-mkl-timing-v2.md) |
-| `faer-kernels-ohtaka-fat-gemm` | `ohtaka-fat` (optional) | `mkl` | `93da62172a96/0539947ffb75` | 0.34.0 | 2026-11-22 | full | current | [result/ohtaka-fat/faer-kernels-ohtaka-fat-gemm/93da62172a96-0539947ffb75-mkl-timing-v2.md](ohtaka-fat/faer-kernels-ohtaka-fat-gemm/93da62172a96-0539947ffb75-mkl-timing-v2.md) |
-| `faer-kernels-ohtaka-fat-qr` | `ohtaka-fat` (optional) | `mkl` | `93da62172a96/0539947ffb75` | 0.34.0 | 2026-11-22 | full | current | [result/ohtaka-fat/faer-kernels-ohtaka-fat-qr/93da62172a96-0539947ffb75-mkl-timing-v2.md](ohtaka-fat/faer-kernels-ohtaka-fat-qr/93da62172a96-0539947ffb75-mkl-timing-v2.md) |
+| `faer-kernels-ohtaka-fat-factor` | `ohtaka-fat` (optional) | `mkl` | `93da62172a96/0539947ffb75` | 0.34.0 | 2026-11-22 | full | current; **not comparable with the timing baseline** (priming 100 ms < 250 ms; 3 reps < 5) | [result/ohtaka-fat/faer-kernels-ohtaka-fat-factor/93da62172a96-0539947ffb75-mkl-timing-v2.md](ohtaka-fat/faer-kernels-ohtaka-fat-factor/93da62172a96-0539947ffb75-mkl-timing-v2.md) |
+| `faer-kernels-ohtaka-fat-gemm` | `ohtaka-fat` (optional) | `mkl` | `93da62172a96/0539947ffb75` | 0.34.0 | 2026-11-22 | full | current; **not comparable with the timing baseline** (priming 100 ms < 250 ms; 3 reps < 5) | [result/ohtaka-fat/faer-kernels-ohtaka-fat-gemm/93da62172a96-0539947ffb75-mkl-timing-v2.md](ohtaka-fat/faer-kernels-ohtaka-fat-gemm/93da62172a96-0539947ffb75-mkl-timing-v2.md) |
+| `faer-kernels-ohtaka-fat-qr` | `ohtaka-fat` (optional) | `mkl` | `93da62172a96/0539947ffb75` | 0.34.0 | 2026-11-22 | full | current; **not comparable with the timing baseline** (priming 100 ms < 250 ms; 3 reps < 5) | [result/ohtaka-fat/faer-kernels-ohtaka-fat-qr/93da62172a96-0539947ffb75-mkl-timing-v2.md](ohtaka-fat/faer-kernels-ohtaka-fat-qr/93da62172a96-0539947ffb75-mkl-timing-v2.md) |
 | `faer-kernels-ohtaka-fat-xlarge` | `ohtaka-fat` (optional) | `mkl` | - | - | - | - | missing | - |
 
 `missing` is a normal cell, not an error: the campaign is not run on every
@@ -55,3 +55,7 @@ measured revision.
 the whole spec and the declaration has not moved since, `partial` when it covered a
 subset, and `declaration-changed` when the declaration itself changed after the
 measurement. A partial or declaration-changed page never displaces a full-coverage one.
+A `status` marked **not comparable with the timing baseline** is a page recorded with less
+priming or fewer repetitions than the campaign's frozen 250 ms /
+5 reps (docs/protocol-v2-baseline.md): too little priming reads a few percent fast, so its
+cells are compared only with runs recorded the same way, never with the other pages here.
