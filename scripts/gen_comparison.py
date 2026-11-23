@@ -32,6 +32,7 @@ import argparse, csv, html, pathlib, statistics, subprocess, sys
 import yaml
 
 import candidate_compare
+from campaign_toolkit import campaign as suite_decl
 from campaign_toolkit import descriptor
 
 KEY = ('regime', 'family', 'dtype', 'order', 'm', 'n', 'k', 'batch', 'threads', 'note')
@@ -284,6 +285,34 @@ def cell_grid(cells):
     return grid
 
 
+def declared_cells(arm):
+    """The (regime, family) pairs the *suite* declares for this arm, or None when it cannot say.
+
+    A suite may narrow one vendor arm to some families (`vendor_families`, #111). The set is read
+    from the suite's own declaration through the toolkit (`campaign.populations(suite, provider)`),
+    never from the run manifest: `run_spec.populations` records what that run was asked for, which
+    a focused run (`--regimes`) narrows further, and a cell dropped that way is a hole in the grid,
+    not a declaration. A manifest whose suite is not declared any more makes no statement, so
+    nothing is excluded and a missing cell stays a dash.
+    """
+    campaign()    # point the descriptor at this repository before the suite is looked up
+    _path, suite = suite_decl.find_suite(arm['manifest'].get('suite_id', ''))
+    if suite is None:
+        return None
+    return {(pop['regime'], family)
+            for pop in suite_decl.populations(suite, arm['name']) for family in pop['families']}
+
+
+def not_measured(arm, key, value):
+    """True when the suite does not ask this arm for the cell and the arm has no row for it.
+
+    A recorded row always wins: a page recorded under an earlier, wider declaration shows its
+    numbers rather than `n/m`.
+    """
+    covered = arm.get('declared')
+    return value is None and covered is not None and (key[0], key[1]) not in covered
+
+
 def run_grid(arm):
     """Every cell an arm was asked for -- measured or skipped -- keyed by its shape.
 
@@ -423,8 +452,10 @@ def vendor_arm(label, run_dir):
         sys.exit(f'ERROR: the arm given to --{label} records its vendor as {name!r} in run.yaml, so '
                  f'its rows are `lapack-{name}` and not the `lapack-{label}` rows this page labels; '
                  'the two arms are not interchangeable')
-    return dict(label=label, name=name, row=f'lapack-{name}',
-                manifest=manifest, cells=cells, skips=skips)
+    arm = dict(label=label, name=name, row=f'lapack-{name}',
+               manifest=manifest, cells=cells, skips=skips)
+    arm['declared'] = declared_cells(arm)
+    return arm
 
 
 def git(*args):
@@ -485,6 +516,17 @@ def cls(r):
     return ''
 
 
+NOT_MEASURED = '<td class="nm" title="not measured for this arm">n/m</td>'
+
+
+def arm_cells(r, fork_field, row_field, ratio_field, flag):
+    """An arm's three columns: fork, vendor row, ratio -- or `n/m` thrice when the arm never had the cell."""
+    if r[flag]:
+        return NOT_MEASURED * 3
+    return (f'<td>{fmt(r[fork_field])}</td><td>{fmt(r[row_field])}</td>'
+            + vendor_ratio_cell(r, ratio_field))
+
+
 def vendor_ratio_cell(r, field):
     """A vendor ratio cell: the ratio, or `withdrawn` when the harness could not measure it fairly."""
     if r['withdrawn']:
@@ -529,7 +571,8 @@ def main(argv=None):
         # inside its timed call for work the colmat row did not, so the two numbers are kept as
         # recorded and the comparison between them is withdrawn.
         withdrawn = not fair and key[1] in WITHDRAWN_VENDOR_FAMILIES
-        rows.append(dict(key=key, fork_m=fork_m, fork_o=fork_o, fork_a=fork_a, up=up, mk=mk,
+        rows.append(dict(key=key, nm_o=not_measured(ob, key, b or None),
+                         nm_a=bool(ao) and not_measured(ao, key, c or None), fork_m=fork_m, fork_o=fork_o, fork_a=fork_a, up=up, mk=mk,
                          obl=obl, aoc=aoc, r_up=ratio(up, fork_m), withdrawn=withdrawn,
                          r_ob=None if withdrawn else ratio(obl, fork_o),
                          r_mk=None if withdrawn else ratio(mk, fork_m),
@@ -625,7 +668,7 @@ def main(argv=None):
  th {{ background: #f5f5f5; font-weight: 600; position: sticky; top: 0; }}
  td.k, th.k {{ text-align: left; }}
  td.win {{ background: #e7f6e7; }} td.loss {{ background: #fbe9e9; }}
- td.wd {{ color: #888; font-style: italic; }} p.withdrawn {{ border-left: 3px solid #c80; background: #fdf7e8; padding: .5rem .8rem; max-width: 70rem; }}
+ td.wd, td.nm {{ color: #888; font-style: italic; }} p.withdrawn {{ border-left: 3px solid #c80; background: #fdf7e8; padding: .5rem .8rem; max-width: 70rem; }}
  .note {{ color: #555; max-width: 70rem; }} code {{ background: #f2f2f2; padding: 0 .2rem; }}
 </style></head><body>
 <h1>{html.escape(title)}</h1>
@@ -667,7 +710,9 @@ timestamps differ by design and are not compared.</p>
     parts.append(
         '<p class="note">This page is a join, not a control comparison: the control statement (the unchanged\n'
         'row\'s ratio against a baseline run) lives in each arm\'s own page, and the verification record in its\n'
-        'manifest. A dash means that arm did not carry the cell.</p>\n'
+        'manifest. A dash means that arm was asked for the cell and did not carry it; <code>n/m</code> means '
+        'the suite does not ask that arm for the cell (not measured for this arm), which is a declaration '
+        'and not a hole in the grid.</p>\n'
         f'<p class="note">Cells with a baseline row: {len(mkl_pairs)} against <code>faer</code>, '
         f'{len(ob_rows)} against <code>lapack-openblas</code>. Median baseline/colmat ratio (above 1.00 '
         f'means colmat is faster): faer {fmt(med_up)}, '
@@ -700,10 +745,9 @@ timestamps differ by design and are not compared.</p>
                 f'<td class="k">{html.escape(shape)}{html.escape(label)}</td>'
                 f'<td>{key[2]}</td><td>{key[3]}</td><td>{key[8]}</td>'
                 f'<td>{fmt(r["fork_m"])}</td><td>{fmt(r["up"])}</td><td{cls(r["r_up"])}>{fmt(r["r_up"])}</td>'
-                f'<td>{fmt(r["fork_o"])}</td><td>{fmt(r["obl"])}</td>{vendor_ratio_cell(r, "r_ob")}'
+                + arm_cells(r, 'fork_o', 'obl', 'r_ob', 'nm_o') +
                 f'<td>{fmt(r["mk"])}</td>{vendor_ratio_cell(r, "r_mk")}'
-                + (f'<td>{fmt(r["fork_a"])}</td><td>{fmt(r["aoc"])}</td>{vendor_ratio_cell(r, "r_ao")}'
-                   if ao else '')
+                + (arm_cells(r, 'fork_a', 'aoc', 'r_ao', 'nm_a') if ao else '')
                 + '</tr>')
         parts.append('</tbody></table>')
 

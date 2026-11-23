@@ -113,6 +113,33 @@ script also accepts `--vendor none`. This links no vendor; use `--rows colmat`
 when running `fbench` for a colmat-only measurement. This diagnostic build option
 is separate from the recorder's vendor arms and does not publish a dataset.
 
+### Which families each arm measures
+
+MKL and AOCL measure the full family set of a suite. The OpenBLAS arm measures four families only:
+`cholesky`, `lu`, `solve` and `gemm` (#111). The set is declared once, in each suite's `vendor_families`
+(`benchmarks/suites/colmat-kernels.yaml` and `colmat-kernels-large.yaml`); nothing else restates it. The
+recorder, the validator, the coverage check (`full` / `partial`) and the joined page all read it from the
+suite through `campaign_toolkit.campaign.populations(suite, provider)`, so an OpenBLAS run of those four
+families is `full`. On the joined page an OpenBLAS cell outside them reads `n/m` -- *not measured for this
+arm* -- and a dash still means the arm was asked for the cell and did not carry it. The per-arm family list
+needs `campaign_toolkit` with `vendor_families` (tensor4all/campaign-toolkit#83); `requirements.txt` pins it.
+
+Why those four, and what was left out. Excluded for OpenBLAS: `eig`, `eigh`, `full_piv_lu`,
+`householder_apply`, `qr`, `qr_factor`, `svd_thin`, `svd_values`, `triangular_solve` and `upgrade_factor`
+in `colmat-kernels`; the same minus `eig`, `householder_apply` and `upgrade_factor` in
+`colmat-kernels-large`. The evidence is the published zen5-cpu pair at colmat `93da6217`
+(`data/results/zen5-cpu/faer-kernels/20261120T064812Z-pub-93da6217-20261120-mkl` with
+`.../20261120T110410Z-pub-93da6217-20261120-openblas`), which has 720 cells with an OpenBLAS/colmat ratio:
+444 in the four kept families and 276 in five of the excluded ones. OpenBLAS is faster than colmat (ratio
+below 1) in 27 of those 276 cells (9.8%): `eigh` 8/36, `qr_factor` 15/60, `qr` 2/60, `svd_thin` 2/60,
+`svd_values` 0/60. The median OpenBLAS/colmat ratio over the 276 is 1.55 (per family 1.35 to 1.85), against
+1.16 to 1.32 in the kept families, so OpenBLAS is slower there overall, but it does lead in some cells. The
+other five excluded families (`eig`, `full_piv_lu`, `householder_apply`, `triangular_solve`,
+`upgrade_factor`) have no OpenBLAS ratio in that pair, so the data in that pair neither supports nor contradicts excluding them; they were excluded by the #111
+decision, and removing a family from the exclusion is an edit to `vendor_families` alone.
+The 276 / 27 figures are recomputed from the two run directories above with `scripts/gen_comparison.py`'s
+loader (`vendor_arm`); they are not asserted by any test.
+
 ### The AOCL arm (`lapack-aocl`)
 
 A third vendor arm runs the same LAPACK row body against AMD AOCL: LAPACKE from
