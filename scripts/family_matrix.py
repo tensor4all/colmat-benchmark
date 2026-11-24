@@ -17,6 +17,9 @@ vendor*, and colmat is compared with it inside that arm's own process:
   spread the run recorded for the two rows, floored at 5%; anything inside that band is a *tie*;
 - a cell whose rows have fewer than two process sets has no spread to compare against and is
   counted as `no_spread`, not as a tie, and never enters a share;
+- a cell where a row's within-process spread `W` is as large as the difference
+  (campaign-toolkit#89: the page prints `?` not evidence, rerun) is `unresolved`, not a tie, and
+  never enters a share;
 - a cell recorded by a harness that charged the vendor arms more than colmat (#74,
   `gen_comparison.fair_harness`) is `withdrawn` and never enters a share either.
 
@@ -75,7 +78,7 @@ ARCHITECTURES = (
 )
 # "mostly" means more than half of the machine's decided cells of that family.
 MOSTLY = 0.5
-RESULTS = ('win', 'tie', 'lose', 'no_spread', 'withdrawn')
+RESULTS = ('win', 'tie', 'lose', 'no_spread', 'unresolved', 'withdrawn')
 
 
 def vendor_rank(vendor):
@@ -216,12 +219,14 @@ def comparable(row):
 
 
 def outcome(verdict):
-    """'win' | 'tie' | 'lose' | 'no_spread', colmat as the subject."""
+    """'win' | 'tie' | 'lose' | 'no_spread' | 'unresolved', colmat as the subject."""
     if verdict is None:
         return 'no_spread'
     if verdict is False:
         return 'tie'
-    ratio, _ = verdict          # colmat time / vendor time
+    if verdict == 'unresolved':
+        return 'unresolved'
+    ratio = verdict[0]          # colmat time / vendor time; the verdict is (ratio, band, marginal)
     return 'lose' if ratio > 1 else 'win'
 
 
@@ -438,7 +443,7 @@ def main():
               + (f" ({', '.join(VENDOR_LABELS[v] for v in m['missing'])} not measured)" if m['missing'] else '')
               + ' · ' + (f'win {s[0]}% / tie {s[1]}% / lose {s[2]}%' if s else 'nothing decided')
               + f" · {t['win']}/{t['tie']}/{t['lose']} cells, {t['no_spread']} without spread, "
-              f"{t['withdrawn']} withdrawn · behind {m['behind']}")
+              f"{t['unresolved']} unresolved, {t['withdrawn']} withdrawn · behind {m['behind']}")
         for family in every:
             counts = m['families'].get(family)
             if counts is None:

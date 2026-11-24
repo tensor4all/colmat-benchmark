@@ -440,7 +440,9 @@ def tile_html(m, families, chart_href):
     if m.get('os_shared'):
         notes.append(f'<span class="sm">{"/".join(map(str, m["os_shared"]))}T row measures every core '
                      '(no observing CPU left); listed, not counted</span>')
-    for key, text in (('no_spread', 'without a recorded spread'), ('withdrawn', 'withdrawn')):
+    for key, text in (('no_spread', 'without a recorded spread'),
+                      ('unresolved', 'not evidence (a row\'s W as large as the difference)'),
+                      ('withdrawn', 'withdrawn')):
         if t[key]:
             notes.append(f'<span class="sm">{t[key]} cells {text}, not counted</span>')
     if notes:
@@ -497,7 +499,7 @@ def matrix_html(machines, families, chart_href):
                 continue
             if not s:
                 tds.append(f'<td class="na" title="{counts["no_spread"]} without a recorded spread, '
-                           f'{counts["withdrawn"]} withdrawn">no decided cell</td>')
+                           f'{counts["unresolved"]} unresolved, {counts["withdrawn"]} withdrawn">no decided cell</td>')
                 continue
             cls, word = words[family_matrix.leaning(counts)]
             title = (f"{counts['win']} win / {counts['tie']} tie / {counts['lose']} lose of "

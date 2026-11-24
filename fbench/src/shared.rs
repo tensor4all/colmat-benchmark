@@ -70,7 +70,7 @@ impl Case {
 }
 
 /// A scalar the reference math and both providers support.
-pub trait Scalar: Copy + Send + 'static {
+pub trait Scalar: Copy + Send + Sync + 'static {
     const IS_COMPLEX: bool;
     /// The residual floor of this dtype, relative to the case's scale.
     ///
@@ -309,10 +309,19 @@ const KBLK: usize = 256;
 /// from zero, so every element is bit-identical to the textbook triple loop (kept as the test
 /// reference, `tests::naive_mul`) and no residual can move because the product got faster.
 fn mm<T: Scalar>(l: usize, k: usize, n: usize, a: &[T], b: &[T], c: &mut [T]) {
+    use rayon::prelude::*;
     c.fill(T::zero());
-    let mut jb = 0;
-    while jb < n {
-        let jw = JBLK.min(n - jb);
+    if l == 0 || n == 0 {
+        return;
+    }
+    // The `JBLK`-column blocks of `c` are disjoint slices, so they run on the rayon pool: the
+    // pool is the thread budget of the process (`configure_threads`), and the check runs outside
+    // every clocked region. Each element of `c` is still the sum over `p` in ascending order, so
+    // the result is bit-identical to the sequential loop; only the wall time changes (a check at
+    // 16384 was hours on one core, issue #97).
+    c.par_chunks_mut(l * JBLK).enumerate().for_each(|(block, cblock)| {
+        let jb = block * JBLK;
+        let jw = cblock.len() / l;
         let mut ib = 0;
         while ib < l {
             let iw = IBLK.min(l - ib);
@@ -323,7 +332,7 @@ fn mm<T: Scalar>(l: usize, k: usize, n: usize, a: &[T], b: &[T], c: &mut [T]) {
                     let acol = &a[p * l + ib..][..iw];
                     for jj in 0..jw {
                         let bv = b[p + (jb + jj) * k];
-                        let ccol = &mut c[(jb + jj) * l + ib..][..iw];
+                        let ccol = &mut cblock[jj * l + ib..][..iw];
                         for i in 0..iw {
                             ccol[i].add_assign(acol[i].mul(bv));
                         }
@@ -333,8 +342,7 @@ fn mm<T: Scalar>(l: usize, k: usize, n: usize, a: &[T], b: &[T], c: &mut [T]) {
             }
             ib += iw;
         }
-        jb += jw;
-    }
+    });
 }
 
 /// `c = a * b` with `a` `m x k` and `b` `k x n`, all in the same `order`.

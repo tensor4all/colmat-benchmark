@@ -310,10 +310,10 @@ class LandingPageTest(unittest.TestCase):
         positions = [index.index(m) for m in marks]
         self.assertEqual(positions, sorted(positions))
         # one tile and one column per recorded machine, the os-shared run folded into its machine
-        self.assertEqual(list(self.machines), ['zen5-cpu', 'keyaki-64', 'ohtaka-fat'])
+        self.assertEqual(list(self.machines), ['zen5-cpu', 'ohtaka-cpu', 'keyaki-64', 'ohtaka-fat'])
         head = index.split('<table class="share">', 1)[1].split('</thead>', 1)[0]
         self.assertEqual(re.findall(r'<a href="#([^"]+)">', head), list(self.machines))
-        self.assertEqual(index.count('<div class="tile" id='), 3)
+        self.assertEqual(index.count('<div class="tile" id='), 4)
 
     def test_the_headline_names_its_comparison_set(self):
         headline = self.index.split('class="headline">', 1)[1].split('</p>', 1)[0]
@@ -432,12 +432,13 @@ class LandingPageTest(unittest.TestCase):
         no_vendor = ('full_piv_lu', 'triangular_solve', 'householder_apply')
         for family, cells in rows.items():
             tds = re.findall(r'<td class="([^"]+)"[^>]*>(?:<a [^>]*>)?([^<]*)<', cells)
-            # zen5 and keyaki
-            for cls, text in tds[:2]:
+            # columns in profile order: zen5, ohtaka-cpu, keyaki, ohtaka-fat
+            for cls, text in (tds[0], tds[2]):
                 self.assertEqual((cls, text) == ('na', 'no vendor cell'), family in no_vendor, family)
-            # ohtaka-fat recorded gemm, lu, cholesky and qr_factor only
-            self.assertEqual(tds[-1] == ('na', 'not measured'),
-                             family not in ('gemm', 'lu', 'cholesky', 'qr_factor'), family)
+            # ohtaka-cpu (#102) and ohtaka-fat recorded gemm, lu, cholesky and qr_factor only
+            for td in (tds[1], tds[3]):
+                self.assertEqual(td == ('na', 'not measured'),
+                                 family not in ('gemm', 'lu', 'cholesky', 'qr_factor'), family)
         self.assertIn('title="no vendor cell (recorded; no vendor row at the cells colmat recorded)"',
                       rows['full_piv_lu'])
         self.assertIn('no row inside the cell rule', rows['householder_apply'])
