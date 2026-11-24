@@ -74,9 +74,12 @@ per-start median range exceeds 5% of its median, and `p` a balanced cell whose e
 position-effect ratio exceeds 1.05. Flagged cells are retained, not discarded; the
 between-start variation can exceed the difference being compared.
 The `vs` columns mark only differences larger than the spread this run recorded for those
-two rows (combined between-start SD, floored at 5%), always with the measured library as the subject:
+two rows (combined between-start SD, floored at 5%), larger than the sum of the two rows' `±`
+and larger than each row's `W`, always with the measured library as the subject:
 `🔵 <row> X faster than <row>` / `🔴 <row> X slower than <row>` (the subject is the first column of the table, the compared row is named in
-the cell, not only in the column header), `·` inside the band, `-` that row is not
+the cell, not only in the column header), `·` inside the band or within the rows' `±`, `?` a row's
+`W` is as large as the difference (not evidence either way; rerun the cell), `(marginal: …)` a
+verdict whose largest spread is at least 60% of its difference, `-` that row is not
 measured in this arm. `notes` carries the cell warnings (`*` a declared row has no measurement,
 `!` between-start range over 5%, `p` position effect over 5%, dispatch-dominated means the
 row is under 20 us so 4T/8T pay thread-region start-up). Per-start ratios and every
@@ -88,7 +91,7 @@ These describe the recorded revisions; they are not a regression claim.
 | case | faer-fork (ms) | lapack-mkl (ms) | vs `lapack-mkl` | notes |
 |---|---|---|---|---|
 | `gemm/4096x4096x4096/b1` | 183.702 ± 7.77705 (W 0.329029) | 220.976 ± 1.91558 (W 2.10461) | 🔵 faer-fork 1.20× faster than `lapack-mkl` | `!` between-start range over 5% |
-| `gemm/8192x8192x8192/b1` | 1577.12 ± 177.515 (W 53.7888) | 1839.74 ± 29.8288 (W 27.6162) | 🔵 faer-fork 1.17× faster than `lapack-mkl` | `!` between-start range over 5%; `p` position effect over 5% |
+| `gemm/8192x8192x8192/b1` | 1577.12 ± 177.515 (W 53.7888) | 1839.74 ± 29.8288 (W 27.6162) | 🔵 faer-fork 1.17× faster than `lapack-mkl` (marginal: spread 0.79 of the difference) | `!` between-start range over 5%; `p` position effect over 5% |
 
 ## linalg-ohtaka, f64, f order, 64T (CPU 0-63)
 
@@ -96,7 +99,7 @@ These describe the recorded revisions; they are not a regression claim.
 |---|---|---|---|---|
 | `cholesky/n4096/b1` | 107.848 ± 1.07001 (W 1.76522) | 111.752 ± 0.725976 (W 1.26497) | · |  |
 | `cholesky/n4096/b1 [api-inclusive]` | 147.548 ± 1.18737 (W 4.65875) | - | - | `*` one row has no measurement here |
-| `cholesky/n8192/b1` | 1110.26 ± 10.1219 (W 5.19716) | 826.738 ± 190.855 (W 66.8268) | 🔴 faer-fork 1.34× slower than `lapack-mkl` | `!` between-start range over 5%; `p` position effect over 5% |
+| `cholesky/n8192/b1` | 1110.26 ± 10.1219 (W 5.19716) | 826.738 ± 190.855 (W 66.8268) | 🔴 faer-fork 1.34× slower than `lapack-mkl` (marginal: spread 0.71 of the difference) | `!` between-start range over 5%; `p` position effect over 5% |
 | `cholesky/n8192/b1 [api-inclusive]` | 1236.36 ± 16.2723 (W 7.86527) | - | - | `*` one row has no measurement here |
 
 Repeated process sets describe observed repeatability under the recorded order schedule; they are not a paired baseline/candidate experiment and do not establish equal performance between engines.

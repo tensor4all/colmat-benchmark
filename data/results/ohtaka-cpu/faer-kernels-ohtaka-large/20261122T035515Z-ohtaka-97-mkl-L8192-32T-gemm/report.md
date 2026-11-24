@@ -74,9 +74,12 @@ per-start median range exceeds 5% of its median, and `p` a balanced cell whose e
 position-effect ratio exceeds 1.05. Flagged cells are retained, not discarded; the
 between-start variation can exceed the difference being compared.
 The `vs` columns mark only differences larger than the spread this run recorded for those
-two rows (combined between-start SD, floored at 5%), always with the measured library as the subject:
+two rows (combined between-start SD, floored at 5%), larger than the sum of the two rows' `±`
+and larger than each row's `W`, always with the measured library as the subject:
 `🔵 <row> X faster than <row>` / `🔴 <row> X slower than <row>` (the subject is the first column of the table, the compared row is named in
-the cell, not only in the column header), `·` inside the band, `-` that row is not
+the cell, not only in the column header), `·` inside the band or within the rows' `±`, `?` a row's
+`W` is as large as the difference (not evidence either way; rerun the cell), `(marginal: …)` a
+verdict whose largest spread is at least 60% of its difference, `-` that row is not
 measured in this arm. `notes` carries the cell warnings (`*` a declared row has no measurement,
 `!` between-start range over 5%, `p` position effect over 5%, dispatch-dominated means the
 row is under 20 us so 4T/8T pay thread-region start-up). Per-start ratios and every

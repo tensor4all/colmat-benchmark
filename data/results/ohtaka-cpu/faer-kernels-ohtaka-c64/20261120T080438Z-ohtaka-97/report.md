@@ -74,9 +74,12 @@ per-start median range exceeds 5% of its median, and `p` a balanced cell whose e
 position-effect ratio exceeds 1.05. Flagged cells are retained, not discarded; the
 between-start variation can exceed the difference being compared.
 The `vs` columns mark only differences larger than the spread this run recorded for those
-two rows (combined between-start SD, floored at 5%), always with the measured library as the subject:
+two rows (combined between-start SD, floored at 5%), larger than the sum of the two rows' `±`
+and larger than each row's `W`, always with the measured library as the subject:
 `🔵 <row> X faster than <row>` / `🔴 <row> X slower than <row>` (the subject is the first column of the table, the compared row is named in
-the cell, not only in the column header), `·` inside the band, `-` that row is not
+the cell, not only in the column header), `·` inside the band or within the rows' `±`, `?` a row's
+`W` is as large as the difference (not evidence either way; rerun the cell), `(marginal: …)` a
+verdict whose largest spread is at least 60% of its difference, `-` that row is not
 measured in this arm. `notes` carries the cell warnings (`*` a declared row has no measurement,
 `!` between-start range over 5%, `p` position effect over 5%, dispatch-dominated means the
 row is under 20 us so 4T/8T pay thread-region start-up). Per-start ratios and every
@@ -88,14 +91,14 @@ These describe the recorded revisions; they are not a regression claim.
 | case | faer-fork (ms) | lapack-openblas (ms) | vs `lapack-openblas` | notes |
 |---|---|---|---|---|
 | `gemm/2048x2048x2048/b1` | 95.6812 ± 28.7104 (W 1.05613) | 71.541 ± 4.18888 (W 0.987909) | · | `!` between-start range over 5%; `p` position effect over 5% |
-| `gemm/8192x8192x8192/b1` | 4812.56 ± 815.7 (W 258.118) | 3423.77 ± 196.143 (W 196.608) | 🔴 faer-fork 1.41× slower than `lapack-openblas` | `!` between-start range over 5%; `p` position effect over 5% |
+| `gemm/8192x8192x8192/b1` | 4812.56 ± 815.7 (W 258.118) | 3423.77 ± 196.143 (W 196.608) | 🔴 faer-fork 1.41× slower than `lapack-openblas` (marginal: spread 0.73 of the difference) | `!` between-start range over 5%; `p` position effect over 5% |
 
 ## gemm-ohtaka, c64, f order, 128T (CPU 0-127)
 
 | case | faer-fork (ms) | lapack-openblas (ms) | vs `lapack-openblas` | notes |
 |---|---|---|---|---|
 | `gemm/2048x2048x2048/b1` | 93.8904 ± 3.14048 (W 0.407758) | 165.21 ± 7.06617 (W 2.21407) | 🔵 faer-fork 1.76× faster than `lapack-openblas` | `!` between-start range over 5% |
-| `gemm/8192x8192x8192/b1` | 5171.03 ± 394.173 (W 983.243) | 3915.59 ± 254.542 (W 191.589) | 🔴 faer-fork 1.32× slower than `lapack-openblas` | `!` between-start range over 5%; `p` position effect over 5% |
+| `gemm/8192x8192x8192/b1` | 5171.03 ± 394.173 (W 983.243) | 3915.59 ± 254.542 (W 191.589) | 🔴 faer-fork 1.32× slower than `lapack-openblas` (marginal: spread 0.78 of the difference) | `!` between-start range over 5%; `p` position effect over 5% |
 
 ## linalg-ohtaka, c64, f order, 64T (CPU 0-63)
 
@@ -120,9 +123,9 @@ These describe the recorded revisions; they are not a regression claim.
 | `cholesky/n2048/b1 [api-inclusive]` | 94.8766 ± 0.693991 (W 1.31609) | - | - | `*` one row has no measurement here |
 | `cholesky/n8192/b1` | 3024.82 ± 33.1569 (W 3.62618) | 2034.89 ± 131.04 (W 259.114) | 🔴 faer-fork 1.49× slower than `lapack-openblas` | `!` between-start range over 5% |
 | `cholesky/n8192/b1 [api-inclusive]` | 3112.87 ± 33.6346 (W 85.3289) | - | - | `*` one row has no measurement here |
-| `lu/n2048/b1` | 154.974 ± 0.562034 (W 0.382624) | 1302.28 ± 510.218 (W 4275.44) | 🔵 faer-fork 8.40× faster than `lapack-openblas` | `!` between-start range over 5%; `p` position effect over 5% |
+| `lu/n2048/b1` | 154.974 ± 0.562034 (W 0.382624) | 1302.28 ± 510.218 (W 4275.44) | `?` not evidence vs `lapack-openblas`: a row's `W` is as large as the difference (rerun) | `!` between-start range over 5%; `p` position effect over 5% |
 | `lu/n2048/b1 [api-inclusive]` | 190.114 ± 2.12544 (W 1.09783) | - | - | `*` one row has no measurement here |
-| `lu/n8192/b1` | 12382.8 ± 896.598 (W 698.291) | 30819.3 ± 12159.9 (W 7445.42) | 🔵 faer-fork 2.49× faster than `lapack-openblas` | `!` between-start range over 5%; `p` position effect over 5% |
+| `lu/n8192/b1` | 12382.8 ± 896.598 (W 698.291) | 30819.3 ± 12159.9 (W 7445.42) | 🔵 faer-fork 2.49× faster than `lapack-openblas` (marginal: spread 0.71 of the difference) | `!` between-start range over 5%; `p` position effect over 5% |
 | `lu/n8192/b1 [api-inclusive]` | 17713 ± 28.5476 (W 348.83) | - | - | `*` one row has no measurement here |
 | `qr_factor/n2048/b1` | 182.033 ± 7.79277 (W 4.64595) | 726.076 ± 119.051 (W 5.35254) | 🔵 faer-fork 3.99× faster than `lapack-openblas` | `!` between-start range over 5%; `p` position effect over 5% |
 | `qr_factor/n8192/b1` | 8749.64 ± 1811.2 (W 158.348) | 89301.3 ± 32685.7 (W 15274.4) | 🔵 faer-fork 10.21× faster than `lapack-openblas` | `!` between-start range over 5%; `p` position effect over 5% |

@@ -72,9 +72,12 @@ per-start median range exceeds 5% of its median, and `p` a balanced cell whose e
 position-effect ratio exceeds 1.05. Flagged cells are retained, not discarded; the
 between-start variation can exceed the difference being compared.
 The `vs` columns mark only differences larger than the spread this run recorded for those
-two rows (combined between-start SD, floored at 5%), always with the measured library as the subject:
+two rows (combined between-start SD, floored at 5%), larger than the sum of the two rows' `±`
+and larger than each row's `W`, always with the measured library as the subject:
 `🔵 <row> X faster than <row>` / `🔴 <row> X slower than <row>` (the subject is the first column of the table, the compared row is named in
-the cell, not only in the column header), `·` inside the band, `-` that row is not
+the cell, not only in the column header), `·` inside the band or within the rows' `±`, `?` a row's
+`W` is as large as the difference (not evidence either way; rerun the cell), `(marginal: …)` a
+verdict whose largest spread is at least 60% of its difference, `-` that row is not
 measured in this arm. `notes` carries the cell warnings (`*` a declared row has no measurement,
 `!` between-start range over 5%, `p` position effect over 5%, dispatch-dominated means the
 row is under 20 us so 4T/8T pay thread-region start-up). Per-start ratios and every
@@ -135,7 +138,7 @@ These describe the recorded revisions; they are not a regression claim.
 
 | case | faer-fork (ms) | lapack-openblas (ms) | vs `lapack-openblas` | notes |
 |---|---|---|---|---|
-| `cholesky/n2048/b1` | 19.0237 ± 0.0854086 (W 1.43338) | 20.8068 ± 0.0951808 (W 0.283342) | 🔵 faer-fork 1.09× faster than `lapack-openblas` |  |
+| `cholesky/n2048/b1` | 19.0237 ± 0.0854086 (W 1.43338) | 20.8068 ± 0.0951808 (W 0.283342) | 🔵 faer-fork 1.09× faster than `lapack-openblas` (marginal: spread 0.80 of the difference) |  |
 | `cholesky/n2048/b1 [api-inclusive]` | 28.648 ± 2.925 (W 0.659271) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
 | `lu/n2048/b1` | 42.185 ± 0.491436 (W 1.14266) | 94.4364 ± 1.09712 (W 0.931988) | 🔵 faer-fork 2.24× faster than `lapack-openblas` |  |
 | `lu/n2048/b1 [api-inclusive]` | 66.0346 ± 0.336229 (W 1.4134) | - | - | `*` one row has no measurement here |
@@ -145,7 +148,7 @@ These describe the recorded revisions; they are not a regression claim.
 
 | case | faer-fork (ms) | lapack-openblas (ms) | vs `lapack-openblas` | notes |
 |---|---|---|---|---|
-| `cholesky/n2048/b1` | 21.1907 ± 2.5658 (W 0.688128) | 24.2012 ± 0.450257 (W 0.845828) | 🔵 faer-fork 1.14× faster than `lapack-openblas` | `!` between-start range over 5%; `p` position effect over 5% |
+| `cholesky/n2048/b1` | 21.1907 ± 2.5658 (W 0.688128) | 24.2012 ± 0.450257 (W 0.845828) | · | `!` between-start range over 5%; `p` position effect over 5% |
 | `cholesky/n2048/b1 [api-inclusive]` | 33.7714 ± 0.487423 (W 0.771328) | - | - | `*` one row has no measurement here |
 | `lu/n2048/b1` | 48.2655 ± 1.73433 (W 2.53504) | 174.309 ± 18.0309 (W 33.1322) | 🔵 faer-fork 3.61× faster than `lapack-openblas` | `!` between-start range over 5% |
 | `lu/n2048/b1 [api-inclusive]` | 74.1596 ± 0.207856 (W 1.90402) | - | - | `*` one row has no measurement here |
@@ -157,8 +160,8 @@ These describe the recorded revisions; they are not a regression claim.
 |---|---|---|---|---|
 | `cholesky/n2048/b1` | 32.875 ± 0.0171756 (W 0.102312) | 24.8253 ± 0.815842 (W 1.13776) | 🔴 faer-fork 1.32× slower than `lapack-openblas` |  |
 | `cholesky/n2048/b1 [api-inclusive]` | 46.4998 ± 0.458547 (W 0.261296) | - | - | `*` one row has no measurement here |
-| `lu/n2048/b1` | 62.8526 ± 0.505171 (W 0.905395) | 783.744 ± 72.4423 (W 1071.67) | 🔵 faer-fork 12.47× faster than `lapack-openblas` | `!` between-start range over 5%; `p` position effect over 5% |
+| `lu/n2048/b1` | 62.8526 ± 0.505171 (W 0.905395) | 783.744 ± 72.4423 (W 1071.67) | `?` not evidence vs `lapack-openblas`: a row's `W` is as large as the difference (rerun) | `!` between-start range over 5%; `p` position effect over 5% |
 | `lu/n2048/b1 [api-inclusive]` | 84.8587 ± 2.3666 (W 0.589644) | - | - | `*` one row has no measurement here |
-| `qr_factor/n2048/b1` | 92.166 ± 3.63525 (W 2.95233) | 547.389 ± 134.977 (W 728.471) | 🔵 faer-fork 5.94× faster than `lapack-openblas` | `!` between-start range over 5%; `p` position effect over 5% |
+| `qr_factor/n2048/b1` | 92.166 ± 3.63525 (W 2.95233) | 547.389 ± 134.977 (W 728.471) | `?` not evidence vs `lapack-openblas`: a row's `W` is as large as the difference (rerun) | `!` between-start range over 5%; `p` position effect over 5% |
 
 Repeated process sets describe observed repeatability under the recorded order schedule; they are not a paired baseline/candidate experiment and do not establish equal performance between engines.
