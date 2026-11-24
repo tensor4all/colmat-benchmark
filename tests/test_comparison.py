@@ -6,6 +6,7 @@ No build and no measurement is run: the runs are small manifest-plus-CSV fixture
 import csv
 import contextlib
 import io
+import re
 import pathlib
 import shutil
 import subprocess
@@ -124,6 +125,22 @@ class ComparisonTest(unittest.TestCase):
         self.log = self.log.getvalue()
         return self.out.read_text()
 
+    def test_an_arm_recorded_under_the_old_engine_names_joins_one_recorded_under_the_new(self):
+        # #113 renamed `faer-fork` -> `colmat` and `faer-upstream` -> `faer` without rewriting the
+        # recordings. An MKL arm recorded under the new names and an OpenBLAS arm recorded under the
+        # old ones are the same rows: the colmat column of each arm is filled, and the ratios divide
+        # by it, rather than one arm's rows falling into a column nothing reads.
+        page = self.generate([cell('lu', 'colmat', 10.0), cell('lu', 'faer', 12.0),
+                              cell('lu', 'lapack-mkl', 20.0)],
+                             [cell('lu', 'faer-fork', 10.0), cell('lu', 'lapack-openblas', 50.0)],
+                             harness=gen_comparison.FAIR_HARNESS)
+        row = re.search(r'<tr><td class="k">lu</td>.*?</tr>', page).group(0)
+        cells = re.findall(r'<td[^>]*>([^<]*)</td>', row)
+        # family, shape, dtype, order, threads, colmat MKL, faer, faer/colmat, colmat OpenBLAS,
+        # OpenBLAS, OpenBLAS/colmat, MKL, MKL/colmat
+        self.assertEqual(cells[5:], ['10.00', '12.00', '1.200', '10.00', '50.00', '5.000', '20.00', '2.000'])
+        self.assertNotIn('faer-fork', page)
+
     def test_the_ratio_columns_divide_by_the_fork_shown_beside_them(self):
         # The fork is measured in both arms, and the two numbers differ: here the MKL arm's last
         # process set has fork 40 ms while the OpenBLAS arm measured 10 ms for the same cell. A page
@@ -137,8 +154,8 @@ class ComparisonTest(unittest.TestCase):
                                              '--out', str(self.out)]), 0)
         page = self.out.read_text()
         fmt, cls = gen_comparison.fmt, gen_comparison.cls
-        self.assertIn('<th>fork MKL (ms)</th>', page)
-        self.assertIn('<th>fork OpenBLAS (ms)</th>', page)
+        self.assertIn('<th>colmat MKL (ms)</th>', page)
+        self.assertIn('<th>colmat OpenBLAS (ms)</th>', page)
         # Every number in this sequence is in the row, so each ratio can be checked by hand:
         # upstream/fork = 12/40, OpenBLAS/fork = 50/10, MKL/fork = 100/40.
         self.assertIn(f'<td>{fmt(40.0)}</td><td>{fmt(12.0)}</td><td{cls(0.3)}>{fmt(0.3)}</td>'
@@ -154,6 +171,43 @@ class ComparisonTest(unittest.TestCase):
         self.assertIn(f'<td>{fmt(10.0)}</td>', page)
         self.assertIn(f'<td>-</td><td>{fmt(50.0)}</td><td>-</td>', page)
         self.assertNotIn(f'>{fmt(5.0)}<', page)
+
+    def test_a_family_the_suite_does_not_ask_the_arm_for_reads_not_measured_never_a_hole(self):
+        # #111: the suite narrows the OpenBLAS arm to cholesky/lu/solve/gemm. The MKL arm also
+        # measured `qr`; that cell is `n/m` for OpenBLAS -- the suite's declaration -- while an `lu`
+        # cell the arm was asked for and did not carry stays a dash. The join must not refuse the pair.
+        mkl_rows = [cell(f, r, v) for f in ('lu', 'qr')
+                    for r, v in (('faer-fork', 10.0), ('faer-upstream', 12.0), ('lapack-mkl', 100.0))]
+        page = self.generate(mkl_rows, [cell('lu', 'faer-fork', 10.0)])
+        fmt = gen_comparison.fmt
+        nm = gen_comparison.NOT_MEASURED
+        self.assertEqual(page.count(nm), 3)                       # qr: fork, vendor row, ratio
+        self.assertIn(f'<td>{fmt(10.0)}</td><td>-</td><td>-</td>', page)   # lu: asked, not carried
+        self.assertIn('not measured for this arm', page)
+
+    def test_a_focused_run_manifest_cannot_turn_a_hole_into_a_declaration(self):
+        # The declared set is the suite's, not the manifest's `run_spec.populations`: a run narrowed
+        # to `gemm` still leaves `lu` a dash (asked, not carried), because the suite asks for it.
+        pops = {'run_spec': {'populations': [{'regime': 'gemm-small', 'families': ['gemm'],
+                                              'n': ['1024'], 'batch': [1]}]}}
+        mkl_rows = [cell('lu', r, v)
+                    for r, v in (('faer-fork', 10.0), ('faer-upstream', 12.0), ('lapack-mkl', 100.0))]
+        page = self.generate(mkl_rows, [cell('gemm', 'faer-fork', 10.0)], **pops)
+        self.assertNotIn(gen_comparison.NOT_MEASURED, page)
+
+    def test_a_recorded_row_is_never_replaced_by_not_measured(self):
+        # A page recorded under an earlier, wider declaration keeps its numbers for a cell the
+        # suite no longer asks the arm for.
+        mkl_rows = [cell('qr', r, v)
+                    for r, v in (('faer-fork', 10.0), ('faer-upstream', 12.0), ('lapack-mkl', 100.0))]
+        page = self.generate(mkl_rows, [cell('qr', 'faer-fork', 10.0), cell('qr', 'lapack-openblas', 50.0)])
+        self.assertNotIn(gen_comparison.NOT_MEASURED, page)
+        self.assertIn(f'<td>{gen_comparison.fmt(50.0)}</td>', page)
+
+    def test_a_manifest_of_an_undeclared_suite_never_reads_not_measured(self):
+        page = self.generate([cell('qr', 'faer-fork', 10.0), cell('qr', 'lapack-mkl', 100.0)],
+                             [cell('lu', 'faer-fork', 10.0)], suite_id='no-such-suite')
+        self.assertNotIn(gen_comparison.NOT_MEASURED, page)
 
     def harness_repo(self):
         """A throw-away repository carrying the measured harness paths, at three commits.
@@ -206,7 +260,7 @@ class ComparisonTest(unittest.TestCase):
                                   cell('lu', 'lapack-openblas', 30.0)],
                                  harness=harness, ob_harness=data_only)
         self.assertIn('<td class="k">lu</td>', page)
-        self.assertIn('<th>fork OpenBLAS (ms)</th>', page)
+        self.assertIn('<th>colmat OpenBLAS (ms)</th>', page)
 
     def test_a_change_under_a_measured_harness_path_is_still_refused(self):
         # The exemption is the measured paths, not the commit: an `fbench/src` change is a different
@@ -456,7 +510,7 @@ class ComparisonTest(unittest.TestCase):
         self.assertIn('<td class="wd">withdrawn</td>', page)
         self.assertIn('<td>50.00</td>', page)         # the recorded vendor time is kept
         self.assertNotIn('>5.000<', page)             # 50/10 is not printed
-        self.assertIn('Median baseline/fork ratio (above 1.00 means the fork is faster): upstream '
+        self.assertIn('Median baseline/colmat ratio (above 1.00 means colmat is faster): faer '
                       '1.200, OpenBLAS withdrawn', page)
         self.assertIn('docs/dataset-status.md', page)
 
@@ -535,9 +589,9 @@ class ComparisonTest(unittest.TestCase):
         # The AOCL arm measured the fork at 20 ms (the MKL arm at 10 ms): AOCL/fork is 30/20 = 1.500,
         # never 30/10, so the ratio's denominator is the number printed beside it.
         page = self.aocl_page([cell('lu', 'faer-fork', 20.0), cell('lu', 'lapack-aocl', 30.0)])
-        self.assertIn('<th>fork AOCL (ms)</th><th>AOCL (ms)</th><th>AOCL/fork</th>', page)
+        self.assertIn('<th>colmat AOCL (ms)</th><th>AOCL (ms)</th><th>AOCL/colmat</th>', page)
         self.assertIn('<td>20.00</td><td>30.00</td><td class="loss">1.500</td></tr>', page)
-        self.assertIn('fork against upstream, OpenBLAS, MKL and AOCL', page)
+        self.assertIn('colmat against faer, OpenBLAS, MKL and AOCL', page)
         self.assertIn('AOCL: aocl 6.0.0', page)
         self.assertIn('1 with an AOCL row', self.log)
 

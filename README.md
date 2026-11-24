@@ -23,7 +23,7 @@ which own the same job one layer up.
 | Result layout | [`docs/results.md`](docs/results.md) |
 | Timing policy | [`docs/timing-policy.md`](docs/timing-policy.md) |
 | Measurement audit | [`docs/measurement-audit-2026-11-06.md`](docs/measurement-audit-2026-11-06.md) — what each timed call includes, per family and arm |
-| Reference revisions | [`pins/t4a-faer.rev`](pins/t4a-faer.rev) (historical file name; it holds the measured `colmat` revision) and [`pins/upstream-faer.rev`](pins/upstream-faer.rev) (the baseline) — what `status` is measured against |
+| Reference revisions | [`pins/colmat.rev`](pins/colmat.rev) (the measured `colmat` revision) and [`pins/upstream-faer.rev`](pins/upstream-faer.rev) (the baseline) — what `status` is measured against |
 | Rules and runbook | [`docs/rules.md`](docs/rules.md) - acceptance in an hour, the frozen contract, and the commands |
 | Design record | [`docs/worklog.md`](docs/worklog.md) — decisions, fixed failures, open items |
 | Provenance | [`docs/provenance.md`](docs/provenance.md) — what was copied from which sibling and under what terms |
@@ -86,32 +86,59 @@ three are recorded in `run.yaml`:
 
 | identity | what it is | pinned by |
 |---|---|---|
-| `library` | the measured `colmat` checkout (package and library `colmat`) | `pins/t4a-faer.rev` (historical file name) |
+| `library` | the measured `colmat` checkout (package and library `colmat`) | `pins/colmat.rev` |
 | `upstream` | the upstream `faer` release `colmat` is based on | `pins/upstream-faer.rev` |
 | `harness` | this repository, whose commit and dirty state can move a number | per run (`harness.commit`) |
 
 ```bash
 # one vendor arm, build + verify + measure + validate + publish + reindex.
 # One binary links one vendor library, so an arm is a run of its own.
-python3 scripts/record_run.py zen5-cpu faer-kernels --vendor openblas \
+python3 scripts/record_run.py zen5-cpu colmat-kernels --vendor openblas \
     --checkout /path/to/colmat-rs --upstream /path/to/upstream-faer
-python3 scripts/record_run.py zen5-cpu faer-kernels --vendor mkl \
+python3 scripts/record_run.py zen5-cpu colmat-kernels --vendor mkl \
     --checkout /path/to/colmat-rs --upstream /path/to/upstream-faer
 ```
 
-Four arms are compared at the library's own API: `colmat` (CSV engine `faer-fork`),
-upstream `faer` (`faer-upstream`), OpenBLAS and Intel oneAPI MKL; the AOCL arm is described below. The Rust
+Four arms are compared at the library's own API: `colmat` (CSV engine `colmat`),
+upstream `faer` (`faer`), OpenBLAS and Intel oneAPI MKL; the AOCL arm is described below. The Rust
 libraries are separate dependencies named `colmat` and `faer_upstream`; the
 upstream dependency selects package `faer`. Each vendor arm has its own binary.
-The pin file, the checkout directory and the CSV engine names keep their
-pre-rename names (`pins/t4a-faer.rev`, `extern/t4a-faer`, `faer-fork`,
-`faer-upstream`) as historical identities, so existing recordings and tooling keep
-resolving; they name `colmat`, not the old crate.
+Runs recorded before #113 used the older names (suites `faer-kernels*`, engines `faer-fork` /
+`faer-upstream`, `pins/t4a-faer.rev`, `extern/t4a-faer`). They are not rewritten: the
+descriptor's `aliases:` maps them to the current names when the index, the site and the charts
+load data, so an old run and a new run of one suite share a cell.
 
 For library-only diagnostics on a host without a vendor toolchain, the build
-script also accepts `--vendor none`. This links no vendor; use `--rows faer-fork`
+script also accepts `--vendor none`. This links no vendor; use `--rows colmat`
 when running `fbench` for a colmat-only measurement. This diagnostic build option
 is separate from the recorder's vendor arms and does not publish a dataset.
+
+### Which families each arm measures
+
+MKL and AOCL measure the full family set of a suite. The OpenBLAS arm measures four families only:
+`cholesky`, `lu`, `solve` and `gemm` (#111). The set is declared once, in each suite's `vendor_families`
+(`benchmarks/suites/colmat-kernels.yaml` and `colmat-kernels-large.yaml`); nothing else restates it. The
+recorder, the validator, the coverage check (`full` / `partial`) and the joined page all read it from the
+suite through `campaign_toolkit.campaign.populations(suite, provider)`, so an OpenBLAS run of those four
+families is `full`. On the joined page an OpenBLAS cell outside them reads `n/m` -- *not measured for this
+arm* -- and a dash still means the arm was asked for the cell and did not carry it. The per-arm family list
+needs `campaign_toolkit` with `vendor_families` (tensor4all/campaign-toolkit#83); `requirements.txt` pins it.
+
+Why those four, and what was left out. Excluded for OpenBLAS: `eig`, `eigh`, `full_piv_lu`,
+`householder_apply`, `qr`, `qr_factor`, `svd_thin`, `svd_values`, `triangular_solve` and `upgrade_factor`
+in `colmat-kernels`; the same minus `eig`, `householder_apply` and `upgrade_factor` in
+`colmat-kernels-large`. The evidence is the published zen5-cpu pair at colmat `93da6217`
+(`data/results/zen5-cpu/faer-kernels/20261120T064812Z-pub-93da6217-20261120-mkl` with
+`.../20261120T110410Z-pub-93da6217-20261120-openblas`), which has 720 cells with an OpenBLAS/colmat ratio:
+444 in the four kept families and 276 in five of the excluded ones. OpenBLAS is faster than colmat (ratio
+below 1) in 27 of those 276 cells (9.8%): `eigh` 8/36, `qr_factor` 15/60, `qr` 2/60, `svd_thin` 2/60,
+`svd_values` 0/60. The median OpenBLAS/colmat ratio over the 276 is 1.55 (per family 1.35 to 1.85), against
+1.16 to 1.32 in the kept families, so OpenBLAS is slower there overall, but it does lead in some cells. The
+other five excluded families (`eig`, `full_piv_lu`, `householder_apply`, `triangular_solve`,
+`upgrade_factor`) have no OpenBLAS ratio in that pair, so the data in that pair neither supports nor contradicts excluding them; they were excluded by the #111
+decision, and removing a family from the exclusion is an edit to `vendor_families` alone.
+The 276 / 27 figures are recomputed from the two run directories above with `scripts/gen_comparison.py`'s
+loader (`vendor_arm`); they are not asserted by any test.
 
 ### The AOCL arm (`lapack-aocl`)
 
@@ -153,7 +180,7 @@ reproduce a number from it:
   flame=avx512` on Zen 5). The `colmat`, upstream and harness revisions come from
   the build script's `--out` file, as for the other arms.
 
-A `colmat` checkout may live inside this repository's tree, at `extern/t4a-faer`:
+A `colmat` checkout may live inside this repository's tree, at `extern/colmat`:
 the linked crate then inherits its package fields from this repository's
 [`Cargo.toml`](Cargo.toml), which declares them.
 
@@ -168,7 +195,7 @@ and every other value the toolkit needs. The `schemas/` copies are gone: the
 toolkit supplies them.
 
 `scripts/setup_extern_deps.sh` materialises the measured `colmat` checkout at
-`extern/t4a-faer` (historical directory name) and `extern/upstream-faer` from the
+`extern/colmat` and `extern/upstream-faer` from the
 pins, which is what `gen_index.py --check` needs to say whether a recorded page is
 current.
 

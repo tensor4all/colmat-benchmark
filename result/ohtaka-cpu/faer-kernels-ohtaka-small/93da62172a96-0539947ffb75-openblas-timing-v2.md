@@ -16,6 +16,7 @@
 - observer: **unavailable** (observer unavailable: no CPU lies outside the measured L3 domains): the recorder and the harness driver ran on the measured cores, recorder affinity `64-127`; the observer audit was not run, so compare these cells only with runs recorded the same way
 - timestamp: `2026-11-20T08:03:43.096166Z`
 - timing policy: v2, median of 3 reps, priming 100 ms (time-based, identical on every row)
+- timing baseline: **not comparable with this campaign's v2 pages** (priming 100 ms < 250 ms; 3 reps < 5; the frozen v2 settings are priming 250 ms and 5 reps, docs/protocol-v2-baseline.md). Too little priming reads a few percent fast, so compare these cells only with runs recorded the same way; a verdict here also needs a ratio beyond 1.10×
 - guards: idle window 3 s, max busy 5.0% including SMT siblings, 8 attempts; sampled on the measured cores the recorder shares, so the gate cannot tell the recorder's own load from foreign load
 - command: `scripts/record_run.py ohtaka-cpu faer-kernels-ohtaka-small --vendor openblas --checkout extern/t4a-faer --upstream extern/upstream-faer --label ohtaka-97 --reps 3 --aa 2 --prime-ms 100`
 - raw data: `data/results/ohtaka-cpu/faer-kernels-ohtaka-small/20261120T074420Z-ohtaka-97/`
@@ -85,6 +86,7 @@ measured in this arm. `notes` carries the cell warnings (`*` a declared row has 
 row is under 20 us so 4T/8T pay thread-region start-up). Per-start ratios and every
 chronological sample are in the run directory named at the top of this page (`run*.csv`).
 These describe the recorded revisions; they are not a regression claim.
+Below the timing baseline (see the header) `·` also means a ratio within 1.10×.
 
 ## gemm-ohtaka, f64, f order, 1T (CPU 0)
 
@@ -140,7 +142,7 @@ These describe the recorded revisions; they are not a regression claim.
 
 | case | faer-fork (ms) | lapack-openblas (ms) | vs `lapack-openblas` | notes |
 |---|---|---|---|---|
-| `cholesky/n2048/b1` | 19.0237 ± 0.0854086 (W 1.43338) | 20.8068 ± 0.0951808 (W 0.283342) | 🔵 faer-fork 1.09× faster than `lapack-openblas` (marginal: spread 0.80 of the difference) |  |
+| `cholesky/n2048/b1` | 19.0237 ± 0.0854086 (W 1.43338) | 20.8068 ± 0.0951808 (W 0.283342) | · |  |
 | `cholesky/n2048/b1 [api-inclusive]` | 28.648 ± 2.925 (W 0.659271) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
 | `lu/n2048/b1` | 42.185 ± 0.491436 (W 1.14266) | 94.4364 ± 1.09712 (W 0.931988) | 🔵 faer-fork 2.24× faster than `lapack-openblas` |  |
 | `lu/n2048/b1 [api-inclusive]` | 66.0346 ± 0.336229 (W 1.4134) | - | - | `*` one row has no measurement here |

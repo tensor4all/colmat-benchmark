@@ -1,4 +1,4 @@
-//! `fbench`: the measurement harness for the faer benchmark campaign.
+//! `fbench`: the measurement harness for the colmat benchmark campaign (colmat against upstream faer and the vendor LAPACKs).
 //!
 //! Three subcommands, at the contract `scripts/record_run.py` reads:
 //!
@@ -138,18 +138,34 @@ enum Statistic {
     Median,
 }
 
+/// The measured library's engine row: colmat (tensor4all/colmat-rs), the fork.
+pub(crate) const ROW_COLMAT: &str = "colmat";
+/// The upstream baseline's engine row: `faer` at the release the fork is based on.
+pub(crate) const ROW_FAER: &str = "faer";
+
+/// A row name under its current name. Runs recorded before colmat-benchmark#113 called the two
+/// rows `faer-fork` and `faer-upstream`; `--rows` still accepts those names, and the CSV always
+/// carries the current one.
+fn current_row(row: &str) -> &str {
+    match row {
+        "faer-fork" => ROW_COLMAT,
+        "faer-upstream" => ROW_FAER,
+        other => other,
+    }
+}
+
 /// The timed loop of one row.
 ///
-/// The two faer rows run it with the row's parallelism held around the whole loop, once, so that
+/// The colmat and faer rows run it with the row's parallelism held around the whole loop, once, so that
 /// priming, every repetition and the check reuse one reservation and its setup is outside every
 /// clocked region. The vendor rows own their threading and are not touched.
 ///
-/// * `faer-fork` with the team API (`fork-team`): `faer::team::with_team(threads, ..)` owns a
+/// * `colmat` with the team API (`fork-team`): `colmat::team::with_team(threads, ..)` owns a
 ///   `threadteam` team for the loop and its `Par::Team` is lent to each call - that is how a caller
 ///   with a thread budget calls this library now (the crate docs, *parallelism*), and the token can
 ///   only be borrowed, never copied, from 0.25 on.
-/// * `faer-fork` without it (0.24/0.25 with the Rayon route): the spindle worker group, as before.
-/// * `faer-upstream`: the spindle worker group, which is how the unchanged row has always been
+/// * `colmat` without it (0.24/0.25 with the Rayon route): the spindle worker group, as before.
+/// * `faer` (upstream): the spindle worker group, which is how the unchanged row has always been
 ///   measured.
 fn measure_row(
     row: &str,
@@ -159,13 +175,13 @@ fn measure_row(
     reps: usize,
 ) -> Result<Vec<f64>, String> {
     #[cfg(feature = "fork-team")]
-    if threads > 1 && row == "faer-fork" {
+    if threads > 1 && row == ROW_COLMAT {
         return colmat::team::with_team(threads, |par| {
             let mut token = op::Token::Fork(par);
             timing::measure(ops, prime_ms, reps, &mut token)
         });
     }
-    if threads > 1 && (row == "faer-fork" || row == "faer-upstream") {
+    if threads > 1 && (row == ROW_COLMAT || row == ROW_FAER) {
         spindle::with_lock(threads, || {
             timing::measure(ops, prime_ms, reps, &mut op::Token::none())
         })
@@ -327,7 +343,7 @@ fn parse(args: &[String]) -> Result<Args, String> {
                 a.rows = value()?
                     .split(',')
                     .filter(|s| !s.is_empty())
-                    .map(str::to_owned)
+                    .map(|s| current_row(s).to_owned())
                     .collect();
                 let known = engine_rows();
                 for row in &a.rows {
@@ -380,10 +396,10 @@ fn parse(args: &[String]) -> Result<Args, String> {
     Ok(a)
 }
 
-/// The engine rows this binary carries: the two faer crates plus this build's
+/// The engine rows this binary carries: colmat and upstream faer plus this build's
 /// vendor. The vendor row is absent without a `link-*` feature, never guessed.
 fn engine_rows() -> Vec<String> {
-    let mut rows = vec!["faer-fork".to_owned(), "faer-upstream".to_owned()];
+    let mut rows = vec![ROW_COLMAT.to_owned(), ROW_FAER.to_owned()];
     if vendor::NAME != "none" {
         rows.push(lapack::row_name().to_owned());
     }
@@ -398,8 +414,8 @@ fn ops_for(
     order: Order,
 ) -> Result<Vec<op::Op>, String> {
     match row {
-        "faer-fork" => backend::fork::ops(dtype, family, case, order),
-        "faer-upstream" => backend::upstream::ops(dtype, family, case, order),
+        ROW_COLMAT => backend::fork::ops(dtype, family, case, order),
+        ROW_FAER => backend::upstream::ops(dtype, family, case, order),
         _ => lapack::ops(dtype, family, case, order),
     }
 }
@@ -1205,16 +1221,17 @@ fn main() -> ExitCode {
     if n_rows > 0 {
         rows.rotate_left(args.rotate_rows % n_rows);
     }
-    // Both layouts by default. `FBENCH_ORDER=f` (or `c`) restricts the grid to one layout: a suite
-    // that declares `order: [f]` (the ohtaka-cpu suites) sets it in the recorder's environment, and
-    // the recorder's validation still compares the CSVs with the declared order axis, so a
-    // mismatch between the declaration and this variable is refused rather than published.
-    let orders: Vec<Order> = match std::env::var("FBENCH_ORDER").ok().as_deref() {
-        None | Some("") | Some("both") => vec![Order::C, Order::F],
-        Some("f") => vec![Order::F],
-        Some("c") => vec![Order::C],
-        Some(other) => {
-            eprintln!("FBENCH_ORDER must be f, c or both, not {other:?}");
+    // Both layouts by default. `FBENCH_ORDER=f` (or `c`) restricts the grid to one layout: for a
+    // suite that declares one order (`order: [f]`, the ohtaka suites) `scripts/record_run.py`
+    // exports it from that axis, because the recorder invokes this binary with the population's
+    // families and shapes and no layout argument, so the declaration alone cannot keep the other
+    // layout out of the CSV (tensor4all/colmat-benchmark#97, #101, #109). The manifest records the
+    // value (`harness_env`), and the recorder's v2 evidence check compares the CSVs with the
+    // declared order axis, so a mismatch is refused rather than published.
+    let orders = match orders_from_env(std::env::var("FBENCH_ORDER").ok().as_deref()) {
+        Ok(orders) => orders,
+        Err(message) => {
+            eprintln!("{message}");
             return ExitCode::from(2);
         }
     };
@@ -1449,9 +1466,34 @@ fn emit(
     });
 }
 
+/// The layouts `FBENCH_ORDER` selects: unset, empty or `both` is both; `f` or `c` is that one.
+/// Anything else is refused, so a typo cannot silently measure both layouts.
+fn orders_from_env(value: Option<&str>) -> Result<Vec<Order>, String> {
+    match value {
+        None | Some("") | Some("both") => Ok(vec![Order::C, Order::F]),
+        Some("f") => Ok(vec![Order::F]),
+        Some("c") => Ok(vec![Order::C]),
+        Some(other) => Err(format!("FBENCH_ORDER must be f, c or both, not {other:?}")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fbench_order_selects_one_layout_or_both() {
+        let names = |v: Option<&str>| {
+            orders_from_env(v).map(|o| o.iter().map(|x| x.label()).collect::<Vec<_>>())
+        };
+        assert_eq!(names(None), Ok(vec!["c", "f"]));
+        assert_eq!(names(Some("")), Ok(vec!["c", "f"]));
+        assert_eq!(names(Some("both")), Ok(vec!["c", "f"]));
+        assert_eq!(names(Some("f")), Ok(vec!["f"]));
+        assert_eq!(names(Some("c")), Ok(vec!["c"]));
+        assert!(names(Some("F")).is_err());
+        assert!(names(Some("cf")).is_err());
+    }
 
     fn cli(extra: &[&str]) -> Result<Args, String> {
         let mut args: Vec<String> = [
@@ -1469,6 +1511,15 @@ mod tests {
         .collect();
         args.extend(extra.iter().map(|s| (*s).to_owned()));
         parse(&args)
+    }
+
+    #[test]
+    fn rows_are_named_colmat_and_faer_and_the_old_names_still_select_them() {
+        assert_eq!(&engine_rows()[..2], [ROW_COLMAT, ROW_FAER]);
+        let old = cli(&["--rows", "faer-fork,faer-upstream"]).unwrap();
+        assert_eq!(old.rows, [ROW_COLMAT, ROW_FAER]);
+        assert_eq!(cli(&["--rows", "colmat"]).unwrap().rows, [ROW_COLMAT]);
+        assert!(cli(&["--rows", "fork"]).is_err());
     }
 
     #[test]
@@ -1502,7 +1553,7 @@ mod tests {
                 batch: 1,
             },
             Order::C,
-            "faer-fork",
+            ROW_COLMAT,
             Some(vec![3.0, 1.0, 2.0]),
             "ok",
             String::new(),
@@ -1545,7 +1596,7 @@ mod tests {
                 batch: 1,
             },
             Order::C,
-            "faer-fork",
+            ROW_COLMAT,
             None,
             "skipped",
             String::new(),

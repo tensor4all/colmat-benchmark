@@ -13,6 +13,7 @@
 - host role: `measurement` — published dataset host
 - timestamp: `2026-11-22T03:53:40.162374Z`
 - timing policy: v2, median of 3 reps, priming 100 ms (time-based, identical on every row)
+- timing baseline: **not comparable with this campaign's v2 pages** (priming 100 ms < 250 ms; 3 reps < 5; the frozen v2 settings are priming 250 ms and 5 reps, docs/protocol-v2-baseline.md). Too little priming reads a few percent fast, so compare these cells only with runs recorded the same way; a verdict here also needs a ratio beyond 1.10×
 - guards: idle window 3 s, max busy 5.0% including SMT siblings, 8 attempts
 - command: `scripts/record_run.py ohtaka-cpu faer-kernels-ohtaka-large --vendor mkl --checkout /home/k0156/k015600/cb97c/extern/t4a-faer --upstream /home/k0156/k015600/cb97c/extern/upstream-faer --label ohtaka-97-mkl-L8192-32T-qr_factor --reps 3 --aa 2 --prime-ms 100 --threads 32 --shapes 4096,8192,4096x4096x4096 --families gemm,qr_factor --regimes gemm-ohtaka,linalg-ohtaka`
 - raw data: `data/results/ohtaka-cpu/faer-kernels-ohtaka-large/20261122T034522Z-ohtaka-97-mkl-L8192-32T-qr_factor/`
@@ -85,6 +86,7 @@ measured in this arm. `notes` carries the cell warnings (`*` a declared row has 
 row is under 20 us so 4T/8T pay thread-region start-up). Per-start ratios and every
 chronological sample are in the run directory named at the top of this page (`run*.csv`).
 These describe the recorded revisions; they are not a regression claim.
+Below the timing baseline (see the header) `·` also means a ratio within 1.10×.
 
 ## gemm-ohtaka, f64, f order, 32T (CPU 0-31)
 
@@ -96,7 +98,7 @@ These describe the recorded revisions; they are not a regression claim.
 
 | case | faer-fork (ms) | lapack-mkl (ms) | vs `lapack-mkl` | notes |
 |---|---|---|---|---|
-| `qr_factor/n4096/b1` | 293.375 ± 7.11129 (W 1.86993) | 271.9 ± 10.4461 (W 5.84076) | 🔴 faer-fork 1.08× slower than `lapack-mkl` (marginal: spread 0.82 of the difference) | `!` between-start range over 5% |
+| `qr_factor/n4096/b1` | 293.375 ± 7.11129 (W 1.86993) | 271.9 ± 10.4461 (W 5.84076) | · | `!` between-start range over 5% |
 | `qr_factor/n8192/b1` | 3056.32 ± 64.1308 (W 6.60926) | 2013.98 ± 28.8859 (W 24.3013) | 🔴 faer-fork 1.52× slower than `lapack-mkl` |  |
 
 Repeated process sets describe observed repeatability under the recorded order schedule; they are not a paired baseline/candidate experiment and do not establish equal performance between engines.

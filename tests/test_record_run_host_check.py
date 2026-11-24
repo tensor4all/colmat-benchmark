@@ -143,12 +143,106 @@ class RecordRunHostCheckTest(unittest.TestCase):
             self.assertEqual(os.environ['FBENCH_PROFILE'], 'zen2-64-smt-off')
 
 
-def campaign_root(tmp):
+
+def ohtaka_fat_host(root):
+    """The fat node as the profile declares it: 112 CPUs, SMT off, each CPU its own sibling."""
+    return sysfs(root, '0-111', '0', {n: str(n) for n in range(112)})
+
+
+def ohtaka_fat_cpu_sets():
+    return {str(row['threads']): row['measured'] for row in profile('ohtaka-fat')['thread_rows']}
+
+
+class OhtakaFatObserverTest(unittest.TestCase):
+    """#109: the profile carries no `os_shared`, and the 112T row still gets its caveat."""
+
+    def test_the_profile_declares_no_whole_profile_override(self):
+        self.assertNotIn('os_shared', profile('ohtaka-fat'))
+        self.assertEqual(profile('ohtaka-fat')['thread_rows'][-1]['observer'], '')
+
+    def test_recording_it_leaves_the_observer_refusals_in_place(self):
+        from campaign_toolkit import record_run as toolkit
+        before = (toolkit.require_observer_off_measured_cpus, toolkit.require_quiet_observing_side)
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = campaign_root(tmp, suites=True)
+            host = ohtaka_fat_host(pathlib.Path(tmp) / 'host')
+            with mock.patch.object(record_run, 'record_run_main', return_value=0):
+                record_run.main(['ohtaka-fat', 'faer-kernels-ohtaka-fat-gemm'], root=campaign,
+                                host_root=host)
+        self.assertEqual((toolkit.require_observer_off_measured_cpus,
+                          toolkit.require_quiet_observing_side), before)
+
+    def test_the_declared_112t_row_is_admitted_with_its_caveat(self):
+        """The toolkit's own path for `observer: ""`: a warning and a recorded caveat, no refusal."""
+        import contextlib
+        import io
+        from campaign_toolkit import record_run as toolkit
+        node = set(range(112))
+        cpu_sets = ohtaka_fat_cpu_sets()
+        # Four L3 domains of 28 CPUs, node k = CPUs that are k mod 4; the recorder sits on node 3.
+        with mock.patch.object(toolkit, 'online_cpus', return_value=node), \
+                mock.patch.object(toolkit, 'l3_domain', side_effect=lambda c: {x for x in node if x % 4 == c % 4}), \
+                mock.patch.object(toolkit.os, 'sched_getaffinity', return_value={3, 7, 11}):
+            unobserved = toolkit.unobserved_rows(profile('ohtaka-fat'), cpu_sets)
+            self.assertEqual(unobserved, ['112'])
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                toolkit.require_observer_off_measured_cpus(cpu_sets, unobserved)  # no SystemExit
+            self.assertIn('observer unavailable for the 112T row(s)', err.getvalue())
+            self.assertEqual(toolkit.observer_affinity(cpu_sets)['caveat'],
+                             'observer unavailable: no CPU lies outside the measured L3 domains')
+            # Without the 112T row, nothing is unobserved and the observer rule applies again.
+            clean = {t: c for t, c in cpu_sets.items() if t != '112'}
+            self.assertEqual(toolkit.unobserved_rows(profile('ohtaka-fat'), clean), [])
+            self.assertNotIn('caveat', toolkit.observer_affinity(clean))
+
+
+class HarnessOrderTest(unittest.TestCase):
+    """#109: `FBENCH_ORDER` comes from the suite's declared order, not from the operator's shell."""
+
+    def run_main(self, suite, ambient=None):
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = campaign_root(tmp, suites=True)
+            host = ohtaka_fat_host(pathlib.Path(tmp) / 'host')
+            name = 'ohtaka-fat' if 'ohtaka' in suite else 'zen2-64-smt-off'
+            if name != 'ohtaka-fat':
+                host = sysfs(pathlib.Path(tmp) / 'zen2', '0-63', '0')
+            env = {} if ambient is None else {'FBENCH_ORDER': ambient}
+            with mock.patch.dict(os.environ, env, clear=False), \
+                    mock.patch.object(record_run, 'record_run_main', return_value=0):
+                if ambient is None:
+                    os.environ.pop('FBENCH_ORDER', None)
+                record_run.main([name, suite], root=campaign, host_root=host)
+                return os.environ.get('FBENCH_ORDER')
+
+    def test_a_single_declared_order_is_exported(self):
+        self.assertEqual(self.run_main('faer-kernels-ohtaka-fat-gemm'), 'f')
+        self.assertEqual(self.run_main('faer-kernels-ohtaka-fat-gemm', ambient='f'), 'f')
+
+    def test_both_orders_leave_the_harness_default(self):
+        self.assertIsNone(self.run_main('colmat-kernels'))
+        self.assertIsNone(self.run_main('colmat-kernels', ambient='both'))
+
+    def test_an_ambient_value_the_suite_does_not_declare_is_refused(self):
+        with self.assertRaises(SystemExit) as raised:
+            self.run_main('colmat-kernels', ambient='f')
+        self.assertIn('FBENCH_ORDER=f is set in this shell', str(raised.exception))
+        with self.assertRaises(SystemExit):
+            self.run_main('faer-kernels-ohtaka-fat-gemm', ambient='c')
+
+    def test_the_manifest_records_it(self):
+        campaign = yaml.safe_load((ROOT / 'benchmarks/campaign.yaml').read_text())
+        self.assertIn('FBENCH_ORDER', campaign['measured']['recorded_env'])
+
+
+def campaign_root(tmp, suites=False):
     """A campaign root with only what the host check reads, and no run directory to write."""
     campaign = pathlib.Path(tmp) / 'campaign'
     (campaign / 'benchmarks').mkdir(parents=True)
     for name in ('campaign.yaml', 'profiles.yaml'):
         shutil.copy(ROOT / 'benchmarks' / name, campaign / 'benchmarks' / name)
+    if suites:
+        shutil.copytree(ROOT / 'benchmarks/suites', campaign / 'benchmarks/suites')
     return campaign
 
 

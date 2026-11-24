@@ -12,7 +12,11 @@ machine, so a run taken on the 64-logical SMT-off host was recorded under
 The material is the one `idle_cpus.py check` reads -- the host's logical CPUs,
 its SMT state and its sibling map against the profile's declaration -- and the
 refusal prints both values. It also hands the profile name to the harness
-(`FBENCH_PROFILE`), which writes it into the CSV's `profile` column.
+(`FBENCH_PROFILE`), which writes it into the CSV's `profile` column, and a suite's
+single declared layout (`order: [f]`) as `FBENCH_ORDER`: the recorder calls the
+harness with no layout argument, so without it the harness measures both layouts and
+the run is refused against the declared axis after the allocation (#109). The
+descriptor's `measured.recorded_env` writes both values into the manifest.
 
 Both live here, not in the shared package: the package is pinned by revision in
 `requirements.txt`, so a package fix could not be pinned without merging it
@@ -24,6 +28,7 @@ import pathlib
 import sys
 
 from campaign_toolkit import descriptor, hostinfo
+from campaign_toolkit.campaign import load, run_spec
 from campaign_toolkit import record_run as _toolkit_record_run
 from campaign_toolkit.record_run import main as record_run_main
 
@@ -98,6 +103,22 @@ def require_host(profile, root="/"):
                  f"({len(bad)} of {len(siblings)} CPUs disagree). Nothing was written.")
 
 
+def harness_order(suite, ambient):
+    """The `FBENCH_ORDER` the harness gets for `suite`: its one declared order, or None for both.
+
+    Derived from the declaration, never taken from the caller's shell: an exported value the
+    suite does not declare would measure a grid the declaration does not describe, so it is
+    refused here, before the build, rather than by the evidence check after the timing.
+    """
+    order = [str(o) for o in run_spec(suite).get("order") or []]
+    wanted = order[0] if len(order) == 1 else None
+    if ambient not in (None, "") and ambient != (wanted or "both"):
+        sys.exit(f"ERROR: FBENCH_ORDER={ambient} is set in this shell, but suite {suite['id']!r} "
+                 f"declares order {order or 'unset (both)'}; scripts/record_run.py sets the "
+                 f"variable from the declaration, so unset it. Nothing was written.")
+    return wanted
+
+
 def allow_os_shared(profile):
     """Explicit override for a profile that declares `os_shared: true` (keyaki-64-os-shared).
 
@@ -131,6 +152,19 @@ def main(argv=None, root=None, host_root="/"):
                  f"that matches a profile name makes the check ambiguous - rename it. Nothing was "
                  f"written.")
     profile = next((p for p in profiles if p["name"] == named[0]), None) if named else None
+    # The suite is the recorder's second positional argument; the same rule as for the profile.
+    d = descriptor.current()
+    suites = [token for token in argv if not token.startswith("-")
+              and (d.suites_dir / f"{d.canonical_suite(token)}.yaml").is_file()]
+    if len(set(suites)) > 1:
+        sys.exit(f"ERROR: the arguments name more than one suite ({', '.join(dict.fromkeys(suites))}); "
+                 f"a run is one suite. Nothing was written.")
+    if suites:
+        order = harness_order(load(d.suite_path(suites[0])), os.environ.get("FBENCH_ORDER"))
+        if order:
+            os.environ["FBENCH_ORDER"] = order
+        else:
+            os.environ.pop("FBENCH_ORDER", None)
     if profile is not None:
         require_host(profile, host_root)
         # The recorder calls the harness with the static argv its descriptor declares, so the

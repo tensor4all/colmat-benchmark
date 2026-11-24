@@ -14,6 +14,7 @@
 - observer: **unavailable** (observer unavailable: no CPU lies outside the measured L3 domains): the recorder and the harness driver ran on the measured cores, recorder affinity `64-127`; the observer audit was not run, so compare these cells only with runs recorded the same way
 - timestamp: `2026-11-22T02:49:28.189912Z`
 - timing policy: v2, median of 3 reps, priming 100 ms (time-based, identical on every row)
+- timing baseline: **not comparable with this campaign's v2 pages** (priming 100 ms < 250 ms; 3 reps < 5; the frozen v2 settings are priming 250 ms and 5 reps, docs/protocol-v2-baseline.md). Too little priming reads a few percent fast, so compare these cells only with runs recorded the same way; a verdict here also needs a ratio beyond 1.10×
 - guards: idle window 3 s, max busy 5.0% including SMT siblings, 8 attempts; sampled on the measured cores the recorder shares, so the gate cannot tell the recorder's own load from foreign load
 - command: `scripts/record_run.py ohtaka-cpu faer-kernels-ohtaka-large --vendor mkl --checkout /home/k0156/k015600/cb97c/extern/t4a-faer --upstream /home/k0156/k015600/cb97c/extern/upstream-faer --label ohtaka-97-mkl-L8192-128T-qr_factor --reps 3 --aa 2 --prime-ms 100 --threads 128 --shapes 4096,8192,4096x4096x4096,8192x8192x8192 --families gemm,qr_factor --regimes gemm-ohtaka,linalg-ohtaka`
 - raw data: `data/results/ohtaka-cpu/faer-kernels-ohtaka-large/20261122T023644Z-ohtaka-97-mkl-L8192-128T-qr_factor/`
@@ -86,6 +87,7 @@ measured in this arm. `notes` carries the cell warnings (`*` a declared row has 
 row is under 20 us so 4T/8T pay thread-region start-up). Per-start ratios and every
 chronological sample are in the run directory named at the top of this page (`run*.csv`).
 These describe the recorded revisions; they are not a regression claim.
+Below the timing baseline (see the header) `·` also means a ratio within 1.10×.
 
 ## gemm-ohtaka, f64, f order, 128T (CPU 0-127)
 

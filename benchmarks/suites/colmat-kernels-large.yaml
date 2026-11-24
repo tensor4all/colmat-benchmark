@@ -1,9 +1,12 @@
 schema_version: 1
-id: faer-kernels-keyaki-os-shared
+id: colmat-kernels-large
 description: >-
-  keyaki-64-os-shared (#100): the same populations at 64T on every core, with the explicit os-shared override; the cell is not comparable with the 60T row of faer-kernels-keyaki. MKL arm only.
-    The faer entry points themselves, measured at faer's own API: the fork
-  (`t4a-faer`, lib name `faer`) and upstream `faer` are separate dependency keys
+  The large-shape half of `colmat-kernels`: the same measured libraries and engines, but only the
+  tiers whose run time is dominated by big shapes, at 4T and 8T. Splitting by thread budget keeps
+  each run's page a full cover of its own declaration instead of two partial pages overwriting
+  each other.
+  The colmat and upstream faer entry points themselves, measured at their own
+  API: colmat (the fork, lib name `colmat`) and upstream `faer` are separate dependency keys
   in the harness, so they are separate engine rows in one binary, and the
   LAPACK/BLAS vendor arms link their own separate binaries. Rows are declared as
   populations (regime x family group x shape grid x order x thread budget), not
@@ -12,16 +15,10 @@ description: >-
   of the same family measure the same work:
   `gemm` is `linalg::matmul::matmul` into a caller-prepared destination with
   `Accum::Replace`; `qr_factor` is the compact `qr_in_place`; `qr` is the
-  composite returning explicit Q and R on both sides: the faer rows time
-  `qr_in_place` followed by the block-Householder apply into a prepared `Q`, and
-  the vendor row times `geqrf_work` followed by `ormqr_work` into a prepared
-  identity block, so `R` is the factor buffer's upper trapezoid and `Q` is the
-  compact `m x min(m, n)` factor that this suite's own check consumes -- not the
-  full `m x m` completion, which on a tall shape is eight times the work and is
-  not what either row would be buying. The faer rows also keep the owning call
-  (`qr`, returning owned Q and R) as a labelled `api-inclusive` row: it is the
-  call a user makes, and it is published beside the primary rows, never divided
-  against a vendor row;
+  composite returning explicit Q and R, with Q the compact `m x min(m, n)`
+  factor that the vendor route's `orgqr(m, min(m, n))` builds and that this
+  suite's own check consumes -- not the full `m x m` completion, which on a tall
+  shape is eight times the work and is not what either row would be buying;
   `upgrade_factor` is the public but
   `#[doc(hidden)]` `upgrade_householder_factor`; `householder_apply` is the
   block apply and the one-block sequence form, as two rows, with basis width
@@ -39,12 +36,15 @@ invalidated_by:
   - Cargo.toml
   - Cargo.lock
 stale_after: 20
-# Empty until the first (zen5-cpu, faer-kernels) cell exists: `missing` is a
+# Empty until the first (zen5-cpu, colmat-kernels) cell exists: `missing` is a
 # normal state for a cell with no run, and it becomes an error only for a profile
 # listed as required. The first recorded cell moves `zen5-cpu` in here.
-required_profiles:
-  - keyaki-64-os-shared
-optional_profiles: []
+# Empty until the first (zen5-cpu, colmat-kernels-large) cell exists, as in the daily suite.
+required_profiles: []
+optional_profiles:
+  - zen5-cpu
+  - zen2-cpu
+  - zen2-64-smt-off
 
 # Family groups. A group is a set of families worth measuring on the same shape
 # grid; the runs below say which groups are measured per regime. A family whose
@@ -73,9 +73,9 @@ family_groups:
 
 # What the workload is, in a form the result page can print.
 workloads:
-  name: faer dense kernels and decompositions
+  name: colmat dense kernels and decompositions, with upstream faer
   description: >-
-    Direct calls into one faer revision: square and rectangular dense matrices,
+    Direct calls into one colmat revision and its upstream faer baseline: square and rectangular dense matrices,
     C (row-major) and F (column-major) order, `f64` and `c64`. A shape is `N` for
     square, `MxN` for rectangular, or `MxKxN` for `gemm`, which is a three-index
     operation and cannot be written as two. Sizes are the matrix dimensions, not
@@ -90,24 +90,21 @@ workloads:
     seeded from the case, so `verify` and `run` measure the same matrices and a
     rerun is reproducible.
   known_blind_spots:
-    - "OS-SHARED, NOT COMPARABLE WITH THE 60T ROW: this cell measures all 64 cores (CPUs 0-63), so no CPU is left to the observing side. dockerd, tailscaled, sshd, the recorder and the agent share the measured cores; the recorder ran with the explicit os-shared override (scripts/record_run.py, profile keyaki-64-os-shared), which skips only the observer-off-measured-cores refusal and the quiet-observing-side audit. The idle guard and the boost gate stayed in force. keyaki-64's 60T row (faer-kernels-keyaki) is the clean full-machine figure."
-    - "Only the faer entry points are measured. tlinalg's packing, batch loop and lane policy, tenferro's tensor construction and dtype dispatch, and the small-`m` decode-projection shapes are other repositories' rows (tlinalg-benchmark, tenferro-benchmark)."
-    - "No row allocates inside its timed `run`: the vendor row calls LAPACKE's `_work` entry points with a workspace the op allocated in `prepare`, and the faer rows call their in-place/`*_into` routes on a prepared matrix, prepared rights and a `MemStack` sized by the library's own `*_scratch`. A vendored driver family is measured column-major only, because LAPACKE's row-major path allocates a transposed copy and transposes in and out of it inside the call in every `_work` variant; a C-order cell of such a family is recorded `skipped` with that reason rather than charged a conversion the faer row does not pay. `gemm` keeps both orders (CBLAS's row-major entry point moves no data)."
-    - "The owning faer routes (`PartialPivLu::new`, `Llt::new`, `qr`, `gesdd`/`syevd` wrappers, `partial_piv_lu().solve()`) allocate their outputs and their scratch inside the timed call. They are kept, as the call a user makes, but labelled `api-inclusive` and published as a separate secondary table: an `api-inclusive` row is never divided against a vendor row, whose route is the prepared one."
-    - "A library's own allocation inside a timed call is not visible to the harness's allocator probe when it happens in C: LAPACKE's non-`_work` wrappers reach libc `malloc` through `LAPACKE_malloc`. That route is not used by this harness (the probe would not see it), so the `_work` entry points are enforced by construction and by the column-major rule, not by the probe."
+    - "Only the colmat and faer entry points are measured. tlinalg's packing, batch loop and lane policy, tenferro's tensor construction and dtype dispatch, and the small-`m` decode-projection shapes are other repositories' rows (tlinalg-benchmark, tenferro-benchmark)."
+    - "Vendor C-order cells use CBLAS/LAPACKE row-major entry points. Workspace allocation or layout conversion internal to those APIs remains timed; these are not prepared-column-major or transpose measurements."
     - "`gemm` covers the tall class's two Householder legs (a 16-wide basis and a 240-column target over 4096 rows: the reduction and the write-back) beside a vendor `?gemm` on the same leg. A single leg beside a vendor gemm is a diagnostic reference, not the equivalent implementation of the whole update, and the row is labelled accordingly."
     - "`householder_apply` measures block apply and the one-block sequence form as two distinct rows, labelled with basis width min(m,n) and target width n. QR fixture preparation is outside timing. Independently varied basis/target widths and multi-panel sequences are not covered."
-    - "A copy a library makes inside its own call is that library's cost, and it is never divided against a vendor row: on a row-major matrix the fork's LU factors into a column-major copy it allocates (`lu/partial_pivoting/factor.rs:396-418`), and a row-major cell of a vendored driver family is a `skipped` cell, so no vendor ratio is formed there. Allocation performed inside the measured call stays inside the clock, and no _primary_ row does it. The fork's two row splits allocate their partial buffers inside the public call and the public scratch function does not expose them; that is the fork's cost, charged to the fork, and the owning routes that pay it are published as `api-inclusive` rows rather than divided against a vendor row."
+    - "Allocation performed inside the measured call stays inside the clock. The fork's two row splits allocate their partial buffers inside the public call, and the public scratch function does not expose them; the campaign reports that as it is instead of changing colmat's API to make the boundary look cleaner."
     - "`cholesky`, `eigh`, `solve` and `triangular_solve` are measured on square shapes only: the matrix they factor or solve with is square by definition (self-adjoint for the first two, a triangular factor for the last). `lu` and `full_piv_lu` are not gated that way -- they take the declared rectangular shapes too, with `min(m, n)` pivots and a trapezoidal `L` or `U`, which is what `dgetrf` does as well -- so a rectangular LU cell is measured in both orders beside its square one."
-    - "`f32`/`c32` are declared and measured as of `docs/harness-dtype-axis.md`; the vendor arm has a route for `gemm` in those two dtypes and reports the LAPACK families as skipped for them. The large regime's 1024 shapes, BLIS, sparse, iterative and GPU arms are later declarations, not machinery built now."
+    - "BLIS, sparse, iterative and GPU arms are later declarations, not machinery built now."
     - "A vendor arm records the library it linked. OpenBLAS and AOCL report the kernel their runtime dispatched to (AOCL for BLIS and libflame separately); MKL names no kernel and no processor count, so its manifest leaves both empty rather than inferring them."
     - "Known limitation: Coverage is the declared grid: f64/c64/f32/c32 at 1/4/8T for the small suite, f64/c64 at 4/8T for the large suite's 1024/1536 + boundary tier; the adoption-only 2048/3072/4096 tiers are not measured."
 
 # One entry per engine name the harness emits. A result page explains every
 # column from this, so a reader needs no context beyond the page.
 engines_doc:
-  faer-fork:
-    provider: faer-fork
+  colmat:
+    provider: colmat
     summary: >-
       The measured library: the tensor4all fork (`colmat`, `[lib] name = "colmat"`)
       at the checkout the harness linked by path. This is the row the campaign
@@ -115,7 +112,7 @@ engines_doc:
       changes land here.
     identity: >-
       the fork revision in this run's manifest (`library.commit`), pinned by
-      `pins/t4a-faer.rev`
+      `pins/colmat.rev`
     caveat: >-
       The fork crate is `colmat` (`[lib] name = "colmat"`); the upstream baseline is
       `faer` (`faer_upstream = { package = "faer" }`). They are distinct Rust crate
@@ -126,8 +123,8 @@ engines_doc:
       measured at 93da6217, colmat-rs main at the 2026-11-17 head: no tag names that
       revision, and the published crates.io colmat 0.34.0 was cut from e1c83482.
       The 2026-11-17 zen5-cpu recordings were taken at this revision.
-  faer-upstream:
-    provider: faer-upstream
+  faer:
+    provider: faer
     summary: >-
       Upstream `faer` at the tag the fork is based on, in the same binary as the
       fork row. The baseline that says whether a fork change moved the number.
@@ -135,7 +132,7 @@ engines_doc:
       the upstream revision in this run's manifest (`upstream.commit`), pinned by
       `pins/upstream-faer.rev`
     caveat: >-
-      Same crate-name and feature-unification caveat as `faer-fork`. A change to
+      Same crate-name and feature-unification caveat as `colmat`. A change to
       upstream at a fixed fork revision produces a different page rather than
       overwriting one.
   lapack-openblas:
@@ -195,11 +192,8 @@ engines_doc:
 # would overwrite each other's CSVs. CI asserts uniqueness (see
 # .github/workflows/ci.yml).
 runs:
-  - threads: [64]
-    cpu_sets: {keyaki-64-os-shared: ["0-63"]}
-    # All four native dtypes: `f32`/`c32` reach the same kernels and the harness can
-    # measure them since `docs/harness-dtype-axis.md`. The optimization loop selects the
-    # 64 and 32 cells explicitly; a full run measures the whole grid for every dtype.
+  - threads: [4, 8]
+    cpu_sets: {zen5-cpu: ["4-7", "4-11"]}
     dtypes: [f64, c64]
     # C (row-major) and F (column-major) for every case, as a declared axis: faer's
     # gemm and its Householder paths dispatch differently on layout, and the fork's
@@ -208,47 +202,37 @@ runs:
     # measurements: provider-native allocations may include padding, and physical
     # strides are not columns in the CSV.
     order: [c, f]
-    engines: [faer-fork, faer-upstream, lapack-mkl]
+    engines: [colmat, faer, lapack-openblas, lapack-mkl, lapack-aocl]
+    # The OpenBLAS arm measures four families only (#111). In the published zen5 pair at colmat
+    # 93da6217 OpenBLAS is faster than colmat in 27 of the 276 cells outside them (eigh 8/36, qr_factor
+    # 15/60, qr 2/60, svd_thin 2/60, svd_values 0/60) with a median OpenBLAS/colmat ratio of 1.55, so
+    # those rows cost run time and page space for a baseline that is slower overall. The README
+    # ("Which families each arm measures") names the pair and the other excluded families. MKL and
+    # AOCL keep the full set. A family absent for an arm is "not measured for this arm", not a hole.
+    vendor_families:
+      openblas: [cholesky, lu, solve, gemm]
     populations:
-      - regime: gemm-small
-        groups: [gemm]
-        # Sizes follow faer's own published benchmark distribution (faer-bench tables: powers of
-        # two plus the x1.5 intermediates), minus 4,8,16 which belong to a separate small-matrix
-        # loop bench. linalg-mid keeps only 128/256/512 because the EVD/SVD calls there are the
-        # expensive ones; the 192/384/768 steps stay in the gemm tier and in adoption runs.
-        n: ["32x32x32", "64x64x64", "96x96x96"]
-        batch: [1]
-      - regime: gemm-mid
-        groups: [gemm]
-        n: ["128x128x128", "192x192x192", "256x256x256", "384x384x384", "512x512x512", "768x768x768"]
-        batch: [1]
-      # The tall class carries both legs of the Householder update that
-      # tlinalg-rs#46 separates, because they are different work and the
-      # reduction is the one whose row split was the experiment: with a 16-wide
-      # basis and a 240-column target over 4096 rows, `tmp = V^H C` is
-      # 16x4096x240 and the write-back `C -= V tmp` is 4096x16x240.
-      - regime: gemm-tall
-        groups: [gemm]
-        n: ["4096x64x64", "16x4096x240", "4096x16x240"]
-        batch: [1]
-      - regime: gemm-wide
-        groups: [gemm]
-        n: ["64x64x4096"]
-        batch: [1]
-      - regime: linalg-small
-        groups: [factor, decompose, heavy, householder]
-        # 32/64 are the overhead and regression-check tier; 4,8,16 are not measured here.
-        n: ["32", "64", "96"]
-        batch: [1]
-      - regime: linalg-mid
-        groups: [factor, decompose, heavy, householder]
-        n: ["128", "256", "512"]
-        batch: [1]
-      - regime: linalg-tall
-        groups: [factor, decompose, householder]
-        n: ["1024x64", "4096x256"]
-        batch: [1]
-      - regime: linalg-wide
+      # Large tiers are not worth 1T: the run time is dominated by the biggest shapes, and the
+      # small/mid tiers (measured at 1/4/8T in the other suite) already carry the 1T comparison.
+      - regime: linalg-large
         groups: [factor, decompose]
-        n: ["64x1024", "256x4096"]
+        n: ["1024", "1536"]
+        batch: [1]
+      - regime: gemm-large
+        groups: [gemm]
+        n: ["1024x1024x1024", "1536x1536x1536"]
+        batch: [1]
+      # Adoption-only: declare so a decision run can select it with --regimes.
+      - regime: linalg-big
+        groups: [factor, decompose]
+        n: ["2048", "3072", "4096"]
+        batch: [1]
+      - regime: gemm-huge
+        groups: [gemm]
+        n: ["2048x2048x2048", "3072x3072x3072", "4096x4096x4096"]
+        batch: [1]
+      # Diagnostic tier for block-boundary overfitting (255/257, 511/513).
+      - regime: linalg-boundary
+        groups: [factor, decompose]
+        n: ["255", "257", "511", "513"]
         batch: [1]

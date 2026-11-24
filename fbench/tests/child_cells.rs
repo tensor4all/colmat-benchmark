@@ -34,7 +34,7 @@ fn run(name: &str, fake: Option<(&str, usize)>, extra: &[&str]) -> Run {
     command
         .args([
             "run", "--threads", "1", "--n", "8", "--family", "gemm", "--dtype", "f64", "--rows",
-            "faer-fork", "--reps", "1", "--prime-ms", "0", "--cell-timeout", "1", "--csv",
+            "colmat", "--reps", "1", "--prime-ms", "0", "--cell-timeout", "1", "--csv",
         ])
         .arg(&csv)
         .args(extra)
@@ -248,7 +248,7 @@ fn library_only_svd_accepts_parallel_budgets() {
     for threads in ["4", "8"] {
         let output = std::process::Command::new(env!("CARGO_BIN_EXE_fbench"))
             .args(["verify", "--threads", threads, "--n", "64", "--dtype", "f64",
-                   "--family", "svd_values,svd_thin", "--rows", "faer-fork"])
+                   "--family", "svd_values,svd_thin", "--rows", "colmat"])
             .output()
             .unwrap();
         assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));

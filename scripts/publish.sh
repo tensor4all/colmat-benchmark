@@ -3,6 +3,9 @@
 # large suite on MKL and AOCL (the large OpenBLAS arm is omitted by decision, see the bottom of this file).
 # The site is built by the Pages workflow from what this wrote.
 #
+# The OpenBLAS arm records cholesky, lu, solve and gemm only (suite `vendor_families`, #111); the recorder
+# reads that from the suite, so the commands below carry no family list. MKL and AOCL record every family.
+#
 # AOCL is AMD's own LAPACK stack and every profile this routine records (zen5-cpu) is an AMD host, so the
 # AOCL arm runs here (#95; its cost, about 3/2 of the two-arm time, is accepted). A host with no AOCL
 # install (scripts/resolve_aocl_root.sh finds none) skips both AOCL arms with the reason printed and
@@ -17,18 +20,18 @@
 # regimes and to its declared shapes, so the adoption-only linalg-big/gemm-huge tiers are not
 # published as if they were campaign coverage.
 set -eu
-REV=$(grep -v '^#' pins/t4a-faer.rev | grep -E '^[0-9a-f]{40}' | head -1)
+REV=$(grep -v '^#' pins/colmat.rev | grep -E '^[0-9a-f]{40}' | head -1)
 LABEL="pub-$(echo "$REV" | cut -c1-8)-$(date -u +%Y%m%d)"
 TASKSET="taskset -c 0-3,12-15"
 
-$TASKSET python3 scripts/record_run.py zen5-cpu faer-kernels \
-    --vendor mkl --engines faer-fork,faer-upstream,lapack-mkl --threads 1,4,8 \
+$TASKSET python3 scripts/record_run.py zen5-cpu colmat-kernels \
+    --vendor mkl --engines colmat,faer,lapack-mkl --threads 1,4,8 \
     --reps 5 --aa 3 --prime-ms 250 --label "$LABEL-mkl"
-$TASKSET python3 scripts/record_run.py zen5-cpu faer-kernels \
-    --vendor openblas --engines faer-fork,lapack-openblas --threads 1,4,8 \
+$TASKSET python3 scripts/record_run.py zen5-cpu colmat-kernels \
+    --vendor openblas --engines colmat,lapack-openblas --threads 1,4,8 \
     --reps 5 --aa 6 --prime-ms 250 --label "$LABEL-openblas"
-$TASKSET python3 scripts/record_run.py zen5-cpu faer-kernels-large \
-    --vendor mkl --engines faer-fork,faer-upstream,lapack-mkl --threads 4,8 \
+$TASKSET python3 scripts/record_run.py zen5-cpu colmat-kernels-large \
+    --vendor mkl --engines colmat,faer,lapack-mkl --threads 4,8 \
     --regimes linalg-large,gemm-large,linalg-boundary \
     --shapes 1024,1536,1024x1024x1024,1536x1536x1536,255,257,511,513 \
     --reps 5 --aa 3 --prime-ms 250 --label "$LABEL-large-mkl"
@@ -41,11 +44,11 @@ mkdir -p "$(dirname "$AOCL_SKIP_LOG")"
 if AOCL_ROOT="$(scripts/resolve_aocl_root.sh 2>"$AOCL_SKIP_LOG.err")"; then
     export AOCL_ROOT
     rm -f "$AOCL_SKIP_LOG.err"
-    $TASKSET python3 scripts/record_run.py zen5-cpu faer-kernels \
-        --vendor aocl --engines faer-fork,lapack-aocl --threads 1,4,8 \
+    $TASKSET python3 scripts/record_run.py zen5-cpu colmat-kernels \
+        --vendor aocl --engines colmat,lapack-aocl --threads 1,4,8 \
         --reps 5 --aa 6 --prime-ms 250 --label "$LABEL-aocl"
-    $TASKSET python3 scripts/record_run.py zen5-cpu faer-kernels-large \
-        --vendor aocl --engines faer-fork,lapack-aocl --threads 4,8 \
+    $TASKSET python3 scripts/record_run.py zen5-cpu colmat-kernels-large \
+        --vendor aocl --engines colmat,lapack-aocl --threads 4,8 \
         --regimes linalg-large,gemm-large,linalg-boundary \
         --shapes 1024,1536,1024x1024x1024,1536x1536x1536,255,257,511,513 \
         --reps 5 --aa 6 --prime-ms 250 --label "$LABEL-large-aocl"
@@ -59,8 +62,8 @@ fi
 # cells, 1.11-4.47x; gemm 1.17-1.19x), so the ~7 h has no decision value, and a large-suite vendor
 # ratio is not published from this campaign (docs/worklog.md states the qualification). To record it
 # after all, add:
-#   $TASKSET python3 scripts/record_run.py zen5-cpu faer-kernels-large \
-#       --vendor openblas --engines faer-fork,lapack-openblas --threads 4,8 \
+#   $TASKSET python3 scripts/record_run.py zen5-cpu colmat-kernels-large \
+#       --vendor openblas --engines colmat,lapack-openblas --threads 4,8 \
 #       --regimes linalg-large,gemm-large,linalg-boundary \
 #       --shapes 1024,1536,1024x1024x1024,1536x1536x1536,255,257,511,513 \
 #       --reps 5 --aa 6 --prime-ms 250 --label "$LABEL-large-openblas"
@@ -68,8 +71,8 @@ fi
 # The large OpenBLAS arm, off by default (see above) and on for a same-pin three-arm refresh (#99):
 # PUBLISH_LARGE_OPENBLAS=1 records it after the others, so the large suite carries all three vendors.
 if [ "${PUBLISH_LARGE_OPENBLAS:-0}" = 1 ]; then
-    $TASKSET python3 scripts/record_run.py zen5-cpu faer-kernels-large \
-        --vendor openblas --engines faer-fork,lapack-openblas --threads 4,8 \
+    $TASKSET python3 scripts/record_run.py zen5-cpu colmat-kernels-large \
+        --vendor openblas --engines colmat,lapack-openblas --threads 4,8 \
         --regimes linalg-large,gemm-large,linalg-boundary \
         --shapes 1024,1536,1024x1024x1024,1536x1536x1536,255,257,511,513 \
         --reps 5 --aa 6 --prime-ms 250 --label "$LABEL-large-openblas"

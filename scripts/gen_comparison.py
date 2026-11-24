@@ -3,8 +3,8 @@
 
     scripts/gen_comparison.py --mkl <run dir> --openblas <run dir> [--aocl <run dir>] --out <file.html>
 
-One binary links one vendor library, so `faer-fork` is measured beside MKL in one
-run and beside OpenBLAS in the other; `faer-upstream` is only in the MKL arm
+One binary links one vendor library, so `colmat` is measured beside MKL in one
+run and beside OpenBLAS in the other; upstream `faer` is only in the MKL arm
 because the three-row rotation needs three engines. This joins the two runs of
 the *same* recorded revision on the cell key and prints, for every cell, what the
 fork took against each baseline it was measured with. The fork is measured in
@@ -32,15 +32,45 @@ import argparse, csv, html, pathlib, statistics, subprocess, sys
 import yaml
 
 import candidate_compare
+from campaign_toolkit import campaign as suite_decl
+from campaign_toolkit import descriptor
 
 KEY = ('regime', 'family', 'dtype', 'order', 'm', 'n', 'k', 'batch', 'threads', 'note')
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
+# The measured library and its upstream baseline, under their current engine names. A run
+# recorded before the rename (colmat-benchmark#113) wrote `faer-fork` / `faer-upstream`; the
+# descriptor's `aliases.engines` maps those to these when the rows are read (`engine`).
+COLMAT, FAER = 'colmat', 'faer'
+
+
+# This repository, fixed at import: its descriptor's `aliases` name the old rows. Not `ROOT`, which
+# is where harness commits are resolved and which tests/test_comparison.py patches to a scratch git
+# repository that has no descriptor.
+CAMPAIGN = pathlib.Path(__file__).resolve().parents[1]
+
+
+def campaign():
+    """This repository's descriptor, loaded explicitly (not from the working directory), once."""
+    if descriptor._current is None or descriptor._current.root != CAMPAIGN:
+        descriptor.set_root(CAMPAIGN)
+    return descriptor.current()
+
+
+def current_suite(suite_id):
+    """A recorded suite id under its current id (the descriptor's `aliases`)."""
+    return campaign().canonical_suite(suite_id)
+
+
+def engine(name):
+    """A recorded row name under its current engine name (the descriptor's `aliases`)."""
+    return campaign().canonical_engine(name)
+
 # The harness revision that first measured both sides of a vendor ratio on one contract: no
 # allocation and no layout conversion inside the timed run, the vendored drivers in column order
-# only, the owning faer routes labelled `api-inclusive` so they never pair with a vendor row
-# (`fbench/src/op.rs`, `benchmarks/suites/faer-kernels.yaml`). A page recorded before it holds
-# ratios in which the vendor row paid for a copy or a workspace the faer row did not, so those
+# only, the owning colmat/faer routes labelled `api-inclusive` so they never pair with a vendor row
+# (`fbench/src/op.rs`, `benchmarks/suites/colmat-kernels.yaml`). A page recorded before it holds
+# ratios in which the vendor row paid for a copy or a workspace the colmat row did not, so those
 # cells are printed as withdrawn rather than as a current comparison.
 #
 # It must be a commit of `main`, not of a branch: a squash rewrites the SHAs of the landed change
@@ -114,24 +144,24 @@ def read_sets(run_dir):
                     if row.get('status') == 'skipped' and row.get('note'):
                         # Keyed without the harness note: a skipped row carries the reason in
                         # that column, so its key would never meet the measured cell's.
-                        skips[(key[:-1], row['row'])] = row['note']
+                        skips[(key[:-1], engine(row['row']))] = row['note']
                     continue
-                sets.setdefault(key, {}).setdefault(row['row'], []).append(float(row['total_ms']))
+                sets.setdefault(key, {}).setdefault(engine(row['row']), []).append(float(row['total_ms']))
     return manifest, sets, skips
 
 
 def control(previous_mkl, current_mkl):
     """The unchanged row between two recordings: median ratio and cells outside their range.
 
-    `faer-upstream` is built from the same commit in both, so it is the machine-state
+    upstream `faer` is built from the same commit in both, so it is the machine-state
     control the campaign's merge rule uses; this is the same statement for a publication.
     """
     _, before, _ = read_sets(previous_mkl)
     _, after, _ = read_sets(current_mkl)
     ratios, outside, n = [], 0, 0
     for key, rows in after.items():
-        cur = rows.get('faer-upstream')
-        old = before.get(key, {}).get('faer-upstream')
+        cur = rows.get(FAER)
+        old = before.get(key, {}).get(FAER)
         if not cur or not old:
             continue
         prev, now = statistics.median(old), statistics.median(cur)
@@ -253,6 +283,34 @@ def cell_grid(cells):
         grid.setdefault(shape, set()).add(
             tuple(value for value, name in zip(key, KEY) if name in GRID_VARY))
     return grid
+
+
+def declared_cells(arm):
+    """The (regime, family) pairs the *suite* declares for this arm, or None when it cannot say.
+
+    A suite may narrow one vendor arm to some families (`vendor_families`, #111). The set is read
+    from the suite's own declaration through the toolkit (`campaign.populations(suite, provider)`),
+    never from the run manifest: `run_spec.populations` records what that run was asked for, which
+    a focused run (`--regimes`) narrows further, and a cell dropped that way is a hole in the grid,
+    not a declaration. A manifest whose suite is not declared any more makes no statement, so
+    nothing is excluded and a missing cell stays a dash.
+    """
+    campaign()    # point the descriptor at this repository before the suite is looked up
+    _path, suite = suite_decl.find_suite(arm['manifest'].get('suite_id', ''))
+    if suite is None:
+        return None
+    return {(pop['regime'], family)
+            for pop in suite_decl.populations(suite, arm['name']) for family in pop['families']}
+
+
+def not_measured(arm, key, value):
+    """True when the suite does not ask this arm for the cell and the arm has no row for it.
+
+    A recorded row always wins: a page recorded under an earlier, wider declaration shows its
+    numbers rather than `n/m`.
+    """
+    covered = arm.get('declared')
+    return value is None and covered is not None and (key[0], key[1]) not in covered
 
 
 def run_grid(arm):
@@ -394,8 +452,10 @@ def vendor_arm(label, run_dir):
         sys.exit(f'ERROR: the arm given to --{label} records its vendor as {name!r} in run.yaml, so '
                  f'its rows are `lapack-{name}` and not the `lapack-{label}` rows this page labels; '
                  'the two arms are not interchangeable')
-    return dict(label=label, name=name, row=f'lapack-{name}',
-                manifest=manifest, cells=cells, skips=skips)
+    arm = dict(label=label, name=name, row=f'lapack-{name}',
+               manifest=manifest, cells=cells, skips=skips)
+    arm['declared'] = declared_cells(arm)
+    return arm
 
 
 def git(*args):
@@ -456,6 +516,17 @@ def cls(r):
     return ''
 
 
+NOT_MEASURED = '<td class="nm" title="not measured for this arm">n/m</td>'
+
+
+def arm_cells(r, fork_field, row_field, ratio_field, flag):
+    """An arm's three columns: fork, vendor row, ratio -- or `n/m` thrice when the arm never had the cell."""
+    if r[flag]:
+        return NOT_MEASURED * 3
+    return (f'<td>{fmt(r[fork_field])}</td><td>{fmt(r[row_field])}</td>'
+            + vendor_ratio_cell(r, ratio_field))
+
+
 def vendor_ratio_cell(r, field):
     """A vendor ratio cell: the ratio, or `withdrawn` when the harness could not measure it fairly."""
     if r['withdrawn']:
@@ -489,18 +560,19 @@ def main(argv=None):
     for key in keys:
         a, b = mkl['cells'].get(key, {}), ob['cells'].get(key, {})
         c = ao['cells'].get(key, {}) if ao else {}
-        fork_m, fork_o, fork_a = a.get('faer-fork'), b.get('faer-fork'), c.get('faer-fork')
+        fork_m, fork_o, fork_a = a.get(COLMAT), b.get(COLMAT), c.get(COLMAT)
         aoc = c.get(ao['row']) if ao else None
-        up, mk, obl = a.get('faer-upstream'), a.get(mkl['row']), b.get(ob['row'])
+        up, mk, obl = a.get(FAER), a.get(mkl['row']), b.get(ob['row'])
         # Each ratio is two rows of one arm, and both its numbers are in the row it is printed in:
         # `upstream/fork` and `MKL/fork` divide the fork the MKL arm measured, `OpenBLAS/fork` the
         # one the OpenBLAS arm measured. Dividing by a fork another arm measured would print a
         # ratio whose denominator the reader cannot see.
         # A ratio the harness could not measure on one contract is not printed: the vendor row paid
-        # inside its timed call for work the faer row did not, so the two numbers are kept as
+        # inside its timed call for work the colmat row did not, so the two numbers are kept as
         # recorded and the comparison between them is withdrawn.
         withdrawn = not fair and key[1] in WITHDRAWN_VENDOR_FAMILIES
-        rows.append(dict(key=key, fork_m=fork_m, fork_o=fork_o, fork_a=fork_a, up=up, mk=mk,
+        rows.append(dict(key=key, nm_o=not_measured(ob, key, b or None),
+                         nm_a=bool(ao) and not_measured(ao, key, c or None), fork_m=fork_m, fork_o=fork_o, fork_a=fork_a, up=up, mk=mk,
                          obl=obl, aoc=aoc, r_up=ratio(up, fork_m), withdrawn=withdrawn,
                          r_ob=None if withdrawn else ratio(obl, fork_o),
                          r_mk=None if withdrawn else ratio(mk, fork_m),
@@ -533,7 +605,7 @@ def main(argv=None):
             'The vendor ratio cells of '
             f'<code>{html.escape(", ".join(families))}</code> say <em>withdrawn</em>: the vendor row '
             'paid inside its timed call for a workspace, an output copy or a layout change that the '
-            'faer row did not, so dividing the two numbers measures the route, not the library. The '
+            'colmat row did not, so dividing the two numbers measures the route, not the library. The '
             'times stay as recorded and are left out of the median. '
             '<a href="https://github.com/tensor4all/colmat-benchmark/blob/main/docs/dataset-status.md">'
             'docs/dataset-status.md</a> is the status of record and '
@@ -547,7 +619,7 @@ def main(argv=None):
     control_html = ''
     if ctrl:
         control_html = (
-            '<p class="note"><strong>Control.</strong> <code>faer-upstream</code> is the same '
+            '<p class="note"><strong>Control.</strong> upstream <code>faer</code> is the same '
             'commit in both recordings, so it measures the machine rather than the change: '
             f'between <code>{mkl["manifest"]["upstream"]["commit"][:12]}</code> on the previous arm and this one, '
             f'over {ctrl["cells"]} cells its median ratio is <strong>{fmt(ctrl["median"])}</strong> '
@@ -565,7 +637,7 @@ def main(argv=None):
     guards = library['guards']
     calls = f"{timing['repetitions']} call{'s' if timing['repetitions'] != 1 else ''}"
     reduction = "last of the run's process-set CSVs"
-    title = (f"{library['suite_id']} on {library['target_profile']} - fork against upstream, OpenBLAS"
+    title = (f"{current_suite(library['suite_id'])} on {library['target_profile']} - colmat against faer, OpenBLAS"
              + (", MKL and AOCL" if ao else " and MKL"))
     # The arms can name two harness commits (one identity, see `harness_identity_same`); printing
     # only the MKL arm's would describe the page with a revision only one arm was recorded at.
@@ -596,19 +668,19 @@ def main(argv=None):
  th {{ background: #f5f5f5; font-weight: 600; position: sticky; top: 0; }}
  td.k, th.k {{ text-align: left; }}
  td.win {{ background: #e7f6e7; }} td.loss {{ background: #fbe9e9; }}
- td.wd {{ color: #888; font-style: italic; }} p.withdrawn {{ border-left: 3px solid #c80; background: #fdf7e8; padding: .5rem .8rem; max-width: 70rem; }}
+ td.wd, td.nm {{ color: #888; font-style: italic; }} p.withdrawn {{ border-left: 3px solid #c80; background: #fdf7e8; padding: .5rem .8rem; max-width: 70rem; }}
  .note {{ color: #555; max-width: 70rem; }} code {{ background: #f2f2f2; padding: 0 .2rem; }}
 </style></head><body>
 <h1>{html.escape(title)}</h1>
 <p class="note">Every cell below was measured in one binary beside one vendor library. The
-<code>faer-fork</code> column is the measured revision, and it is shown per arm
-(<code>fork MKL</code>, <code>fork OpenBLAS</code>) because each arm measured it in its own
-process; <code>faer-upstream</code> is the same upstream commit built into the MKL arm as the
+<code>colmat</code> column is the measured revision, and it is shown per arm
+(<code>colmat MKL</code>, <code>colmat OpenBLAS</code>) because each arm measured it in its own
+process; <code>faer</code> is the same upstream commit built into the MKL arm as the
 unchanged row; the vendor columns are the vendor arms from their own runs. Every ratio divides by
-the fork printed beside it, in the same arm. Times are milliseconds, the recorded
+the colmat value printed beside it, in the same arm. Times are milliseconds, the recorded
 {timing['statistic']} of {calls} after {timing['minimum_untimed_priming_ms']} ms of untimed
-priming, reduced per cell to the {reduction}. Ratios are <em>baseline over fork</em>, so above 1.00
-the fork is faster; the cells outside 0.95-1.05 are tinted.</p>
+priming, reduced per cell to the {reduction}. Ratios are <em>baseline over colmat</em>, so above 1.00
+colmat is faster; the cells outside 0.95-1.05 are tinted.</p>
 <ul>
  <li>measured revision: <code>{revision}</code> ({html.escape(str(library['library'].get('version')))})</li>
  <li>upstream: <code>{library['upstream']['commit']}</code> ({html.escape(str(library['upstream'].get('ref')))})</li>
@@ -638,10 +710,12 @@ timestamps differ by design and are not compared.</p>
     parts.append(
         '<p class="note">This page is a join, not a control comparison: the control statement (the unchanged\n'
         'row\'s ratio against a baseline run) lives in each arm\'s own page, and the verification record in its\n'
-        'manifest. A dash means that arm did not carry the cell.</p>\n'
-        f'<p class="note">Cells with a baseline row: {len(mkl_pairs)} against <code>faer-upstream</code>, '
-        f'{len(ob_rows)} against <code>lapack-openblas</code>. Median baseline/fork ratio (above 1.00 '
-        f'means the fork is faster): upstream {fmt(med_up)}, '
+        'manifest. A dash means that arm was asked for the cell and did not carry it; <code>n/m</code> means '
+        'the suite does not ask that arm for the cell (not measured for this arm), which is a declaration '
+        'and not a hole in the grid.</p>\n'
+        f'<p class="note">Cells with a baseline row: {len(mkl_pairs)} against <code>faer</code>, '
+        f'{len(ob_rows)} against <code>lapack-openblas</code>. Median baseline/colmat ratio (above 1.00 '
+        f'means colmat is faster): faer {fmt(med_up)}, '
         f'OpenBLAS {fmt(med_ob) if ob_pairs else "withdrawn" if withdrawn_cells else "-"}'
         + (f', AOCL {fmt(med_ao) if ao_pairs else "withdrawn" if withdrawn_cells else "-"} '
            f'({len(ao_rows)} cells against <code>lapack-aocl</code>)' if ao else '')
@@ -654,10 +728,10 @@ timestamps differ by design and are not compared.</p>
         parts.append(f'<h2>{html.escape(regime)}</h2>\n<table>\n<thead><tr>'
                      '<th class="k">family</th><th class="k">shape</th><th>dtype</th><th>order</th>'
                      '<th>threads</th>'
-                     '<th>fork MKL (ms)</th><th>upstream (ms)</th><th>upstream/fork</th>'
-                     '<th>fork OpenBLAS (ms)</th><th>OpenBLAS (ms)</th><th>OpenBLAS/fork</th>'
-                     '<th>MKL (ms)</th><th>MKL/fork</th>'
-                     + ('<th>fork AOCL (ms)</th><th>AOCL (ms)</th><th>AOCL/fork</th>' if ao else '')
+                     '<th>colmat MKL (ms)</th><th>faer (ms)</th><th>faer/colmat</th>'
+                     '<th>colmat OpenBLAS (ms)</th><th>OpenBLAS (ms)</th><th>OpenBLAS/colmat</th>'
+                     '<th>MKL (ms)</th><th>MKL/colmat</th>'
+                     + ('<th>colmat AOCL (ms)</th><th>AOCL (ms)</th><th>AOCL/colmat</th>' if ao else '')
                      + '</tr></thead><tbody>')
         for r in sorted(by_regime[regime], key=lambda r: (
                 r['key'][1], r['key'][2], r['key'][3],
@@ -671,10 +745,9 @@ timestamps differ by design and are not compared.</p>
                 f'<td class="k">{html.escape(shape)}{html.escape(label)}</td>'
                 f'<td>{key[2]}</td><td>{key[3]}</td><td>{key[8]}</td>'
                 f'<td>{fmt(r["fork_m"])}</td><td>{fmt(r["up"])}</td><td{cls(r["r_up"])}>{fmt(r["r_up"])}</td>'
-                f'<td>{fmt(r["fork_o"])}</td><td>{fmt(r["obl"])}</td>{vendor_ratio_cell(r, "r_ob")}'
+                + arm_cells(r, 'fork_o', 'obl', 'r_ob', 'nm_o') +
                 f'<td>{fmt(r["mk"])}</td>{vendor_ratio_cell(r, "r_mk")}'
-                + (f'<td>{fmt(r["fork_a"])}</td><td>{fmt(r["aoc"])}</td>{vendor_ratio_cell(r, "r_ao")}'
-                   if ao else '')
+                + (arm_cells(r, 'fork_a', 'aoc', 'r_ao', 'nm_a') if ao else '')
                 + '</tr>')
         parts.append('</tbody></table>')
 
