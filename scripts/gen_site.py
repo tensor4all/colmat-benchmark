@@ -346,7 +346,7 @@ def _short(machine):
 
 def _families_text(machine, families):
     n = len([f for f in families if f in machine['families']])
-    return f'{n} of {len(families)} families'
+    return f'{n} of {len(families)} families compared'
 
 
 def headline_html(machines, families):
@@ -356,7 +356,7 @@ def headline_html(machines, families):
         win = family_matrix.percentages(m['total'])[0]
         scope = f"vs {_vendors(m['compared'])}"
         if len([f for f in families if f in m['families']]) < len(families):
-            scope += f', {_families_text(m, families)} measured'
+            scope += f', {_families_text(m, families)}'
         pct = f'<b>{win}%</b>' + (' of cells' if first else '')
         return pct, f'{html.escape(m["arch"])} ({html.escape(scope)})'
 
@@ -386,7 +386,7 @@ def headline_html(machines, families):
 def subline_html(revision, version):
     return (f'<p class="sm" style="margin:0 0 14px">Generated from the data. colmat '
             f'<code>{html.escape(revision)}</code> ({html.escape(str(version))}) &middot; F order, '
-            f'{"/".join(family_matrix.DTYPES)}, n &ge; {family_matrix.MIN_N} &middot; win or lose = a '
+            f'{"/".join(family_matrix.DTYPES)}, every dimension &ge; {family_matrix.MIN_N} &middot; win or lose = a '
             'difference larger than the recorded spread (at least 5%), otherwise tie &middot; '
             '<a href="#method">how the numbers are made</a></p>\n')
 
@@ -399,9 +399,12 @@ def tile_html(m, families, chart_href):
     threads = m['threads']
     thread_text = (f'{threads[0]}&ndash;{threads[-1]} threads' if len(threads) > 1
                    else f'{threads[0]} thread{"s" if threads[0] != 1 else ""}')
+    # behind is None when extern/colmat cannot place the recorded commit: the badge then says the
+    # distance is unknown and names the commit, rather than a count-free "older pin".
     pin = ('current pin' if m['behind'] == 0 else
            f'<span class="badge">older pin: {m["behind"]} commits behind</span>' if m['behind']
-           else '<span class="badge">older pin</span>')
+           else f'<span class="badge">older pin: <code>{html.escape(m["commit"][:7])}</code>, distance to the '
+                'pin unknown (extern/colmat cannot place it)</span>')
     lines = []
     if s:
         win, tie, lose = family_matrix.percentages(t)
@@ -487,8 +490,14 @@ def matrix_html(machines, families, chart_href):
         for m in machines:
             counts = m['families'].get(family)
             s = counts and family_matrix.percentages(counts)
+            if counts is None:
+                why = family_matrix.absence(m, family)
+                word = why.split(' (', 1)[0]
+                tds.append(f'<td class="na" title="{html.escape(why)}">{html.escape(word)}</td>')
+                continue
             if not s:
-                tds.append('<td class="na">not measured</td>')
+                tds.append(f'<td class="na" title="{counts["no_spread"]} without a recorded spread, '
+                           f'{counts["withdrawn"]} withdrawn">no decided cell</td>')
                 continue
             cls, word = words[family_matrix.leaning(counts)]
             title = (f"{counts['win']} win / {counts['tie']} tie / {counts['lose']} lose of "
@@ -503,7 +512,9 @@ def matrix_html(machines, families, chart_href):
             'colmat wins against the fastest vendor arm, and links to that machine\'s throughput charts '
             '(or, where it has none yet, the recorded page). Cell colour: mostly win / mixed or tie / '
             'mostly lose, where "mostly" is more than half of the cells; the word says the same. '
-            '"Not measured" is a white cell with a dashed border and is never coloured as a tie. Hover '
+            '"Not measured" (the machine recorded no row of the family), "no vendor cell" (rows '
+            'recorded, none with a vendor row inside the cell rule) and "no decided cell" are white '
+            'cells with a dashed border and are never coloured as a tie. Hover '
             'for the counts.</p>\n')
 
 
@@ -548,14 +559,18 @@ def across_pins_html(points, machines):
                    f'font-size="11" fill="{colour}">{html.escape(profile)}</text>')
         for p in pts:
             s = family_matrix.percentages(p['counts'])
+            n = p['counts']['win'] + p['counts']['tie'] + p['counts']['lose']
             table.append(f'<tr><td>{html.escape(profile)}</td><td><code>{html.escape(p["commit"][:12])}</code></td>'
                          f'<td>{html.escape(p["date"])}</td><td>{s[0]}%</td><td>{s[1]}%</td>'
-                         f'<td>{s[2]}%</td></tr>')
+                         f'<td>{s[2]}%</td><td>{n}</td><td>{html.escape(", ".join(p.get("suites", [])))}</td></tr>')
     svg.append('</svg>')
     return (out + ''.join(svg)
-            + '<p class="sm">x: the pins in recording order; y: win share, 0&ndash;100%.</p>\n'
+            + '<p class="sm">x: the pins in recording order; y: win share, 0&ndash;100%. Each point is '
+              'over the decided cells of that pin\'s own pages (one per suite and arm), so two points '
+              'can be over different cell sets: the table gives each point\'s cells and suites.</p>\n'
             + '<details><summary class="sm">table: the plotted numbers</summary><table>'
-            + '<tr><th>machine</th><th>colmat</th><th>recorded</th><th>win</th><th>tie</th><th>lose</th></tr>'
+            + '<tr><th>machine</th><th>colmat</th><th>recorded</th><th>win</th><th>tie</th><th>lose</th>'
+            '<th>decided cells</th><th>suites</th></tr>'
             + ''.join(table) + '</table></details>\n')
 
 
@@ -713,7 +728,7 @@ def main(argv=None):
     order, pages, history = family_matrix.collect()
     machines = family_matrix.machines(order, pages)
     unrecorded = family_matrix.unrecorded(order, pages)
-    families = family_matrix.family_order({f for m in machines for f in m['families']})
+    families = family_matrix.universe(machines)
     # The machines the throughput charts are drawn from: the profiles of the current pages of the
     # suites `figures.throughput.runs` declares (#114 adds the others' charts).
     declared = yaml.safe_load((ROOT / 'benchmarks' / 'campaign.yaml').read_text())

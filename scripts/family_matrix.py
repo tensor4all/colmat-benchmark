@@ -20,8 +20,10 @@ vendor*, and colmat is compared with it inside that arm's own process:
 - a cell recorded by a harness that charged the vendor arms more than colmat (#74,
   `gen_comparison.fair_harness`) is `withdrawn` and never enters a share either.
 
-A family a machine's arms never compared with a vendor is absent from that machine's counts: the
-page prints "not measured" for it, never a share.
+A family a machine's arms never compared with a vendor is absent from that machine's counts, and
+the page never prints a share for it: "not measured" when the machine recorded no row of it, "no
+vendor cell" when it recorded rows but none with a vendor row inside the cell rule. The coverage
+denominator (`universe`) is every family the machines recorded, not only the compared ones.
 
 A *machine* is one profile, with one exception: a `<profile>-os-shared` profile is the same
 machine measured with no CPU left to the observing side, declared not comparable with the base
@@ -84,6 +86,26 @@ def vendor_rank(vendor):
 def family_order(families):
     known = [f for f in FAMILY_ORDER if f in families]
     return known + sorted(set(families) - set(known))
+
+
+def universe(machine_list):
+    """The families the recorded machines recorded, in `FAMILY_ORDER`: the coverage denominator,
+    so a family recorded without a vendor cell is counted as missing, not left out."""
+    return family_order({f for m in machine_list for f in m['recorded'] | set(m['families'])})
+
+
+NO_VENDOR_CELL = 'no vendor cell'
+
+
+def absence(machine, family):
+    """Why `family` has no cell on `machine`: 'not measured' when the machine recorded no row of
+    it, otherwise 'no vendor cell' with the reason."""
+    if family not in machine['recorded']:
+        return 'not measured'
+    if family in machine['in_rule']:
+        return f'{NO_VENDOR_CELL} (recorded; no vendor row at the cells colmat recorded)'
+    return (f'{NO_VENDOR_CELL} (recorded; no row inside the cell rule: F order, '
+            f'{"/".join(DTYPES)}, every dimension >= {MIN_N}, batch 1, kernel route)')
 
 
 def architecture(cpu):
@@ -150,6 +172,11 @@ class Arm:
         self.vendor_row = VENDOR_ROWS.get(self.vendor)
         # (family, shape, dtype, threads) -> (best key, {current engine name: recorded row name})
         self.cells = {}
+        # Every family the run recorded a row of, and those with a row inside the cell rule: a
+        # family recorded without any cell is "no vendor cell" on the page, not "not measured".
+        self.recorded = {row['family'] for row in rows if row['status'] == 'ok'}
+        self.in_rule = {row['family'] for row in rows
+                        if comparable(row) and int(row['threads']) not in self.os_shared}
         axes = report_run.report_axes(rows, self.manifest['timing_policy'])
         for row in rows:
             if not comparable(row) or int(row['threads']) in self.os_shared:
@@ -263,7 +290,9 @@ def leaning(counts):
 
 
 def behind_pin(commit, pin_rev):
-    """How many commits `commit` is behind the pinned revision in extern/colmat (0 at the pin)."""
+    """How many commits `commit` is behind the pinned revision in extern/colmat (0 at the pin), or
+    None when extern/colmat cannot place it (absent, shallow, or `commit` not an ancestor of the
+    pin): the page then says the distance is unknown instead of printing a count."""
     if commit[:12] == pin_rev[:12]:
         return 0
     out = subprocess.run(['git', '-C', str(ROOT / 'extern' / 'colmat'), 'rev-list', '--count',
@@ -338,6 +367,8 @@ def machines(order=None, pages=None):
             'provisional': any(a.manifest['host'].get('role', 'development') != 'measurement'
                                for a in arms),
             'total': total(families),
+            'recorded': {f for a in arms for f in a.recorded},
+            'in_rule': {f for a in arms for f in a.in_rule},
         })
     return out
 
@@ -369,29 +400,37 @@ def pin_point(commit, date, counts):
 
 
 def across_pins(history, machine_list):
-    """{profile: [{'commit', 'date', 'counts' or None, 'why'}]}, oldest first: the win share at
-    every pin a machine was recorded at. A pin with no decided cell has no share and says why."""
+    """{profile: [{'commit', 'date', 'counts' or None, 'why', 'suites'}]}, oldest first: the win
+    share at every pin a machine was recorded at. A pin with no decided cell has no share and says
+    why. Each point is over the cells of its own pages, so two points can differ in their cell set;
+    `suites` names the pages behind each one and the page prints each point's decided cells."""
     out = {}
     for m in machine_list:
+        # An older pin is counted over the same universe as the current one: one page per suite
+        # and arm (the newest, `history` is newest first), not every page recorded at that pin.
         groups = {}
         for row in history:
             if row['profile'] == m['profile'] and row['library_commit'] != m['commit']:
-                groups.setdefault(row['library_commit'], []).append(row)
+                group = groups.setdefault(row['library_commit'], [])
+                if not any(r['suite'] == row['suite'] and r['vendor'] == row['vendor'] for r in group):
+                    group.append(row)
         points = []
         for commit, rows in groups.items():
             arms = [Arm({'suite': r['suite'], 'vendor': r['vendor'], 'profile': r['profile']}, r)
                     for r in rows]
-            points.append(pin_point(commit, max(r['date'] for r in rows), total(tally(arms)[0])))
+            points.append({**pin_point(commit, max(r['date'] for r in rows), total(tally(arms)[0])),
+                           'suites': sorted({r['suite'] for r in rows})})
         # The current pin goes through the same gate: a machine whose only recording has no
         # decided cell (e.g. an older, pre-fair pin) has no share there either.
-        points.append(pin_point(m['commit'], m['date'], m['total']))
+        points.append({**pin_point(m['commit'], m['date'], m['total']),
+                       'suites': sorted({a.suite for a in m['arms']})})
         out[m['profile']] = sorted(points, key=lambda p: p['date'])
     return out
 
 
 def main():
     found = machines()
-    every = family_order({f for m in found for f in m['families']})
+    every = universe(found)
     for m in found:
         t, s = m['total'], percentages(m['total'])
         print(f"{m['profile']:12} {m['arch']} ({m['simd']}) · {m['model']} · {m['cores']} cores · "
@@ -403,7 +442,7 @@ def main():
         for family in every:
             counts = m['families'].get(family)
             if counts is None:
-                print(f'    {family:18} not measured')
+                print(f'    {family:18} {absence(m, family)}')
                 continue
             s = percentages(counts)
             print(f"    {family:18} {leaning(counts) or '-':6} "

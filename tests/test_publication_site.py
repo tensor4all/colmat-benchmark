@@ -326,9 +326,12 @@ class LandingPageTest(unittest.TestCase):
             self.assertIn(f'{m["total"]["win"]} / {m["total"]["tie"]} / {m["total"]["lose"]} '
                           f'(win / tie / lose', self.index)
             self.assertIn(f"{m['arch']} (vs {gen_site._vendors(m['compared'])}", headline)
-        # Cascade Lake covers 4 of the 9 families and the sentence says so
-        self.assertIn('Intel Cascade Lake (vs MKL, 4 of 9 families measured)', headline)
+        # the denominator is the 12 families the machines recorded, not the 9 any machine compared
+        self.assertIn('AMD Zen 5 (vs MKL, OpenBLAS, AOCL, 9 of 12 families compared)', headline)
+        self.assertIn('Intel Cascade Lake (vs MKL, 4 of 12 families compared)', headline)
         self.assertIn('<code>lu</code>', headline)
+        # the subline states the cell rule comparable() applies: every dimension, not n alone
+        self.assertIn('F order, f64/c64, every dimension &ge; 256 &middot;', self.index)
 
     def test_tiles_carry_counts_vendors_coverage_threads_date_and_pin(self):
         tile = self.index.split('<div class="tile" id="keyaki-64">', 1)[1].split('<div class="tile"', 1)[0]
@@ -337,13 +340,13 @@ class LandingPageTest(unittest.TestCase):
         self.assertIn('(AVX2)', tile)
         self.assertIn('EPYC 7702P &middot; 64 cores', tile)
         self.assertIn('vs MKL (OpenBLAS, AOCL not measured)', tile)
-        self.assertIn('9 of 9 families &middot; 16&ndash;60 threads &middot; 2026-11-22 &middot; current pin', tile)
+        self.assertIn('<b>9 of 12 families compared</b> &middot; 16&ndash;60 threads &middot; 2026-11-22 &middot; current pin', tile)
         # the os-shared 64T run is listed with its machine and never counted
         self.assertIn('64T os-shared run listed, not counted', tile)
         self.assertEqual(sorted({t for a in m['arms'] for t in a.manifest['threads']['counts']}), [16, 32, 60])
         ohtaka = self.index.split('<div class="tile" id="ohtaka-fat">', 1)[1].split('</div>\n', 1)[0]
         self.assertIn('vs MKL (OpenBLAS not measured)', ohtaka)      # AOCL is an AMD-host arm
-        self.assertIn('<b>4 of 9 families</b>', ohtaka)
+        self.assertIn('<b>4 of 12 families compared</b>', ohtaka)
         self.assertIn('below the timing baseline', ohtaka)
         # the 112T row measures every core: it is listed with the machine and never counted
         self.assertIn('16&ndash;64 threads', ohtaka)
@@ -401,17 +404,43 @@ class LandingPageTest(unittest.TestCase):
                                                          for c, _ in pages['zen5-cpu']):
                 pages['zen5-cpu'].append(({'suite': r['suite'], 'vendor': r['vendor'], 'profile': 'zen5-cpu'}, r))
         [machine] = gen_site.family_matrix.machines(['zen5-cpu'], pages)
-        self.assertGreater(machine['behind'], 0)
+        # never "at the pin"; a count where extern/colmat can place the commit, None where it cannot
+        self.assertNotEqual(machine['behind'], 0)
+        if machine['behind'] is not None:
+            self.assertGreater(machine['behind'], 0)
+
+    def test_an_older_pin_git_cannot_place_says_the_distance_is_unknown(self):
+        fm = gen_site.family_matrix
+        pin = rev_file_value((ROOT / gen_site.PIN).read_text())
+        # a commit extern/colmat does not have (or no extern/colmat at all): no count
+        self.assertIsNone(fm.behind_pin('0' * 40, pin))
+        self.assertEqual(fm.behind_pin(pin, pin), 0)
+        m = dict(self.machines['zen5-cpu'], behind=None, commit='1234567' + '0' * 33)
+        tile = gen_site.tile_html(m, fm.universe([m]), {})
+        self.assertIn('<span class="badge">older pin: <code>1234567</code>, distance to the pin unknown '
+                      '(extern/colmat cannot place it)</span>', tile)
+        self.assertNotIn('current pin', tile)
 
     def test_cells_are_the_recorded_verdicts_and_not_measured_is_white_and_dashed(self):
         index = self.index
         self.assertIn('table.share td.na{background:#fff;border:1px dashed', index)
         body = index.split('<table class="share">', 1)[1].split('</table>', 1)[0]
         rows = dict(re.findall(r'<th scope="row">([^<]+)</th>(.*?)</tr>', body))
-        # ohtaka-fat recorded gemm, lu, cholesky and qr_factor only
+        # every family a machine recorded is a row: the three zen5 and keyaki record without a
+        # vendor row are dashed "no vendor cell", not left out of the table
+        self.assertEqual(list(rows), list(gen_site.family_matrix.FAMILY_ORDER))
+        no_vendor = ('full_piv_lu', 'triangular_solve', 'householder_apply')
         for family, cells in rows.items():
-            last = re.findall(r'<td class="([^"]+)"', cells)[-1]
-            self.assertEqual(last == 'na', family not in ('gemm', 'lu', 'cholesky', 'qr_factor'), family)
+            tds = re.findall(r'<td class="([^"]+)"[^>]*>(?:<a [^>]*>)?([^<]*)<', cells)
+            # zen5 and keyaki
+            for cls, text in tds[:2]:
+                self.assertEqual((cls, text) == ('na', 'no vendor cell'), family in no_vendor, family)
+            # ohtaka-fat recorded gemm, lu, cholesky and qr_factor only
+            self.assertEqual(tds[-1] == ('na', 'not measured'),
+                             family not in ('gemm', 'lu', 'cholesky', 'qr_factor'), family)
+        self.assertIn('title="no vendor cell (recorded; no vendor row at the cells colmat recorded)"',
+                      rows['full_piv_lu'])
+        self.assertIn('no row inside the cell rule', rows['householder_apply'])
         # every coloured cell carries its word as well as its colour
         for cls, word in re.findall(r'<td class="(w|t|l)"><a [^>]*>\d+% &middot; ([a-z ]+)</a>', body):
             self.assertIn(word, {'w': ['mostly win'], 't': ['mixed', 'mostly tie'],
@@ -458,7 +487,29 @@ class LandingPageTest(unittest.TestCase):
         self.assertIn('<polyline', drawn)
         self.assertIn('table: the plotted numbers', drawn)
         self.assertEqual(drawn.count('<tr><td>zen5-cpu</td>'), 2)
-        self.assertTrue(fm.across_pins(self.history, [m])['zen5-cpu'])
+        # each point states its own denominator
+        self.assertIn('<th>decided cells</th><th>suites</th>', drawn)
+        self.assertEqual(drawn.count(f'<td>{348}</td>'), 2)
+        self.assertIn('can be over different cell sets', drawn)
+        across = fm.across_pins(self.history, [m])['zen5-cpu']
+        self.assertTrue(across)
+        # an older pin is counted over one page per suite and arm, like the current one
+        for point in across[:-1]:
+            rows = [r for r in self.history if r['profile'] == 'zen5-cpu' and r['library_commit'] == point['commit']]
+            self.assertEqual(point['suites'], sorted({r['suite'] for r in rows}))
+        self.assertEqual(across[-1]['suites'], sorted({a.suite for a in m['arms']}))
+        # and with one arm per (suite, vendor): a pin with two pages of one arm (v1 and v2 timing)
+        # is counted over the newest only
+        seen = []
+        tally = fm.tally
+        try:
+            fm.tally = lambda arms: (seen.append([(x.suite, x.vendor) for x in arms]), tally(arms))[1]
+            fm.across_pins(self.history, [m])
+        finally:
+            fm.tally = tally
+        self.assertTrue(seen)
+        for arms in seen:
+            self.assertEqual(len(arms), len(set(arms)), arms)
 
     def test_a_pin_without_a_decided_cell_is_never_a_share_point(self):
         # The review's state on #125: an older pre-fair pin (every vendor row withdrawn) next to
