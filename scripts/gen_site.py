@@ -423,7 +423,7 @@ def tile_html(m, families, chart_href):
                      f'lose {lose}%"><div class="bw" style="width:{100 * s[0]:.1f}%"></div>'
                      f'<div class="bt" style="width:{100 * s[1]:.1f}%"></div>'
                      f'<div class="bl" style="width:{100 * s[2]:.1f}%"></div></div>')
-        lines.append(f'<div class="sm">{win} / {tie} / {lose} '
+        lines.append(f'<div class="sm">{t["win"]} / {t["tie"]} / {t["lose"]} '
                      f'(win / tie / lose of {t["win"] + t["tie"] + t["lose"]} cells) &middot; vs '
                      f'{html.escape(_vendors(m["compared"]))}'
                      + (f' ({html.escape(_vendors(m["missing"]))} not measured)' if m['missing'] else '')
@@ -581,8 +581,9 @@ def trend_html(trend):
             f'<figure><a href="{html.escape(svg)}"><img src="{html.escape(svg)}" '
             f'alt="{html.escape(f["title"])}"></a>'
             f'<figcaption><strong>{html.escape(f["title"])}</strong>: median time per pin in ms '
-            '(lower is faster), linear axis, the bar is the between-start spread; the 4T and 8T panels '
-            'share their pin axis side by side.</figcaption></figure>\n'
+            '(lower is faster), log axis (the minor gridlines are the values between the labelled '
+            'ticks), the bar is the between-start spread; the panels share their pin axis side by '
+            'side.</figcaption></figure>\n'
             f'<details><summary class="sm">table: the plotted numbers</summary><div class="matrix-wrap">{table}'
             f'</div><p class="sm"><a href="{html.escape(f["data"].relative_to(root).as_posix())}">'
             'as Markdown</a></p></details>\n')
@@ -620,7 +621,8 @@ def method_html(machines):
         'the fastest vendor arm for that cell, inside that arm\'s own process.</li>\n'
         '<li>Win / tie / lose: each recorded value is the median of the process medians, and '
         '<code>&plusmn;</code> the sample SD of those medians across process starts. A win or a loss '
-        'is a difference larger than the two rows\' combined relative SD, floored at 5% '
+        'is a difference larger than the two rows\' combined relative SD, floored at 5%, and larger '
+        'than each row\'s printed <code>&plusmn;</code> '
         '(<code>campaign_toolkit.report_run.comparison_verdict</code>, the rule behind every recorded '
         'page\'s <code>vs</code> column); inside that band it is a tie. A cell without two process sets '
         'has no spread and is not counted; neither is a vendor row a pre-fair harness recorded '

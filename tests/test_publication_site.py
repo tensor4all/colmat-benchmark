@@ -224,6 +224,9 @@ class ThroughputPagesTest(unittest.TestCase):
         for image in inline:
             self.assertTrue((ROOT / 'result' / image).is_file(), image)
             self.assertIn('trend/', image)
+        # the trend figures carry a log y axis (charts.log_axis in the toolkit); the caption says so
+        self.assertIn('log axis', index)
+        self.assertNotIn('linear axis', index)
         # Each dataset page carries its own title, the four-way nav (the current page bold,
         # the others links) and only the charts of its own dataset; the landing page's provenance
         # and the suite's limitation follow the charts (#106).
@@ -319,7 +322,9 @@ class LandingPageTest(unittest.TestCase):
             split = gen_site._split(fm.share(m['total']))
             self.assertEqual(sum(split), 100)
             self.assertIn(f'<b>{split[0]}%</b>', headline)
-            self.assertIn(f'{split[0]} / {split[1]} / {split[2]} (win / tie / lose', self.index)
+            # the tile prints counts next to "of N cells"; the big number is the percentage split
+            self.assertIn(f'{m["total"]["win"]} / {m["total"]["tie"]} / {m["total"]["lose"]} '
+                          f'(win / tie / lose', self.index)
             self.assertIn(f"{m['arch']} (vs {gen_site._vendors(m['compared'])}", headline)
         # Cascade Lake covers 4 of the 9 families and the sentence says so
         self.assertIn('Intel Cascade Lake (vs MKL, 4 of 9 families measured)', headline)
