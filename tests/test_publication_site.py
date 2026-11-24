@@ -13,7 +13,7 @@ import yaml
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 import gen_site  # noqa: E402
-from campaign_toolkit import pin_recorded  # noqa: E402
+from campaign_toolkit import pin_recorded, report_run  # noqa: E402
 from campaign_toolkit.stack import rev_file_value  # noqa: E402
 
 # The arms this publication recorded: both suites on the MKL, OpenBLAS and AOCL arms (AOCL added by
@@ -340,6 +340,46 @@ class LandingPageTest(unittest.TestCase):
         self.assertIn('vs MKL (OpenBLAS not measured)', ohtaka)      # AOCL is an AMD-host arm
         self.assertIn('<b>4 of 9 families</b>', ohtaka)
         self.assertIn('below the timing baseline', ohtaka)
+        # the 112T row measures every core: it is listed with the machine and never counted
+        self.assertIn('16&ndash;64 threads', ohtaka)
+        self.assertIn('112T row measures every core', ohtaka)
+        # and the below-baseline margin is the page's own rule, not a footnote
+        self.assertIn('ratio beyond 1.10&times;', ohtaka)
+
+    def test_a_full_node_row_is_listed_and_not_counted(self):
+        m = self.machines['ohtaka-fat']
+        self.assertEqual(m['os_shared'], [112])
+        self.assertNotIn(112, m['threads'])
+        # no counted cell comes from the os-shared row, and the share counts 24 cells, not 32
+        counted = [c for f in m['families'].values() for c in f['cells']]
+        self.assertTrue(counted)
+        self.assertTrue(all(c['at'][3] != 112 for c in counted))
+        self.assertEqual(sum(c['win'] + c['tie'] + c['lose'] for c in m['families'].values()),
+                         len(counted))
+
+    def test_a_below_baseline_run_applies_the_campaign_margin(self):
+        fm = gen_site.family_matrix
+        arms = self.machines['ohtaka-fat']['arms']
+        arm = next(a for a in arms if a.suite == 'faer-kernels-ohtaka-fat-factor')
+        at = ('cholesky', (2048, 2048, ''), 'f64', 16)
+        # 1.0666x: inside 1.10, so the page's rule calls it a tie, though it clears the 5% band
+        self.assertFalse(arm.verdict(at))
+        key, names = arm.cells[at]
+        unbounded = report_run.comparison_verdict(
+            arm.best, arm.within, key, [names[fm.COLMAT], names[arm.vendor_row]])
+        self.assertIsNot(unbounded.get(names[arm.vendor_row]), False)
+
+    def test_provenance_prints_the_order_the_recorded_suite_declares(self):
+        m = self.machines['ohtaka-fat']
+        suite = m['arms'][0].suite
+        manifest = gen_site.load(next(a for a in m['arms'] if a.suite == suite).run_dir / 'run.yaml')
+        self.assertEqual(gen_site._declared_orders(manifest), 'F (column-major) order only')
+        text = gen_site.provenance_html(
+            {a.vendor: a.run_dir for a in m['arms'] if a.suite == suite}, folded=True)
+        self.assertIn('F (column-major) order only', text)
+        self.assertNotIn('both orders', text)
+        zen5 = gen_site.load(self.machines['zen5-cpu']['arms'][0].run_dir / 'run.yaml')
+        self.assertEqual(gen_site._declared_orders(zen5), 'both orders')
 
     def test_an_older_pin_stays_visible_with_its_badge(self):
         m = dict(self.machines['zen5-cpu'], behind=7)

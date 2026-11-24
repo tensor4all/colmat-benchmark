@@ -26,7 +26,13 @@ page prints "not measured" for it, never a share.
 A *machine* is one profile, with one exception: a `<profile>-os-shared` profile is the same
 machine measured with no CPU left to the observing side, declared not comparable with the base
 profile's rows (#119 merges the two). Its pages are listed under the base machine but excluded
-from every share.
+from every share. A T-thread row whose declared CPU set covers every logical CPU of the host
+is the same case inside a normal profile (`ohtaka-fat`'s 112T row): it is listed, and it never
+enters a share.
+
+The verdict of a run recorded below the campaign's timing baseline also requires a ratio beyond
+`timing.baseline.min_verdict_ratio` (1.10x), the same margin its page's header applies: such a
+run carries a known few-percent bias, and a ratio inside that margin is not evidence either way.
 """
 import pathlib
 import re
@@ -37,7 +43,8 @@ import sys
 import yaml
 
 from campaign_toolkit import descriptor, gen_index, report_run
-from campaign_toolkit.campaign import load
+from campaign_toolkit.campaign import below_timing_baseline, load
+from campaign_toolkit.hostinfo import parse_cpu_list
 from campaign_toolkit.stack import rev_file_value
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
@@ -124,6 +131,19 @@ class Arm:
         self.coverage = page.get('coverage')
         self.run_dir = pathlib.Path(page['run_dir'])
         self.manifest = load(self.run_dir / 'run.yaml')
+        # A row pinned to every logical CPU leaves none to the observing side: it is the
+        # os-shared case inside a normal profile (`ohtaka-fat`'s 112T), so it is listed and
+        # never counted. See the module docstring.
+        logical = self.manifest['host'].get('logical_cpus')
+        self.os_shared = {
+            int(budget) for budget, cpus in (self.manifest['threads'].get('cpu_sets') or {}).items()
+            if logical and len(set(parse_cpu_list(str(cpus)))) >= int(logical)
+        }
+        # A run recorded below the frozen timing baseline carries a known few-percent bias; its
+        # page applies the campaign's min_verdict_ratio, and so must the tally.
+        baseline = descriptor.current().timing_baseline
+        self.min_ratio = ((baseline.get('min_verdict_ratio') or 1.0)
+                          if below_timing_baseline(self.manifest) else 1.0)
         rows = report_run.read_rows([self.run_dir / f for f in self.manifest['result_files']])
         self.best, _, self.within, _ = report_run.best_per_case(rows, self.manifest['timing_policy'])
         self.fair = gen_comparison.fair_harness(self.manifest['harness']['commit'])
@@ -132,7 +152,7 @@ class Arm:
         self.cells = {}
         axes = report_run.report_axes(rows, self.manifest['timing_policy'])
         for row in rows:
-            if not comparable(row):
+            if not comparable(row) or int(row['threads']) in self.os_shared:
                 continue
             key = (row['regime'], report_run.case_name(row, variants=True), row['dtype'],
                    *(row[a] for a in axes), int(row['threads']))
@@ -154,7 +174,8 @@ class Arm:
         without a spread to compare against."""
         key, names = self.cells[at]
         return report_run.comparison_verdict(
-            self.best, self.within, key, [names[COLMAT], names[self.vendor_row]]
+            self.best, self.within, key, [names[COLMAT], names[self.vendor_row]],
+            min_ratio=self.min_ratio,
         ).get(names[self.vendor_row])
 
 
@@ -292,9 +313,12 @@ def machines(order=None, pages=None):
             'cores': cores(declared.get(profile, {})) or host.get('logical_cpus'),
             'arms': arms, 'excluded': excluded, 'families': families, 'compared': compared,
             'missing': sorted(missing, key=vendor_rank),
-            'threads': sorted({t for a in arms for t in a.manifest['threads']['counts']}),
+            'threads': sorted({t for a in arms for t in a.manifest['threads']['counts']
+                               if t not in a.os_shared}),
+            'os_shared': sorted({t for a in arms for t in a.os_shared}),
             'date': newest.date, 'commit': newest.commit, 'behind': behind_pin(newest.commit, pin),
             'below_baseline': sorted({b for a in arms for b in a.below_baseline}),
+            'min_ratio': max((a.min_ratio for a in arms), default=1.0),
             'provisional': any(a.manifest['host'].get('role', 'development') != 'measurement'
                                for a in arms),
             'total': total(families),

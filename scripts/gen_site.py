@@ -121,6 +121,31 @@ def write_comparison():
     return out, None
 
 
+def _min_verdict_ratio():
+    """`timing.baseline.min_verdict_ratio`, the margin a below-baseline page applies (1.0 if none)."""
+    return descriptor.current().timing_baseline.get('min_verdict_ratio') or 1.0
+
+
+def _declared_orders(manifest):
+    """The memory orders the recording's suite declares ('both orders', 'F order only', ...).
+
+    The provenance block used to print "both orders" for every machine, because it was written for
+    zen5's suite. `ohtaka-fat` declares `order: [f]`, so that sentence was false on its page.
+    """
+    path = ROOT / manifest['suite_file']
+    suite = yaml.safe_load(path.read_text()) if manifest.get('suite_file') and path.exists() else {}
+    orders = []
+    for run in suite.get('runs') or []:
+        for order in run.get('order') or []:
+            if str(order).lower() not in orders:
+                orders.append(str(order).lower())
+    orders = orders or ['f', 'c']
+    if set(orders) >= {'f', 'c'}:
+        return 'both orders'
+    names = {'f': 'F (column-major)', 'c': 'C (row-major)'}
+    return ' and '.join(names.get(o, o.upper()) for o in orders) + ' order only'
+
+
 def provenance_html(arms, folded=False):
     """One profile's provenance section, read from its current arms' own manifests.
 
@@ -141,6 +166,7 @@ def provenance_html(arms, folded=False):
     lib, up = first['library'], first['upstream']
     threads = '/'.join(str(t) for t in first['threads']['counts'])
     dtypes = ', '.join(first['run_spec']['dtypes'])
+    orders = _declared_orders(first)
     items = [
         'recorded on <code>{host}</code> ({profile}), measured library <code>{url}</code> at '.format(
             host=html.escape(first['host']['hostname']), profile=html.escape(first['target_profile']),
@@ -152,8 +178,8 @@ def provenance_html(arms, folded=False):
         # at different commits (a data commit between them), and a single shared value would deny
         # what the page's own withheld-comparison note says.
         f"one row per engine: {'; '.join(_vendor_text(runs))}",
-        f"the small suite's declared grid: {html.escape(dtypes)} at {threads}T, both orders, every "
-        "declared regime",
+        f"the recorded suite's declared grid (<code>{html.escape(str(first.get('suite_id') or 'recorded suite'))}</code>): "
+        f"{html.escape(dtypes)} at {threads}T, {html.escape(orders)}, every declared regime",
     ]
     profile = html.escape(first['target_profile'])
     heading = f'Current {profile} recordings: scope and provenance'
@@ -413,12 +439,17 @@ def tile_html(m, families, chart_href):
     if m['provisional']:
         notes.append('<span class="badge" title="recorded on a development host">provisional</span>')
     if m['below_baseline']:
+        margin = (f' (a verdict here also needs a ratio beyond {m["min_ratio"]:.2f}&times;)'
+                  if m.get('min_ratio', 1.0) > 1 else '')
         notes.append('<span class="badge" title="the index marks these pages not comparable with the '
                      'timing baseline">below the timing baseline: '
-                     f'{html.escape("; ".join(m["below_baseline"]))}</span>')
+                     f'{html.escape("; ".join(m["below_baseline"]))}{margin}</span>')
     if m['excluded']:
         excluded = sorted({t for a in m['excluded'] for t in a.manifest['threads']['counts']})
         notes.append(f'<span class="sm">{"/".join(map(str, excluded))}T os-shared run listed, not counted</span>')
+    if m.get('os_shared'):
+        notes.append(f'<span class="sm">{"/".join(map(str, m["os_shared"]))}T row measures every core '
+                     '(no observing CPU left); listed, not counted</span>')
     for key, text in (('no_spread', 'without a recorded spread'), ('withdrawn', 'withdrawn')):
         if t[key]:
             notes.append(f'<span class="sm">{t[key]} cells {text}, not counted</span>')
@@ -607,7 +638,14 @@ def method_html(machines):
               else '; above 5% on at least one machine, where the band is wider than 5%')
            + '.</li>\n' if floors else '')
         + '<li>An <code>os-shared</code> run measures every core, leaving none to the observing side; it '
-          'is listed under its machine and never counted in a share.</li>\n'
+          'is listed under its machine and never counted in a share. A thread row whose declared CPU '
+          'set covers every logical CPU of the host is the same case inside a normal profile: it is '
+          'named on the machine\'s tile and never counted.</li>\n'
+        + '<li>A page marked <em>below the timing baseline</em> was recorded with less priming or fewer '
+          'repetitions than the campaign froze, so a few-percent difference on it may be the bias, not '
+          'the library: a verdict there also requires a ratio beyond '
+          f'<code>timing.baseline.min_verdict_ratio</code> ({_min_verdict_ratio():.2f}&times;), the same '
+          'margin the page\'s own header states.</li>\n'
         + (f'<li>Caveats the suites declare:<ul>{caveats}</ul></li>\n' if caveats else '')
         + '</ul>\n')
 
