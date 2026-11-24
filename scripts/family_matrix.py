@@ -235,6 +235,22 @@ def share(counts):
     return counts['win'] / decided, counts['tie'] / decided, counts['lose'] / decided
 
 
+def percentages(counts):
+    """[win, tie, lose] as whole percentages of the decided cells that sum to 100, or None when no
+    cell was decided. Largest remainder, computed on the counts so it is exact; a tied remainder
+    goes to the later entry (lose before tie before win), so the rounding never favours a win.
+    The landing page and the CLI both print these, so they cannot disagree on a number."""
+    decided = counts['win'] + counts['tie'] + counts['lose']
+    if not decided:
+        return None
+    parts = [100 * counts[r] for r in ('win', 'tie', 'lose')]
+    out = [p // decided for p in parts]
+    order = sorted(range(3), key=lambda i: (-(parts[i] % decided), -i))
+    for i in order[:100 - sum(out)]:
+        out[i] += 1
+    return out
+
+
 def leaning(counts):
     """'win' | 'lose' | 'tie' | 'mixed' | None: which way more than half of the decided cells went."""
     s = share(counts)
@@ -342,6 +358,16 @@ def unrecorded(order=None, pages=None):
     return out
 
 
+def pin_point(commit, date, counts):
+    """One pin of `across_pins`: `counts` is None exactly when no cell was decided, and `why` then
+    says why (it is None exactly when there is a share)."""
+    if share(counts) is not None:
+        return {'commit': commit, 'date': date, 'counts': counts, 'why': None}
+    why = ('vendor rows withdrawn (recorded before the fair harness)' if counts['withdrawn']
+           else 'no comparable cell')
+    return {'commit': commit, 'date': date, 'counts': None, 'why': why}
+
+
 def across_pins(history, machine_list):
     """{profile: [{'commit', 'date', 'counts' or None, 'why'}]}, oldest first: the win share at
     every pin a machine was recorded at. A pin with no decided cell has no share and says why."""
@@ -355,13 +381,10 @@ def across_pins(history, machine_list):
         for commit, rows in groups.items():
             arms = [Arm({'suite': r['suite'], 'vendor': r['vendor'], 'profile': r['profile']}, r)
                     for r in rows]
-            counts = total(tally(arms)[0])
-            decided = share(counts) is not None
-            why = None if decided else ('vendor rows withdrawn (recorded before the fair harness)'
-                                        if counts['withdrawn'] else 'no comparable cell')
-            points.append({'commit': commit, 'date': max(r['date'] for r in rows),
-                           'counts': counts if decided else None, 'why': why})
-        points.append({'commit': m['commit'], 'date': m['date'], 'counts': m['total'], 'why': None})
+            points.append(pin_point(commit, max(r['date'] for r in rows), total(tally(arms)[0])))
+        # The current pin goes through the same gate: a machine whose only recording has no
+        # decided cell (e.g. an older, pre-fair pin) has no share there either.
+        points.append(pin_point(m['commit'], m['date'], m['total']))
         out[m['profile']] = sorted(points, key=lambda p: p['date'])
     return out
 
@@ -370,11 +393,11 @@ def main():
     found = machines()
     every = family_order({f for m in found for f in m['families']})
     for m in found:
-        t, s = m['total'], share(m['total'])
+        t, s = m['total'], percentages(m['total'])
         print(f"{m['profile']:12} {m['arch']} ({m['simd']}) · {m['model']} · {m['cores']} cores · "
               f"vs {', '.join(VENDOR_LABELS[v] for v in m['compared'])}"
               + (f" ({', '.join(VENDOR_LABELS[v] for v in m['missing'])} not measured)" if m['missing'] else '')
-              + ' · ' + (f'win {s[0]:.0%} / tie {s[1]:.0%} / lose {s[2]:.0%}' if s else 'nothing decided')
+              + ' · ' + (f'win {s[0]}% / tie {s[1]}% / lose {s[2]}%' if s else 'nothing decided')
               + f" · {t['win']}/{t['tie']}/{t['lose']} cells, {t['no_spread']} without spread, "
               f"{t['withdrawn']} withdrawn · behind {m['behind']}")
         for family in every:
@@ -382,9 +405,9 @@ def main():
             if counts is None:
                 print(f'    {family:18} not measured')
                 continue
-            s = share(counts)
+            s = percentages(counts)
             print(f"    {family:18} {leaning(counts) or '-':6} "
-                  + (f'win {s[0]:.0%}  ' if s else '') + f"{counts['win']}/{counts['tie']}/{counts['lose']}")
+                  + (f'win {s[0]}%  ' if s else '') + f"{counts['win']}/{counts['tie']}/{counts['lose']}")
     for u in unrecorded():
         print(f"not recorded: {u['profile']} {u['arch']} ({u['simd']}) · {u['model']} · {u['cores']} cores")
     return 0

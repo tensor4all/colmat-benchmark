@@ -319,7 +319,7 @@ class LandingPageTest(unittest.TestCase):
         headline = self.index.split('class="headline">', 1)[1].split('</p>', 1)[0]
         fm = gen_site.family_matrix
         for m in self.machines.values():
-            split = gen_site._split(fm.share(m['total']))
+            split = fm.percentages(m['total'])
             self.assertEqual(sum(split), 100)
             self.assertIn(f'<b>{split[0]}%</b>', headline)
             # the tile prints counts next to "of N cells"; the big number is the percentage split
@@ -459,6 +459,60 @@ class LandingPageTest(unittest.TestCase):
         self.assertIn('table: the plotted numbers', drawn)
         self.assertEqual(drawn.count('<tr><td>zen5-cpu</td>'), 2)
         self.assertTrue(fm.across_pins(self.history, [m])['zen5-cpu'])
+
+    def test_a_pin_without_a_decided_cell_is_never_a_share_point(self):
+        # The review's state on #125: an older pre-fair pin (every vendor row withdrawn) next to
+        # the current pin. It raised TypeError in across_pins_html and failed the Pages deploy.
+        fm = gen_site.family_matrix
+        m = self.machines['zen5-cpu']
+        withdrawn = {'win': 0, 'tie': 0, 'lose': 0, 'no_spread': 0, 'withdrawn': 348}
+        why = 'vendor rows withdrawn (recorded before the fair harness)'
+        # the consumer: even handed the undecided counts as a point, it never indexes a missing share
+        review = {'zen5-cpu': [{'commit': 'a' * 40, 'date': '2026-10-16', 'counts': withdrawn, 'why': 'withdrawn'},
+                               {'commit': m['commit'], 'date': m['date'], 'counts': m['total'], 'why': None}]}
+        text = gen_site.across_pins_html(review, [m])
+        self.assertIn('<code>zen5-cpu</code>: 1 pin with a share, 1 pin(s) without one (withdrawn)', text)
+        self.assertNotIn('<polyline', text)
+        # the producer: a pin with no decided cell carries no counts and says why, the current
+        # pin included
+        self.assertEqual(fm.pin_point('b' * 40, '2026-10-16', withdrawn),
+                         {'commit': 'b' * 40, 'date': '2026-10-16', 'counts': None, 'why': why})
+        only_old = {**m, 'total': withdrawn}
+        points = fm.across_pins([], [only_old])['zen5-cpu']
+        self.assertEqual([(p['counts'], p['why']) for p in points], [(None, why)])
+        text = gen_site.across_pins_html({'zen5-cpu': points}, [only_old])
+        self.assertIn('<code>zen5-cpu</code>: no pin with a share, 1 pin(s) without one '
+                      '(vendor rows withdrawn (recorded before the fair harness))', text)
+        self.assertNotIn('None', text)
+        # one older decided pin plus a current pin without a decided cell: no crash, no line
+        older = fm.pin_point('c' * 40, '2026-10-01', m['total'])
+        text = gen_site.across_pins_html({'zen5-cpu': [older] + points}, [only_old])
+        self.assertIn('1 pin with a share, 1 pin(s) without one', text)
+
+    def test_the_page_and_the_cli_print_the_same_percentages(self):
+        fm = gen_site.family_matrix
+        # one rounding, exact on the counts, summing to 100; a tied remainder never goes to win
+        self.assertEqual(fm.percentages(self.machines['zen5-cpu']['total']), [61, 18, 21])
+        self.assertEqual(fm.percentages({'win': 1, 'tie': 1, 'lose': 1, 'no_spread': 0, 'withdrawn': 0}),
+                         [33, 33, 34])
+        self.assertEqual(fm.percentages({'win': 143, 'tie': 17, 'lose': 20, 'no_spread': 0, 'withdrawn': 0}),
+                         [79, 10, 11])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            fm.main()
+        cli = out.getvalue()
+        for m in self.machines.values():
+            win, tie, lose = fm.percentages(m['total'])
+            self.assertEqual(win + tie + lose, 100)
+            self.assertIn(f'win {win}% / tie {tie}% / lose {lose}%', cli)
+            self.assertIn(f'aria-label="win {win}%, tie {tie}%, lose {lose}%"', self.index)
+
+    def test_only_the_machine_the_charts_were_drawn_from_links_to_them(self):
+        for profile in ('keyaki-64', 'ohtaka-fat'):
+            tile = self.index.split(f'<div class="tile" id="{profile}">', 1)[1].split('\n', 1)[0]
+            self.assertNotIn('throughput-', tile, profile)
+        zen5 = self.index.split('<div class="tile" id="zen5-cpu">', 1)[1].split('<div class="tile"', 1)[0]
+        self.assertIn('throughput-f64-f.html', zen5)
 
     def test_how_the_numbers_are_made(self):
         method = self.index.split('<h2 id="method">', 1)[1].split('<h2', 1)[0]

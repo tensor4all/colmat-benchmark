@@ -334,19 +334,6 @@ def _page_href(page):
     return str(pathlib.PurePosixPath(page).relative_to('result').with_suffix('.html'))
 
 
-def _pct(x):
-    return f'{round(100 * x)}%'
-
-
-def _split(fractions):
-    """Whole percentages that sum to 100 (largest remainder), for a win / tie / lose split."""
-    raw = [100 * f for f in fractions]
-    out = [int(r) for r in raw]
-    for i in sorted(range(len(raw)), key=lambda i: out[i] - raw[i])[:100 - sum(out)]:
-        out[i] += 1
-    return out
-
-
 def _vendors(labels):
     return ', '.join(family_matrix.VENDOR_LABELS.get(v, v) for v in labels)
 
@@ -366,11 +353,11 @@ def headline_html(machines, families):
     """The generated headline: each claim carries its comparison set and its coverage, so no
     sentence is broader than the cells behind it."""
     def where(m, first):
-        s = family_matrix.share(m['total'])
+        win = family_matrix.percentages(m['total'])[0]
         scope = f"vs {_vendors(m['compared'])}"
         if len([f for f in families if f in m['families']]) < len(families):
             scope += f', {_families_text(m, families)} measured'
-        pct = f'<b>{_split(s)[0]}%</b>' + (' of cells' if first else '')
+        pct = f'<b>{win}%</b>' + (' of cells' if first else '')
         return pct, f'{html.escape(m["arch"])} ({html.escape(scope)})'
 
     decided = [m for m in machines if family_matrix.share(m['total'])]
@@ -417,7 +404,7 @@ def tile_html(m, families, chart_href):
            else '<span class="badge">older pin</span>')
     lines = []
     if s:
-        win, tie, lose = _split(s)
+        win, tie, lose = family_matrix.percentages(t)
         lines.append(f'<div class="big {colour}">{win}% <span class="unit">win</span></div>')
         lines.append(f'<div class="bar" role="img" aria-label="win {win}%, tie {tie}%, '
                      f'lose {lose}%"><div class="bw" style="width:{100 * s[0]:.1f}%"></div>'
@@ -499,7 +486,7 @@ def matrix_html(machines, families, chart_href):
         tds = []
         for m in machines:
             counts = m['families'].get(family)
-            s = counts and family_matrix.share(counts)
+            s = counts and family_matrix.percentages(counts)
             if not s:
                 tds.append('<td class="na">not measured</td>')
                 continue
@@ -507,7 +494,7 @@ def matrix_html(machines, families, chart_href):
             title = (f"{counts['win']} win / {counts['tie']} tie / {counts['lose']} lose of "
                      f"{counts['win'] + counts['tie'] + counts['lose']} cells against the fastest vendor arm")
             tds.append(f'<td class="{cls}"><a href="{html.escape(_cell_href(m, family, chart_href))}" '
-                       f'title="{html.escape(title)}">{_pct(s[0])} &middot; {word}</a></td>')
+                       f'title="{html.escape(title)}">{s[0]}% &middot; {word}</a></td>')
         rows.append(f'<tr><th scope="row">{html.escape(family)}</th>{"".join(tds)}</tr>')
     return ('<h2 id="families">Win share by family</h2>\n'
             '<div class="matrix-wrap"><table class="share">\n'
@@ -522,17 +509,23 @@ def matrix_html(machines, families, chart_href):
 
 def across_pins_html(points, machines):
     """Win share across pins: one line per machine, from the second pin a machine has a share at."""
-    lines = {m['profile']: [p for p in points.get(m['profile'], []) if p['counts']] for m in machines}
+    # A pin without a decided cell has no share (`counts` None, `why` set): it is never plotted,
+    # never tabled and never counted as a pin with a share, whatever the producer handed over.
+    def has_share(p):
+        return p['counts'] is not None and family_matrix.share(p['counts']) is not None
+    lines = {m['profile']: [p for p in points.get(m['profile'], []) if has_share(p)] for m in machines}
     drawn = {k: v for k, v in lines.items() if len(v) >= 2}
     out = '<h2 id="pins">Win share across pins</h2>\n'
     if not drawn:
         why = []
         for m in machines:
-            skipped = [p for p in points.get(m['profile'], []) if not p['counts']]
-            text = f'<code>{html.escape(m["profile"])}</code>: {len(lines[m["profile"]])} pin with a share'
+            skipped = [p for p in points.get(m['profile'], []) if not has_share(p)]
+            n = len(lines[m['profile']])
+            text = (f'<code>{html.escape(m["profile"])}</code>: '
+                    + (f'{n} pin{"s" if n != 1 else ""} with a share' if n else 'no pin with a share'))
             if skipped:
-                reasons = sorted({p['why'] for p in skipped})
-                text += f', {len(skipped)} older pin(s) without one ({html.escape("; ".join(reasons))})'
+                reasons = sorted({p['why'] or 'no decided cell' for p in skipped})
+                text += f', {len(skipped)} pin(s) without one ({html.escape("; ".join(reasons))})'
             why.append(text)
         return out + ('<div class="placeholder sm">One line per machine, appearing from the second pin '
                       'with a share. Not yet: ' + '; '.join(why) + '.</div>\n')
@@ -554,10 +547,10 @@ def across_pins_html(points, machines):
         svg.append(f'<text x="{width - pad + 4}" y="{y(family_matrix.share(pts[-1]["counts"])[0]) + 4:.1f}" '
                    f'font-size="11" fill="{colour}">{html.escape(profile)}</text>')
         for p in pts:
-            s = family_matrix.share(p['counts'])
+            s = family_matrix.percentages(p['counts'])
             table.append(f'<tr><td>{html.escape(profile)}</td><td><code>{html.escape(p["commit"][:12])}</code></td>'
-                         f'<td>{html.escape(p["date"])}</td><td>{_pct(s[0])}</td><td>{_pct(s[1])}</td>'
-                         f'<td>{_pct(s[2])}</td></tr>')
+                         f'<td>{html.escape(p["date"])}</td><td>{s[0]}%</td><td>{s[1]}%</td>'
+                         f'<td>{s[2]}%</td></tr>')
     svg.append('</svg>')
     return (out + ''.join(svg)
             + '<p class="sm">x: the pins in recording order; y: win share, 0&ndash;100%.</p>\n'
@@ -611,7 +604,7 @@ def method_html(machines):
         '<h2 id="method">How the numbers are made</h2>\n<ul>\n'
         '<li>Generated on every Pages deploy by <code>scripts/gen_site.py</code>; every share comes from '
         '<code>scripts/family_matrix.py</code> (<code>python3 scripts/family_matrix.py</code> prints the '
-        'same table), which the cross-host vendor-loss table (#108) is meant to read too. No timing runs '
+        'same counts and the same percentages, rounded by the same function), which the cross-host vendor-loss table (#108) is meant to read too. No timing runs '
         'here.</li>\n'
         f'<li>Inputs: the <code>run.yaml</code> and the CSVs it names of the {pages} current pages '
         '(<code>result/INDEX.md</code>, the index\'s own rule), under <code>data/results/</code>.</li>\n'
@@ -725,7 +718,15 @@ def main(argv=None):
     # suites `figures.throughput.runs` declares (#114 adds the others' charts).
     declared = yaml.safe_load((ROOT / 'benchmarks' / 'campaign.yaml').read_text())
     chart_suites = {r['suite'] for r in declared['figures']['throughput']['runs']}
-    charted = {a.profile for m in machines for a in m['arms'] if a.suite in chart_suites}
+    # The chart pages are one set, drawn from the runs whose provenance they print (`arms`): they
+    # belong to the machine those runs were recorded on, and only that machine links to them. A
+    # second machine with a charted suite gets its own recorded pages until it has its own charts,
+    # instead of a link to another machine's (#114).
+    results = ROOT / 'data' / 'results'
+    owners = {pathlib.Path(d).resolve().relative_to(results.resolve()).parts[0] for d in arms.values()}
+    charted = {a.profile for m in machines for a in m['arms'] if a.suite in chart_suites} & owners
+    if len(owners) != 1:
+        charted = set()
     first_page = next(iter(chart_pages.values()), None)
     chart_href = {p: first_page.name for p in charted} if first_page else {}
 
