@@ -384,6 +384,177 @@ mod tests {
         }
     }
 
+    /// The process-wide budgets a test cell runs under, set together the way `configure_threads`
+    /// sets them (the Rayon pool aside, which is global and built once per process).
+    fn set_budget(threads: usize) {
+        backend::fork::set_threads(threads);
+        backend::upstream::set_threads(threads);
+        if vendor::NAME != "none" {
+            vendor::set_threads(threads).unwrap();
+        }
+    }
+
+    /// Sets a budget and restores 1T when dropped, so a failing assertion cannot leave the next
+    /// test (which recovers the poisoned `BUDGET`) running at another budget.
+    struct Budget(#[allow(dead_code)] MutexGuard<'static, ()>);
+
+    impl Budget {
+        fn hold(threads: usize) -> Budget {
+            let guard = hold_budget();
+            set_budget(threads);
+            Budget(guard)
+        }
+        fn set(&self, threads: usize) {
+            set_budget(threads);
+        }
+    }
+
+    impl Drop for Budget {
+        fn drop(&mut self) {
+            set_budget(1);
+        }
+    }
+
+    /// **The check reads the last timed repetition, and nothing runs in between.** The no-op test
+    /// below cannot see an extra untimed `run` slipped in before the check (a no-op run is a no-op
+    /// either way), so this drives `measure_row` with an op that logs every step and the kind of
+    /// token each `run` was lent: with no priming, the exact sequence must be the timed
+    /// repetitions, the check, and the restoring `prepare`, and the run the check follows must
+    /// have had the row's team (a `colmat` row at 2T under the team API).
+    #[test]
+    fn check_follows_the_last_timed_run() {
+        let _budget = Budget::hold(2);
+        use std::sync::{Arc, Mutex as StdMutex};
+        let events: Arc<StdMutex<Vec<&'static str>>> = Arc::default();
+        let mut op = super::op_from(
+            events.clone(),
+            String::new(),
+            |e| {
+                e.lock().unwrap().push("prepare");
+                Ok(())
+            },
+            |e, token| {
+                e.lock().unwrap().push(match token {
+                    Token::None(_) => "run:none",
+                    #[cfg(feature = "fork-team")]
+                    Token::Fork(_) => "run:team",
+                });
+                Ok(())
+            },
+            |e| {
+                e.lock().unwrap().push("check");
+                Ok(())
+            },
+        );
+        let mut phases = crate::timing::Phases::default();
+        let samples = crate::measure_row(crate::ROW_COLMAT, 2, &mut op, 0, 3, &mut phases).unwrap();
+        assert_eq!(samples.len(), 3);
+        let run = if cfg!(feature = "fork-team") {
+            "run:team"
+        } else {
+            "run:none"
+        };
+        assert_eq!(
+            *events.lock().unwrap(),
+            ["prepare", run, "prepare", run, "prepare", run, "check", "prepare"]
+        );
+    }
+
+    /// **The timed loop's own check rejects a result it did not compute, at every budget.**
+    ///
+    /// The verdict a published row carries is the check `measure_row` runs on the state the last
+    /// timed repetition left behind, after the row's reservation is released. This replaces `run`
+    /// with a no-op and drives the cell through `measure_row` itself -- priming, the timed
+    /// repetitions and the check, on the row's real token (a `colmat` team at 2T) -- and requires
+    /// the row to fail: a check that passed here would be accepting a result nothing computed
+    /// (for instance one it recomputed itself). That the check reads the *last timed* run, with no
+    /// other `run` in between, is `check_follows_the_last_timed_run`. The positive control (the
+    /// real `run`) must pass on the same path, so a check that rejects everything cannot satisfy
+    /// this test either. Both budgets, because a 2T row holds its team or worker group around the
+    /// timed loop and releases it before the check.
+    #[test]
+    fn timed_check_rejects_a_missing_execution() {
+        let budget = Budget::hold(1);
+        for threads in [1, 2] {
+            budget.set(threads);
+            for row in crate::engine_rows() {
+                for &family in FAMILIES {
+                    for dtype in [Dtype::F64, Dtype::C64] {
+                        for order in [Order::C, Order::F] {
+                            let case = Case {
+                                m: 8,
+                                n: 8,
+                                k: if family == "gemm" { Some(8) } else { None },
+                                batch: 2,
+                            };
+                            let Ok(ops) = crate::ops_for(&row, dtype, family, case, order) else {
+                                continue;
+                            };
+                            for mut op in ops {
+                                let mut phases = crate::timing::Phases::default();
+                                crate::measure_row(&row, threads, &mut op, 0, 2, &mut phases)
+                                    .unwrap_or_else(|e| {
+                                        panic!(
+                                            "{row} {family} {} {} {threads}T {}: the real run \
+                                             failed its timed check: {e}",
+                                            dtype.label(),
+                                            order.label(),
+                                            op.note
+                                        )
+                                    });
+                                let mut op = op.without_run();
+                                let result = catch_unwind(AssertUnwindSafe(|| {
+                                    crate::measure_row(&row, threads, &mut op, 0, 2, &mut phases)
+                                }));
+                                assert!(
+                                    !matches!(result, Ok(Ok(_))),
+                                    "{row} {family} {} {} {threads}T {}: the timed check passed \
+                                     a result the timed run never computed",
+                                    dtype.label(),
+                                    order.label(),
+                                    op.note
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// **The verification census executes a cell on the row's own token.** It used to run every
+    /// op on `Token::none()`, which under the team API is `Par::Seq`: the `colmat` census at 4T and
+    /// at 8T was the same sequential execution twice and never touched the team path the timed loop
+    /// measures. `verify_once` lends the census the token `measure_row` lends, so a `colmat` census
+    /// at a budget above one must dispatch on the team.
+    #[cfg(feature = "fork-team")]
+    #[test]
+    fn census_runs_on_the_row_team() {
+        use colmat::utils::team::stats;
+        let threads = 2;
+        let _budget = Budget::hold(threads);
+        let case = Case {
+            m: 256,
+            n: 256,
+            k: Some(256),
+            batch: 1,
+        };
+        for mut op in crate::ops_for(crate::ROW_COLMAT, Dtype::F64, "gemm", case, Order::F).unwrap()
+        {
+            stats::enable(true);
+            let _ = stats::take();
+            let (outcome, _, _) = crate::verify_once(crate::ROW_COLMAT, threads, &mut op);
+            stats::enable(false);
+            let s = stats::take();
+            outcome.unwrap();
+            let team = s.run[2..].iter().sum::<usize>()
+                + s.split[2..].iter().sum::<usize>()
+                + s.gemm_tiled
+                + s.gemm_team_kernel;
+            assert!(team > 0, "the colmat census ran no team region ({s:?})");
+        }
+    }
+
     /// **Nothing is allocated or freed inside a timed `run`, on any row.**
     ///
     /// This is the guard for the defect the 2026-11-06 audit found and that the fair-comparison

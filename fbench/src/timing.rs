@@ -1,4 +1,5 @@
-//! Time-based priming followed by every timed repetition, in execution order.
+//! Time-based priming followed by every timed repetition, in execution order, then the check of
+//! the last timed repetition's result.
 //!
 //! `prepare` is outside each clocked region. All providers use this loop;
 //! equivalent work inside their `run` closures must be audited separately.
@@ -24,24 +25,34 @@ pub struct Phases {
     pub restore: Duration,
 }
 
-/// Prime for `prime_ms`, then return all `reps` times in milliseconds.
-/// The op's `check` runs once afterwards, outside the clock, on the state the **last timed
-/// repetition** left behind: it verifies the call that was measured, on the row's own token, not a
-/// separate execution.
+/// Prime for `prime_ms`, then return all `reps` times in milliseconds, and check the result the
+/// **last timed repetition** left behind: the measured call itself, on the row's own token, not a
+/// separate execution. The harness calls the two halves ([`time_loop`], [`check_last`]) itself so it
+/// can release a row's reservation in between (`main.rs` `measure_row`); this is their composition,
+/// in the order the harness runs them.
 ///
 /// `token` is the row's parallelism, lent to every `run`: the measured library's `Par` is exclusive
 /// authority from 0.25 on, so the loop owns it and reborrows per call.
+#[cfg(test)]
 pub fn measure(
     op: &mut Op,
     prime_ms: u64,
     reps: usize,
     token: &mut Token<'_>,
 ) -> Result<Vec<f64>, String> {
-    measure_phased(op, prime_ms, reps, token, &mut Phases::default())
+    let mut phases = Phases::default();
+    let samples = time_loop(op, prime_ms, reps, token, &mut phases)?;
+    check_last(op, &mut phases)?;
+    Ok(samples)
 }
 
-/// [`measure`], also reporting where the untimed wall time went.
-pub fn measure_phased(
+/// The priming loop and the timed repetitions, nothing after them: the op's state is the one the
+/// last timed `run` left, and [`check_last`] must be called on it before the next `prepare`.
+///
+/// Split from the check so that a row holding a reservation (a `colmat` team, a spindle worker
+/// group) can release it before the check: the check's reference products run on the Rayon pool
+/// (`shared::mm`), the same cores a held team would otherwise be occupying.
+pub fn time_loop(
     op: &mut Op,
     prime_ms: u64,
     reps: usize,
@@ -67,15 +78,21 @@ pub fn measure_phased(
         let elapsed = start.elapsed();
         samples.push(elapsed.as_secs_f64() * 1e3);
     }
-    let checked = Instant::now();
-    phases.timed_loop = checked - looped;
+    phases.timed_loop = looped.elapsed();
     phases.sampled = Duration::from_secs_f64(samples.iter().sum::<f64>() / 1e3);
+    Ok(samples)
+}
+
+/// Check the result the last timed repetition left behind -- the measured call itself, at the
+/// row's own parallelism, not a separate execution -- then restore the inputs.
+pub fn check_last(op: &mut Op, phases: &mut Phases) -> Result<(), String> {
+    let checked = Instant::now();
     op.check()?;
     let restored = Instant::now();
     phases.check = restored - checked;
     op.prepare()?;
     phases.restore = restored.elapsed();
-    Ok(samples)
+    Ok(())
 }
 
 #[cfg(test)]

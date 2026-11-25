@@ -154,19 +154,41 @@ fn current_row(row: &str) -> &str {
     }
 }
 
-/// The timed loop of one row.
+/// Run `f` with the row's parallelism held, lending it the token every measured call of the row
+/// takes. One place, so the timed loop and the verification census execute a cell the same way.
 ///
-/// The colmat and faer rows run it with the row's parallelism held around the whole loop, once, so that
-/// priming, every repetition and the check reuse one reservation and its setup is outside every
-/// clocked region. The vendor rows own their threading and are not touched.
+/// The colmat and faer rows hold their parallelism around the whole of `f`, once, so priming and
+/// every repetition reuse one reservation and its setup is outside every clocked region. The vendor
+/// rows own their threading (set from the budget by `configure_threads`) and are not touched.
 ///
 /// * `colmat` with the team API (`fork-team`): `colmat::team::with_team(threads, ..)` owns a
-///   `threadteam` team for the loop and its `Par::Team` is lent to each call - that is how a caller
-///   with a thread budget calls this library now (the crate docs, *parallelism*), and the token can
-///   only be borrowed, never copied, from 0.25 on.
+///   `threadteam` team and its `Par::Team` is lent to each call - that is how a caller with a
+///   thread budget calls this library now (the crate docs, *parallelism*), and the token can only
+///   be borrowed, never copied, from 0.25 on.
 /// * `colmat` without it (0.24/0.25 with the Rayon route): the spindle worker group, as before.
 /// * `faer` (upstream): the spindle worker group, which is how the unchanged row has always been
 ///   measured.
+fn with_row_token<R: Send>(
+    row: &str,
+    threads: usize,
+    f: impl Send + FnOnce(&mut op::Token<'_>) -> R,
+) -> R {
+    #[cfg(feature = "fork-team")]
+    if threads > 1 && row == ROW_COLMAT {
+        return colmat::team::with_team(threads, |par| f(&mut op::Token::Fork(par)));
+    }
+    if threads > 1 && (row == ROW_COLMAT || row == ROW_FAER) {
+        spindle::with_lock(threads, || f(&mut op::Token::none()))
+    } else {
+        f(&mut op::Token::none())
+    }
+}
+
+/// The timed loop of one row, then the check of the result its last timed repetition left.
+///
+/// The check runs after the reservation is released ([`with_row_token`] has returned): it verifies
+/// the state the measured call produced, and its reference products run on the Rayon pool -- the
+/// cell's own budget (`shared::mm`) -- whose cores a held team's members would otherwise occupy.
 fn measure_row(
     row: &str,
     threads: usize,
@@ -175,20 +197,29 @@ fn measure_row(
     reps: usize,
     phases: &mut timing::Phases,
 ) -> Result<Vec<f64>, String> {
-    #[cfg(feature = "fork-team")]
-    if threads > 1 && row == ROW_COLMAT {
-        return colmat::team::with_team(threads, |par| {
-            let mut token = op::Token::Fork(par);
-            timing::measure_phased(ops, prime_ms, reps, &mut token, phases)
-        });
+    let samples = with_row_token(row, threads, |token| {
+        timing::time_loop(ops, prime_ms, reps, token, phases)
+    })?;
+    timing::check_last(ops, phases)?;
+    Ok(samples)
+}
+
+/// One verification-census execution of a cell: `prepare`, one `run` on the row's own token (the
+/// configuration the timed loop measures at this budget, not a sequential stand-in), and `check`
+/// outside the reservation. Returns the wall time of `prepare` and `run` for `FBENCH_PHASES`.
+fn verify_once(
+    row: &str,
+    threads: usize,
+    ops: &mut op::Op,
+) -> (Result<(), String>, Duration, Duration) {
+    let t0 = Instant::now();
+    if let Err(e) = ops.prepare() {
+        return (Err(e), t0.elapsed(), Duration::ZERO);
     }
-    if threads > 1 && (row == ROW_COLMAT || row == ROW_FAER) {
-        spindle::with_lock(threads, || {
-            timing::measure_phased(ops, prime_ms, reps, &mut op::Token::none(), phases)
-        })
-    } else {
-        timing::measure_phased(ops, prime_ms, reps, &mut op::Token::none(), phases)
-    }
+    let t1 = Instant::now();
+    let ran = with_row_token(row, threads, |token| ops.run(token.reborrow()));
+    let t2 = Instant::now();
+    (ran.and_then(|()| ops.check()), t1 - t0, t2 - t1)
 }
 
 /// `FBENCH_PHASES=1` asks for one `PHASES` line on stderr per measured or verified variant: where
@@ -1399,29 +1430,16 @@ fn main() -> ExitCode {
                                     order.label(),
                                     case.shape()
                                 );
-                                let t0 = Instant::now();
-                                let mut t1 = t0;
-                                let mut t2 = t0;
-                                let outcome = ops
-                                    .prepare()
-                                    .and_then(|()| {
-                                        t1 = Instant::now();
-                                        // the verification pass runs each op once, outside any
-                                        // budget: a sequential token
-                                        ops.run(op::Token::none())
-                                    })
-                                    .and_then(|()| {
-                                        t2 = Instant::now();
-                                        ops.check()
-                                    });
+                                let checking = Instant::now();
+                                let (outcome, prepare, ran) = verify_once(row, threads, &mut ops);
                                 if phases_enabled() {
                                     eprintln!(
                                         "PHASES\tverify\t{label} threads={threads} note={:?} build_ms={} prepare_ms={} run_ms={} check_ms={}",
                                         ops.note,
                                         ms(build),
-                                        ms(t1 - t0),
-                                        ms(t2.saturating_duration_since(t1)),
-                                        ms(t2.elapsed())
+                                        ms(prepare),
+                                        ms(ran),
+                                        ms(checking.elapsed().saturating_sub(prepare + ran))
                                     );
                                 }
                                 match outcome {
