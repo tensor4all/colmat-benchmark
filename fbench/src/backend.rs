@@ -551,6 +551,123 @@ macro_rules! define_backend {
 
             $ops!();
 
+            /// The reflectors of this library's QR factorization of `a0` (`m x n`, `order`), in
+            /// LAPACK's convention: the factor (`V` strictly below the diagonal, unit diagonal
+            /// implied) and `tau` with `H_i = I - tau_i v_i v_i^H`. This library writes
+            /// `H_i = I - v_i v_i^H / t_i` with a real `t_i` on the diagonal of its block factor, so
+            /// `tau_i = 1 / t_i` (an empty reflector's infinite `t_i` becomes `tau_i = 0`, `H_i = I`).
+            ///
+            /// The vendor's `householder_apply` rows apply exactly these reflectors: a complex
+            /// LAPACK QR normalises `R`'s diagonal to real and this library keeps each pivot's
+            /// phase, so the two libraries' `Q` differ by a diagonal unitary for `c64`, and only
+            /// the same reflectors make the two rows compute the same `Q C`. Built outside every
+            /// clock, sequentially, with the block size the timed rows use (one block of
+            /// `min(m, n)`).
+            #[allow(dead_code)] // only the vendor arm, and only the fork's expansion, calls it
+            pub fn householder_reflectors<T: Scalar + ComplexField>(
+                a0: &[T],
+                m: usize,
+                n: usize,
+                order: Order,
+            ) -> (Vec<T>, Vec<T>) {
+                let size = m.min(n);
+                let par = ParCfg::Seq;
+                let mut a = a0.to_vec();
+                let mut qc = vec![T::zero(); size * size];
+                let mut mem = MemBuffer::new(qrf::qr_in_place_scratch::<T>(
+                    m, n, size, parmod::shape(par), Default::default(),
+                ));
+                qrf::qr_in_place(
+                    mmut(&mut a, m, n, order),
+                    mmut(&mut qc, size, size, Order::F),
+                    parmod::verify_par(par),
+                    MemStack::new(&mut mem),
+                    Default::default(),
+                );
+                let tau = (0..size)
+                    .map(|i| T::from_f64(1.0 / Scalar::abs(qc[i + i * size])))
+                    .collect();
+                (a, tau)
+            }
+
+            /// The faer results for the inputs a vendor route is given, computed with the same
+            /// library calls the timed rows make (sequentially; the check runs outside the clock).
+            /// `lapack.rs`'s `vendor_routes_agree_with_colmat` compares the vendor's outputs with
+            /// these, so a vendor call that computes a different quantity cannot pass as a route.
+            #[cfg(test)]
+            #[allow(dead_code)] // the vendor tests compare with the fork's expansion only
+            pub mod reference {
+                use super::*;
+
+                /// `b <- u^{-1} b` for the `n x n` upper triangular `u` and the `n x 1` `b`.
+                pub fn triangular_solve<T: Scalar + ComplexField>(u: &[T], b: &mut [T], n: usize, order: Order) {
+                    fk::linalg::triangular_solve::solve_upper_triangular_in_place(
+                        mref(u, n, n, order),
+                        mmut(b, n, 1, order),
+                        parmod::verify_par(ParCfg::Seq),
+                    );
+                }
+
+                /// `full_piv_lu`'s `lu_in_place` on `a` (`n x n`): the packed factors in `a` and
+                /// the forward row and column permutations, `(P A Q)_{ij} = A_{rows[i], cols[j]}`.
+                pub fn full_piv_lu<T: Scalar + ComplexField>(
+                    a: &mut [T],
+                    n: usize,
+                    order: Order,
+                ) -> (Vec<usize>, Vec<usize>) {
+                    use fk::linalg::lu::full_pivoting::factor as flu;
+                    let (mut rf, mut rb, mut cf, mut cb) = (vec![0usize; n], vec![0usize; n], vec![0usize; n], vec![0usize; n]);
+                    let mut mem = MemBuffer::new(flu::lu_in_place_scratch::<usize, T>(
+                        n, n, parmod::shape(ParCfg::Seq), Default::default(),
+                    ));
+                    flu::lu_in_place(
+                        mmut(a, n, n, order),
+                        &mut rf,
+                        &mut rb,
+                        &mut cf,
+                        &mut cb,
+                        parmod::verify_par(ParCfg::Seq),
+                        MemStack::new(&mut mem),
+                        Default::default(),
+                    );
+                    (rf, cf)
+                }
+
+                /// `Q C` for the `Q` of the QR factorization of `a` (`m x n`), applied to `c`
+                /// (`m x n`) in the block form, as the `householder_apply` rows time it.
+                pub fn householder_apply<T: Scalar + ComplexField>(
+                    a: &[T],
+                    c: &mut [T],
+                    m: usize,
+                    n: usize,
+                    order: Order,
+                ) {
+                    let size = m.min(n);
+                    let par = ParCfg::Seq;
+                    let mut a = a.to_vec();
+                    let mut qc = vec![T::zero(); size * size];
+                    let mut mem = MemBuffer::new(StackReq::any_of(&[
+                        householder::apply_block_householder_on_the_left_in_place_scratch::<T>(m, size, n),
+                        qrf::qr_in_place_scratch::<T>(m, n, size, parmod::shape(par), Default::default()),
+                    ]));
+                    qrf::qr_in_place(
+                        mmut(&mut a, m, n, order),
+                        mmut(&mut qc, size, size, Order::F),
+                        parmod::verify_par(par),
+                        MemStack::new(&mut mem),
+                        Default::default(),
+                    );
+                    householder::apply_block_householder_on_the_left_in_place_with_conj(
+                        mref(&a, m, n, order).get(.., ..size),
+                        mref(&qc, size, size, Order::F),
+                        Conj::No,
+                        mmut(c, m, n, order),
+                        parmod::verify_par(par),
+                        MemStack::new(&mut mem),
+                    );
+                }
+            }
+
             // -------------------------------------------------- householder_apply
 
             fn householder_ops<T: Scalar + ComplexField>(
@@ -689,21 +806,6 @@ macro_rules! define_backend {
                 let mut out = fill_seeded::<T>(n * n, seed);
                 for i in 0..n {
                     out[idx(i, i, n, n, order)].add_assign(T::from_f64(n as f64));
-                }
-                replicate(&out, batch)
-            }
-
-            /// A diagonally dominant upper triangular matrix.
-            fn upper_triangular<T: Scalar>(n: usize, batch: usize, order: Order, seed: u64) -> Vec<T> {
-                let raw = fill_seeded::<T>(n * n, seed);
-                let mut out = vec![T::zero(); n * n];
-                for j in 0..n {
-                    for i in 0..n {
-                        if i <= j {
-                            out[idx(i, j, n, n, order)] = raw[idx(i, j, n, n, order)];
-                        }
-                    }
-                    out[idx(j, j, n, n, order)].add_assign(T::from_f64(n as f64 + 1.0));
                 }
                 replicate(&out, batch)
             }

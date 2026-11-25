@@ -468,6 +468,12 @@ fn info(threads: Option<usize>) {
         println!("{key}={value}");
     }
     println!("harness.name=fbench");
+    // A vendor call that is a different algorithm from the faer rows' call for the same contract
+    // (`lapack::ROUTE_DIFFERENCES`). The recorder keeps every `info` line in the run's
+    // `binary-info.txt`, so the page can say it next to the ratio.
+    for (family, route) in lapack::ROUTE_DIFFERENCES {
+        println!("route_difference.{family}={route}");
+    }
     println!(
         "host.logical_cpus={}",
         std::thread::available_parallelism().map_or(0, |n| n.get())
