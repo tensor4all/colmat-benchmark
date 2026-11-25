@@ -412,7 +412,8 @@ def tile_html(m, families, chart_href, anchor=None, opponent='the fastest vendor
     colour = {'win': 'lw', 'lose': 'll'}.get(lean, '')
     threads = m['threads']
     thread_text = (f'{threads[0]}&ndash;{threads[-1]} threads' if len(threads) > 1
-                   else f'{threads[0]} thread{"s" if threads[0] != 1 else ""}')
+                   else f'{threads[0]} thread{"s" if threads[0] != 1 else ""}' if threads
+                   else 'no counted thread row')
     # behind is None when extern/colmat cannot place the recorded commit: the badge then says the
     # distance is unknown and names the commit, rather than a count-free "older pin".
     pin = ('current pin' if m['behind'] == 0 else
@@ -431,10 +432,12 @@ def tile_html(m, families, chart_href, anchor=None, opponent='the fastest vendor
                      f'(win / tie / lose of {t["win"] + t["tie"] + t["lose"]} cells) &middot; vs '
                      f'{html.escape(_vendors(m["compared"]))}'
                      + (f' ({html.escape(_vendors(m["missing"]))} not measured)' if m['missing'] else '')
+                     + (f' ({html.escape(_vendors(m["uncounted"]))} measured, no cell counted)'
+                        if m.get('uncounted') else '')
                      + '</div>')
     else:
-        lines.append('<div class="big">&mdash;</div><div class="sm">no cell compared with '
-                     f'{html.escape(opponent)}</div>')
+        lines.append('<div class="big">&mdash;</div><div class="sm">measured, but no cell compared with '
+                     f'{html.escape(opponent)} was counted</div>')
     covered = _families_text(m, families)
     if len([f for f in families if f in m['families']]) < len(families):
         covered = f'<b>{covered}</b>'
@@ -499,8 +502,12 @@ def vendor_view(m, vendor):
     v = m['vendors'].get(vendor)
     if v is None:
         return None
-    return dict(m, families=v['families'], total=v['total'], compared=[vendor], missing=[],
-                threads=v['threads'] or m['threads'])
+    # Every field the tile prints about the recording is the vendor's arms' own (`by_vendor`): a
+    # machine-level date, pin or thread range would describe another arm.
+    fields = ('families', 'total', 'threads', 'os_shared', 'date', 'commit', 'behind', 'provisional',
+              'below_baseline', 'min_ratio')
+    return dict(m, **{k: v[k] for k in fields}, compared=[vendor], missing=[], uncounted=[],
+                excluded=[a for a in m['excluded'] if a.vendor == vendor])
 
 
 def vendor_headline_html(vendor, views, families):
@@ -522,7 +529,8 @@ def vendor_headline_html(vendor, views, families):
         joined = parts[0] if len(parts) == 1 else ', '.join(parts[:-1]) + ' and ' + parts[-1]
         sentences.append(f'colmat beats {html.escape(label)} in {joined} of the cells compared.')
     if undecided:
-        sentences.append(f'No cell decided against {html.escape(label)} on {", ".join(undecided)}.')
+        sentences.append(f'Measured against {html.escape(label)} but no cell counted on '
+                         f'{", ".join(undecided)} (see the tile).')
     if not sentences:
         sentences.append(f'No machine measured {html.escape(label)}.')
     return f'<p class="headline">{" ".join(sentences)}</p>\n'
@@ -622,7 +630,11 @@ def strictest_html(machines, families, chart_href):
               'part of the gap that comes from taking the per-cell minimum.</p>\n'
             + ''.join(comparison_table_html(m, families) for m in machines)
             + matrix_html(machines, families, chart_href, heading='Win share by family vs the fastest of all')
-            + '</details>\n')
+            + '</details>\n'
+            # the tab lands on a folded section: open it when the anchor is followed
+            + '<script>(function(){function o(){if(location.hash==="#vs-fastest"){'
+              'var d=document.getElementById("vs-fastest");if(d)d.open=true;}}'
+              'window.addEventListener("hashchange",o);o();})();</script>\n')
 
 
 def _cell_href(m, family, chart_href):

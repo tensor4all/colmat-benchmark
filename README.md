@@ -14,10 +14,11 @@ measured at colmat's own API, with upstream `faer` as the baseline row. It has t
 
 | | |
 |---|---|
-| Current pages | [`result/INDEX.md`](result/INDEX.md) (generated); older ones in [`result/HISTORY.md`](result/HISTORY.md); read [`docs/dataset-status.md`](docs/dataset-status.md) first |
+| Current pages | [`result/INDEX.md`](result/INDEX.md) (generated); older ones in [`result/HISTORY.md`](result/HISTORY.md); read [`docs/dataset-status.md`](docs/dataset-status.md) first (pages recorded before #49 carry withdrawn cells; the provisional-dataset and provenance notes are in [`docs/how-it-works.md`](docs/how-it-works.md#status-moved-from-the-readme)) |
 | How a run is recorded, the vendor arms, tooling, page → raw data | [`docs/how-it-works.md`](docs/how-it-works.md), including [Which families each arm measures](docs/how-it-works.md#which-families-each-arm-measures) and [the AOCL arm](docs/how-it-works.md#the-aocl-arm-lapack-aocl) |
 | Result layout | [`docs/results.md`](docs/results.md) |
 | Rules and runbook | [`docs/rules.md`](docs/rules.md), [`docs/merge-procedure.md`](docs/merge-procedure.md), [`AGENTS.md`](AGENTS.md) |
+| Measurement audit | [`docs/measurement-audit-2026-11-06.md`](docs/measurement-audit-2026-11-06.md): what each timed call includes, per family and arm |
 | Timing policy and protocol | [`docs/timing-policy.md`](docs/timing-policy.md), [`docs/protocol-v2-baseline.md`](docs/protocol-v2-baseline.md), [`docs/reliable-measurement.md`](docs/reliable-measurement.md) |
 | Provisional vs clean datasets | [`docs/provisional-and-clean-datasets.md`](docs/provisional-and-clean-datasets.md) |
 | Design record | [`docs/worklog.md`](docs/worklog.md), [`docs/reviews/`](docs/reviews/) |

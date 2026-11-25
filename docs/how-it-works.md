@@ -4,6 +4,29 @@ Moved here from the README (#129), which now only points at the site and at `doc
 page's own "How the numbers are made" section states how the published shares are computed; this
 page is how a run is recorded and how a page maps to its raw data.
 
+## Status (moved from the README)
+
+> **Provisional dataset:** this development host records provisional pages (`host.role: development`);
+> a dedicated measurement host will re-record the suite periodically and replace them - see
+> [`docs/provisional-and-clean-datasets.md`](provisional-and-clean-datasets.md). Acceptance runs are
+> separate, local and never published.
+
+> **Provenance note (2026-10-16, historical):** the runs recorded on 2026-10-15/16 linked the
+> crates.io release `t4a-faer 0.24.5` (the measured library's name before its 2026-11 rename to
+> `colmat`) for the measured row, not the pinned checkout — see
+> [`docs/reviews/20261016-linked-crate-provenance.md`](reviews/20261016-linked-crate-provenance.md).
+> The build now refuses such a mismatch instead of warning.
+
+`fbench` exists and records runs: the timing-v2 baseline is in
+[`result/INDEX.md`](../result/INDEX.md) (daily suite, both vendor arms), the harness
+owns the workloads and the numerical checks, and the timing protocol lives in
+`benchmarks/scripts/`. The frozen settings, the enforced machine preconditions and
+the candidate-mode procedure for optimization iterations are in
+[`docs/protocol-v2-baseline.md`](protocol-v2-baseline.md); the per-run audit of
+the baseline is in [`docs/reviews/`](reviews/).
+
+## How it works
+
 The harness lives **here**, not in `colmat`: colmat has no `benchmarks/` directory
 and its `AGENTS.md` forbids adding one, because campaign infrastructure would be
 a rebase cost. So `fbench` links the measured library *by path* from a
