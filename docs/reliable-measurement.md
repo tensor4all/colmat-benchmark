@@ -86,6 +86,17 @@ and one coefficient block; multi-panel sequences are not covered.
   changed skip status, merged variants, missing processes, wrong rotation,
   nonfinite samples or inconsistent aggregates. Census base cells must match
   the declared population, dtype, order, shape, batch, engine and budget grid.
+- Two checks, of two executions. The census (`fbench verify --threads t`) runs
+  each cell once on the token the timed loop lends at that budget (a `colmat`
+  team, the `faer` row's spindle group, the vendor's own threads), so the
+  census at 4T and at 8T checks two different parallel executions. Until
+  tensor4all/colmat-benchmark#127 the `colmat` census ran on `Token::none()`,
+  which under the team API is sequential, so it never ran the path that was
+  timed. Every timed cell is also checked separately: `measure_row` checks
+  the state its **last timed repetition** left, after the row's reservation
+  is released, and a failure makes the row `failed`. That check covers the
+  measured call at every declared size, including sizes a narrowed census
+  (`verify.n`) leaves out, but it records no residual.
 - V1 artifacts/readers retain their historical interpretation. V2 pages use a
   timing-version suffix, so a new measurement contract does not overwrite the
   old numerical page. The exact clean toolkit commit is pinned and recorded as

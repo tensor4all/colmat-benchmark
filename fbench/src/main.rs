@@ -154,40 +154,83 @@ fn current_row(row: &str) -> &str {
     }
 }
 
-/// The timed loop of one row.
+/// Run `f` with the row's parallelism held, lending it the token every measured call of the row
+/// takes. One place, so the timed loop and the verification census execute a cell the same way.
 ///
-/// The colmat and faer rows run it with the row's parallelism held around the whole loop, once, so that
-/// priming, every repetition and the check reuse one reservation and its setup is outside every
-/// clocked region. The vendor rows own their threading and are not touched.
+/// The colmat and faer rows hold their parallelism around the whole of `f`, once, so priming and
+/// every repetition reuse one reservation and its setup is outside every clocked region. The vendor
+/// rows own their threading (set from the budget by `configure_threads`) and are not touched.
 ///
 /// * `colmat` with the team API (`fork-team`): `colmat::team::with_team(threads, ..)` owns a
-///   `threadteam` team for the loop and its `Par::Team` is lent to each call - that is how a caller
-///   with a thread budget calls this library now (the crate docs, *parallelism*), and the token can
-///   only be borrowed, never copied, from 0.25 on.
+///   `threadteam` team and its `Par::Team` is lent to each call - that is how a caller with a
+///   thread budget calls this library now (the crate docs, *parallelism*), and the token can only
+///   be borrowed, never copied, from 0.25 on.
 /// * `colmat` without it (0.24/0.25 with the Rayon route): the spindle worker group, as before.
 /// * `faer` (upstream): the spindle worker group, which is how the unchanged row has always been
 ///   measured.
+fn with_row_token<R: Send>(
+    row: &str,
+    threads: usize,
+    f: impl Send + FnOnce(&mut op::Token<'_>) -> R,
+) -> R {
+    #[cfg(feature = "fork-team")]
+    if threads > 1 && row == ROW_COLMAT {
+        return colmat::team::with_team(threads, |par| f(&mut op::Token::Fork(par)));
+    }
+    if threads > 1 && (row == ROW_COLMAT || row == ROW_FAER) {
+        spindle::with_lock(threads, || f(&mut op::Token::none()))
+    } else {
+        f(&mut op::Token::none())
+    }
+}
+
+/// The timed loop of one row, then the check of the result its last timed repetition left.
+///
+/// The check runs after the reservation is released ([`with_row_token`] has returned): it verifies
+/// the state the measured call produced, and its reference products run on the Rayon pool -- the
+/// cell's own budget (`shared::mm`) -- whose cores a held team's members would otherwise occupy.
 fn measure_row(
     row: &str,
     threads: usize,
     ops: &mut op::Op,
     prime_ms: u64,
     reps: usize,
+    phases: &mut timing::Phases,
 ) -> Result<Vec<f64>, String> {
-    #[cfg(feature = "fork-team")]
-    if threads > 1 && row == ROW_COLMAT {
-        return colmat::team::with_team(threads, |par| {
-            let mut token = op::Token::Fork(par);
-            timing::measure(ops, prime_ms, reps, &mut token)
-        });
+    let samples = with_row_token(row, threads, |token| {
+        timing::time_loop(ops, prime_ms, reps, token, phases)
+    })?;
+    timing::check_last(ops, phases)?;
+    Ok(samples)
+}
+
+/// One verification-census execution of a cell: `prepare`, one `run` on the row's own token (the
+/// configuration the timed loop measures at this budget, not a sequential stand-in), and `check`
+/// outside the reservation. Returns the wall time of `prepare` and `run` for `FBENCH_PHASES`.
+fn verify_once(
+    row: &str,
+    threads: usize,
+    ops: &mut op::Op,
+) -> (Result<(), String>, Duration, Duration) {
+    let t0 = Instant::now();
+    if let Err(e) = ops.prepare() {
+        return (Err(e), t0.elapsed(), Duration::ZERO);
     }
-    if threads > 1 && (row == ROW_COLMAT || row == ROW_FAER) {
-        spindle::with_lock(threads, || {
-            timing::measure(ops, prime_ms, reps, &mut op::Token::none())
-        })
-    } else {
-        timing::measure(ops, prime_ms, reps, &mut op::Token::none())
-    }
+    let t1 = Instant::now();
+    let ran = with_row_token(row, threads, |token| ops.run(token.reborrow()));
+    let t2 = Instant::now();
+    (ran.and_then(|()| ops.check()), t1 - t0, t2 - t1)
+}
+
+/// `FBENCH_PHASES=1` asks for one `PHASES` line on stderr per measured or verified variant: where
+/// the wall time outside the clocked region went. Diagnostic only: stderr is the guard log, never
+/// the CSV, and the instants it reads are all taken between clocked regions.
+fn phases_enabled() -> bool {
+    std::env::var_os("FBENCH_PHASES").is_some_and(|v| v == "1")
+}
+
+fn ms(d: Duration) -> String {
+    format!("{:.3}", d.as_secs_f64() * 1e3)
 }
 
 fn summarize(samples: &[f64], statistic: Statistic) -> Option<f64> {
@@ -649,6 +692,7 @@ impl CellSpec {
 /// it measured and the parent kills it at the deadline, which is what makes the limit hold even when
 /// a call never returns.
 fn child_main(spec_text: &str) -> ExitCode {
+    let started = Instant::now();
     let spec = match CellSpec::decode(spec_text) {
         Ok(spec) => spec,
         Err(e) => {
@@ -673,6 +717,7 @@ fn child_main(spec_text: &str) -> ExitCode {
         rayon::current_num_threads(),
         vendor::reported_threads()
     );
+    let configured = Instant::now();
     let ops = match ops_for(&spec.row, spec.dtype, &spec.family, spec.case, spec.order) {
         Ok(ops) => ops,
         Err(note) => {
@@ -683,6 +728,21 @@ fn child_main(spec_text: &str) -> ExitCode {
     };
     // The parent needs the variant count to know which `RESULT` is the last one, and therefore which
     // row to hold until the child's exit is known.
+    let built = Instant::now();
+    if phases_enabled() {
+        eprintln!(
+            "PHASES\tchild\trow={} family={} dtype={} order={} shape={} threads={} configure_ms={} build_ms={} variants={}",
+            spec.row,
+            spec.family,
+            spec.dtype.label(),
+            spec.order.label(),
+            spec.case.shape(),
+            spec.threads,
+            ms(configured - started),
+            ms(built - configured),
+            ops.len()
+        );
+    }
     println!("COUNT\t{}", ops.len());
     let _ = std::io::stdout().flush();
     for (index, mut op) in ops.into_iter().enumerate() {
@@ -696,7 +756,32 @@ fn child_main(spec_text: &str) -> ExitCode {
             eprintln!("before {} {}: {e}", spec.row, spec.family);
             return ExitCode::from(2);
         }
-        let measured = measure_row(&spec.row, spec.threads, &mut op, spec.prime_ms, spec.reps);
+        let mut phases = timing::Phases::default();
+        let measured = measure_row(
+            &spec.row,
+            spec.threads,
+            &mut op,
+            spec.prime_ms,
+            spec.reps,
+            &mut phases,
+        );
+        if phases_enabled() {
+            eprintln!(
+                "PHASES\tmeasure\trow={} family={} dtype={} order={} shape={} threads={} note={:?} prime_ms={} timed_loop_ms={} sampled_ms={} check_ms={} restore_ms={}",
+                spec.row,
+                spec.family,
+                spec.dtype.label(),
+                spec.order.label(),
+                spec.case.shape(),
+                spec.threads,
+                op.note,
+                ms(phases.prime),
+                ms(phases.timed_loop),
+                ms(phases.sampled),
+                ms(phases.check),
+                ms(phases.restore)
+            );
+        }
         if let Err(e) = require_threads(spec.threads) {
             eprintln!("after {} {}: {e}", spec.row, spec.family);
             return ExitCode::from(2);
@@ -1284,6 +1369,7 @@ fn main() -> ExitCode {
                             if run {
                                 // One build in its own process: the parent writes the rows and
                                 // enforces the cell's limit by killing it.
+                                let spawned = Instant::now();
                                 run_build_in_child(
                                     &args,
                                     &mut records,
@@ -1295,8 +1381,18 @@ fn main() -> ExitCode {
                                     case,
                                     order,
                                 );
+                                if phases_enabled() {
+                                    eprintln!(
+                                        "PHASES\tcell\trow={row} family={family} dtype={} order={} shape={} threads={threads} wall_ms={}",
+                                        dtype.label(),
+                                        order.label(),
+                                        case.shape(),
+                                        ms(spawned.elapsed())
+                                    );
+                                }
                                 continue;
                             }
+                            let building = Instant::now();
                             let ops = match ops_for(row, *dtype, family, case, order) {
                                 Ok(ops) => ops,
                                 Err(note) => {
@@ -1325,6 +1421,7 @@ fn main() -> ExitCode {
                                     continue;
                                 }
                             };
+                            let build = building.elapsed();
                             for mut ops in ops {
                                 let label = format!(
                                     "{row} {} {} {} {}",
@@ -1333,14 +1430,18 @@ fn main() -> ExitCode {
                                     order.label(),
                                     case.shape()
                                 );
-                                let outcome = ops
-                                    .prepare()
-                                    .and_then(|()| {
-                                        // the verification pass runs each op once, outside any
-                                        // budget: a sequential token
-                                        ops.run(op::Token::none())
-                                    })
-                                    .and_then(|()| ops.check());
+                                let checking = Instant::now();
+                                let (outcome, prepare, ran) = verify_once(row, threads, &mut ops);
+                                if phases_enabled() {
+                                    eprintln!(
+                                        "PHASES\tverify\t{label} threads={threads} note={:?} build_ms={} prepare_ms={} run_ms={} check_ms={}",
+                                        ops.note,
+                                        ms(build),
+                                        ms(prepare),
+                                        ms(ran),
+                                        ms(checking.elapsed().saturating_sub(prepare + ran))
+                                    );
+                                }
                                 match outcome {
                                     Ok(()) => {
                                         println!("ok {label} {}", ops.note);
