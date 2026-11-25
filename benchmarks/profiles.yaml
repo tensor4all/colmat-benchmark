@@ -24,6 +24,19 @@ profiles:
   # host as it is measured today has SMT off, so it is a second profile, not a second
   # reading of the first (faer-benchmark#55): one name must not point at two machines.
   - zen2-cpu
+  # The measurement host from the evo -> evo2 switch (colmat-benchmark#129). evo is
+  # 4 Zen5 + 8 Zen5c, so any thread set above 4 mixes core types; evo2 is 16 uniform full
+  # Zen5 cores, which is what the core-count story needs. The declaration lives in
+  # `campaign_toolkit/profiles/evo2-zen5-16c.yaml` (campaign-toolkit#91, #92): 1/4/8T in
+  # one L3 domain, and 16T = cpus 0-15, one thread per physical core as on the ohtaka nodes.
+  # 16T has no observer CPU with SMT on, so the recorder admits it only with SMT off for that
+  # run (see there). It replaces zen5-cpu for new measurements; zen5-cpu stays historical (#130).
+  - evo2-zen5-16c
+  # The second host of the campaign, measured after evo2 and before ohtaka (campaign-toolkit#92):
+  # i9-13900HX, SMT off, measured in the Docker bench image, P-cores 0-7 only (1T and 8T). The
+  # E-cores 8-23 are never measured, because a set that reaches them is not comparable with evo2
+  # or the Xeons. The declaration lives in `campaign_toolkit/profiles/minisforum-p-core.yaml`.
+  - minisforum-p-core
   - name: zen2-64-smt-off
     role: measurement
     description: >-
