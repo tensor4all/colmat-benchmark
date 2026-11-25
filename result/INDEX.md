@@ -24,6 +24,12 @@ rather than being implied by the other arm's page.
 | `colmat-kernels-large` | `zen5-cpu` (optional) | `openblas` | `93da62172a96/0539947ffb75` | 0.34.0 | 2026-11-21 | declaration-changed | current | [result/zen5-cpu/faer-kernels-large/93da62172a96-0539947ffb75-openblas-timing-v2.md](zen5-cpu/faer-kernels-large/93da62172a96-0539947ffb75-openblas-timing-v2.md) |
 | `colmat-kernels-large` | `zen5-cpu` (optional) | `mkl` | `93da62172a96/0539947ffb75` | 0.34.0 | 2026-11-20 | partial | current | [result/zen5-cpu/faer-kernels-large/93da62172a96-0539947ffb75-mkl-timing-v2.md](zen5-cpu/faer-kernels-large/93da62172a96-0539947ffb75-mkl-timing-v2.md) |
 | `colmat-kernels-large` | `zen5-cpu` (optional) | `aocl` | `93da62172a96/0539947ffb75` | 0.34.0 | 2026-11-21 | partial | current | [result/zen5-cpu/faer-kernels-large/93da62172a96-0539947ffb75-aocl-timing-v2.md](zen5-cpu/faer-kernels-large/93da62172a96-0539947ffb75-aocl-timing-v2.md) |
+| `colmat-kernels-large` | `evo2-zen5-16c` (optional) | `openblas` | - | - | - | - | missing | - |
+| `colmat-kernels-large` | `evo2-zen5-16c` (optional) | `mkl` | - | - | - | - | missing | - |
+| `colmat-kernels-large` | `evo2-zen5-16c` (optional) | `aocl` | - | - | - | - | missing | - |
+| `colmat-kernels-large` | `minisforum-p-core` (optional) | `openblas` | - | - | - | - | missing | - |
+| `colmat-kernels-large` | `minisforum-p-core` (optional) | `mkl` | - | - | - | - | missing | - |
+| `colmat-kernels-large` | `minisforum-p-core` (optional) | `aocl` | - | - | - | - | missing | - |
 | `colmat-kernels-large` | `zen2-cpu` (optional) | `openblas` | - | - | - | - | missing | - |
 | `colmat-kernels-large` | `zen2-cpu` (optional) | `mkl` | - | - | - | - | missing | - |
 | `colmat-kernels-large` | `zen2-cpu` (optional) | `aocl` | - | - | - | - | missing | - |
@@ -33,6 +39,12 @@ rather than being implied by the other arm's page.
 | `colmat-kernels` | `zen5-cpu` | `openblas` | `93da62172a96/0539947ffb75` | 0.34.0 | 2026-11-20 | declaration-changed | current | [result/zen5-cpu/faer-kernels/93da62172a96-0539947ffb75-openblas-timing-v2.md](zen5-cpu/faer-kernels/93da62172a96-0539947ffb75-openblas-timing-v2.md) |
 | `colmat-kernels` | `zen5-cpu` | `mkl` | `93da62172a96/0539947ffb75` | 0.34.0 | 2026-11-20 | full | current | [result/zen5-cpu/faer-kernels/93da62172a96-0539947ffb75-mkl-timing-v2.md](zen5-cpu/faer-kernels/93da62172a96-0539947ffb75-mkl-timing-v2.md) |
 | `colmat-kernels` | `zen5-cpu` | `aocl` | `93da62172a96/0539947ffb75` | 0.34.0 | 2026-11-21 | partial | current | [result/zen5-cpu/faer-kernels/93da62172a96-0539947ffb75-aocl-timing-v2.md](zen5-cpu/faer-kernels/93da62172a96-0539947ffb75-aocl-timing-v2.md) |
+| `colmat-kernels` | `evo2-zen5-16c` (optional) | `openblas` | - | - | - | - | missing | - |
+| `colmat-kernels` | `evo2-zen5-16c` (optional) | `mkl` | - | - | - | - | missing | - |
+| `colmat-kernels` | `evo2-zen5-16c` (optional) | `aocl` | - | - | - | - | missing | - |
+| `colmat-kernels` | `minisforum-p-core` (optional) | `openblas` | - | - | - | - | missing | - |
+| `colmat-kernels` | `minisforum-p-core` (optional) | `mkl` | - | - | - | - | missing | - |
+| `colmat-kernels` | `minisforum-p-core` (optional) | `aocl` | - | - | - | - | missing | - |
 | `colmat-kernels` | `zen2-cpu` (optional) | `openblas` | - | - | - | - | missing | - |
 | `colmat-kernels` | `zen2-cpu` (optional) | `mkl` | - | - | - | - | missing | - |
 | `colmat-kernels` | `zen2-cpu` (optional) | `aocl` | - | - | - | - | missing | - |
