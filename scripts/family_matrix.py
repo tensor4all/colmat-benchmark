@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
-"""Win share against the fastest vendor arm, per hardware and per family.
+"""Win share against each vendor arm and against the fastest of them, per hardware and per family.
 
     python3 scripts/family_matrix.py            # print what the landing page shows
 
-The landing page (`scripts/gen_site.py`, #116) is built from this table, and the cross-host
+The landing page (`scripts/gen_site.py`, #116, #129) is built from this table, and the cross-host
 vendor-loss table (#108) is meant to read the same function, so the two never disagree on a number.
+
+The page leads with one section per vendor (#129): the same cells and the same verdict, grouped by
+the arm colmat was compared with. `by_vendor` is `tally` called with the arms of one vendor at a
+time, so "vs MKL" on a machine is every cell an MKL arm of that machine compared, judged by the MKL
+row. `tally` over every arm, "vs the fastest of all", is the strictest view and stays available:
+there the opponent of each cell is the vendor arm with the lowest median for that cell.
 
 A *cell* is one recorded case of a page: one family, shape, dtype and thread count, in F order
 (the order the vendor rows are recorded in for every family), f64 or c64, every dimension at least
@@ -255,6 +261,32 @@ def tally(arms):
     return families, sorted(compared, key=vendor_rank)
 
 
+def by_vendor(arms):
+    """{vendor: (families, total)} in `vendor_rank` order, one entry per vendor a machine has an
+    arm of: `tally` over that vendor's arms alone. The cell rule and the verdict are `tally`'s; only
+    the grouping differs from the fastest-of-all view, so the per-vendor page and the CLI cannot
+    disagree with it on a cell."""
+    out = {}
+    for vendor in sorted({a.vendor for a in arms}, key=vendor_rank):
+        families, _ = tally([a for a in arms if a.vendor == vendor])
+        out[vendor] = {'families': families, 'total': total(families),
+                       'threads': sorted({t for a in arms if a.vendor == vendor
+                                          for t in a.manifest['threads']['counts']
+                                          if t not in a.os_shared})}
+    return out
+
+
+def not_measured(machine, vendor):
+    """None when `machine` has an arm of `vendor`, otherwise why not: 'not measured against AOCL'
+    plus, for an AMD-only arm on another vendor's CPU, that it is an AMD-host arm."""
+    if vendor in machine['vendors']:
+        return None
+    label = VENDOR_LABELS.get(vendor, vendor)
+    if vendor in AMD_ONLY and not machine.get('amd'):
+        return f'not measured against {label} (an AMD-host arm; this is not an AMD CPU)'
+    return f'not measured against {label}'
+
+
 def total(families):
     return {r: sum(c[r] for c in families.values()) for r in RESULTS}
 
@@ -362,6 +394,7 @@ def machines(order=None, pages=None):
             'profile': profile, 'arch': arch, 'simd': simd, 'model': model,
             'cores': cores(declared.get(profile, {})) or host.get('logical_cpus'),
             'arms': arms, 'excluded': excluded, 'families': families, 'compared': compared,
+            'vendors': by_vendor(arms), 'amd': amd,
             'missing': sorted(missing, key=vendor_rank),
             'threads': sorted({t for a in arms for t in a.manifest['threads']['counts']
                                if t not in a.os_shared}),
@@ -405,10 +438,11 @@ def pin_point(commit, date, counts):
 
 
 def across_pins(history, machine_list):
-    """{profile: [{'commit', 'date', 'counts' or None, 'why', 'suites'}]}, oldest first: the win
-    share at every pin a machine was recorded at. A pin with no decided cell has no share and says
-    why. Each point is over the cells of its own pages, so two points can differ in their cell set;
-    `suites` names the pages behind each one and the page prints each point's decided cells."""
+    """{(profile, vendor): [{'commit', 'date', 'counts' or None, 'why', 'suites'}]}, oldest first:
+    the win share against one vendor arm at every pin a machine recorded that arm at (#129: one
+    line per machine and vendor). A pin with no decided cell has no share and says why. Each point
+    is over the cells of its own pages, so two points can differ in their cell set; `suites` names
+    the pages behind each one and the page prints each point's decided cells."""
     out = {}
     for m in machine_list:
         # An older pin is counted over the same universe as the current one: one page per suite
@@ -419,18 +453,30 @@ def across_pins(history, machine_list):
                 group = groups.setdefault(row['library_commit'], [])
                 if not any(r['suite'] == row['suite'] and r['vendor'] == row['vendor'] for r in group):
                     group.append(row)
-        points = []
+        per_vendor = {}
         for commit, rows in groups.items():
             arms = [Arm({'suite': r['suite'], 'vendor': r['vendor'], 'profile': r['profile']}, r)
                     for r in rows]
-            points.append({**pin_point(commit, max(r['date'] for r in rows), total(tally(arms)[0])),
-                           'suites': sorted({r['suite'] for r in rows})})
+            for vendor in {a.vendor for a in arms}:
+                mine = [a for a in arms if a.vendor == vendor]
+                per_vendor.setdefault(vendor, []).append({
+                    **pin_point(commit, max(a.date for a in mine), total(tally(mine)[0])),
+                    'suites': sorted({a.suite for a in mine})})
         # The current pin goes through the same gate: a machine whose only recording has no
         # decided cell (e.g. an older, pre-fair pin) has no share there either.
-        points.append({**pin_point(m['commit'], m['date'], m['total']),
-                       'suites': sorted({a.suite for a in m['arms']})})
-        out[m['profile']] = sorted(points, key=lambda p: p['date'])
+        for vendor, counts in m['vendors'].items():
+            per_vendor.setdefault(vendor, []).append({
+                **pin_point(m['commit'], m['date'], counts['total']),
+                'suites': sorted({a.suite for a in m['arms'] if a.vendor == vendor})})
+        for vendor in sorted(per_vendor, key=vendor_rank):
+            out[(m['profile'], vendor)] = sorted(per_vendor[vendor], key=lambda p: p['date'])
     return out
+
+
+def counts_text(counts):
+    """`win 77% 268/34/46`: one family's or one machine's share and counts, or why none."""
+    s = percentages(counts)
+    return (f'win {s[0]}% ' if s else 'nothing decided ') + f"{counts['win']}/{counts['tie']}/{counts['lose']}"
 
 
 def main():
@@ -444,14 +490,30 @@ def main():
               + ' · ' + (f'win {s[0]}% / tie {s[1]}% / lose {s[2]}%' if s else 'nothing decided')
               + f" · {t['win']}/{t['tie']}/{t['lose']} cells, {t['no_spread']} without spread, "
               f"{t['unresolved']} unresolved, {t['withdrawn']} withdrawn · behind {m['behind']}")
+        # One line per vendor (#129): the same cells and verdict, grouped by the arm compared with.
+        for vendor in VENDOR_ROWS:
+            label = VENDOR_LABELS[vendor]
+            v = m['vendors'].get(vendor)
+            if v is None:
+                print(f'    vs {label:9} {not_measured(m, vendor)}')
+                continue
+            vt, vs = v['total'], percentages(v['total'])
+            print(f'    vs {label:9} ' + (f'win {vs[0]}% / tie {vs[1]}% / lose {vs[2]}%' if vs else 'nothing decided')
+                  + f" · {vt['win']}/{vt['tie']}/{vt['lose']} cells, {vt['no_spread']} without spread, "
+                  f"{vt['unresolved']} unresolved, {vt['withdrawn']} withdrawn")
+        columns = [v for v in VENDOR_ROWS if v in m['vendors']]
+        print(f"    {'family':18} {'fastest of all':22} "
+              + ' '.join(f'{"vs " + VENDOR_LABELS[v]:22}' for v in columns))
         for family in every:
             counts = m['families'].get(family)
             if counts is None:
                 print(f'    {family:18} {absence(m, family)}')
                 continue
-            s = percentages(counts)
-            print(f"    {family:18} {leaning(counts) or '-':6} "
-                  + (f'win {s[0]}%  ' if s else '') + f"{counts['win']}/{counts['tie']}/{counts['lose']}")
+            cells = [f"{leaning(counts) or '-':6} {counts_text(counts)}"]
+            for v in columns:
+                c = m['vendors'][v]['families'].get(family)
+                cells.append(counts_text(c) if c else 'no cell')
+            print(f'    {family:18} ' + ' '.join(f'{c:22}' for c in cells).rstrip())
     for u in unrecorded():
         print(f"not recorded: {u['profile']} {u['arch']} ({u['simd']}) · {u['model']} · {u['cores']} cores")
     return 0
