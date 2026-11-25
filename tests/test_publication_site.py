@@ -445,7 +445,8 @@ class LandingPageTest(unittest.TestCase):
     def test_cells_are_the_recorded_verdicts_and_not_measured_is_white_and_dashed(self):
         index = self.index
         self.assertIn('table.share td.na{background:#fff;border:1px dashed', index)
-        body = index.split('<table class="share">', 1)[1].split('</table>', 1)[0]
+        # the page-wide matrix: the strictest view's, one column per recorded machine
+        body = self.strictest().split('<table class="share">', 1)[1].split('</table>', 1)[0]
         rows = dict(re.findall(r'<th scope="row">([^<]+)</th>(.*?)</tr>', body))
         # every family a machine recorded is a row: the three zen5 and keyaki record without a
         # vendor row are dashed "no vendor cell", not left out of the table
@@ -640,6 +641,58 @@ class LandingPageTest(unittest.TestCase):
         self.assertIn('<b>77%</b> <span class="sm">(268/34/46)</span></td><td><b>93%</b> <span class="sm">'
                       '(325/12/11)</span></td><td><b>73%</b> <span class="sm">(255/51/42)</span></td><td><b>61%</b> '
                       '<span class="sm">(211/62/75)</span>', table)
+
+    def test_a_vendor_tile_states_its_own_arms_recording(self):
+        # Review of #132: a vendor tile copied the machine's newest date and its thread range. The
+        # zen5 MKL arms were recorded on 2026-11-20 and the OpenBLAS/AOCL ones later; ohtaka-cpu's
+        # MKL arm is one 128T full-node row, so it has no counted thread row at all.
+        fm = gen_site.family_matrix
+        for m in self.machines.values():
+            for vendor, v in m['vendors'].items():
+                mine = [a for a in m['arms'] if a.vendor == vendor]
+                self.assertEqual(v['date'], max(a.date for a in mine))
+                self.assertEqual(v['commit'], max(mine, key=lambda a: a.date).commit)
+                tile = self.index.split(f'<div class="tile" id="{vendor}-{m["profile"]}">', 1)[1] \
+                    .split('<div class="tile"', 1)[0]
+                self.assertIn(f'&middot; {v["date"]} &middot;', tile)
+        zen5 = self.machines['zen5-cpu']
+        self.assertNotEqual(zen5['vendors']['mkl']['date'], zen5['date'])
+        mkl = self.index.split('<div class="tile" id="mkl-zen5-cpu">', 1)[1].split('<div class="tile"', 1)[0]
+        self.assertIn(f'&middot; {zen5["vendors"]["mkl"]["date"]} &middot;', mkl)
+        self.assertNotIn(f'&middot; {zen5["date"]} &middot;', mkl)
+        ohtaka = self.machines['ohtaka-cpu']
+        self.assertEqual(ohtaka['vendors']['mkl']['threads'], [])
+        self.assertEqual(ohtaka['vendors']['mkl']['os_shared'], [128])
+        tile = self.index.split('<div class="tile" id="mkl-ohtaka-cpu">', 1)[1].split('<div class="tile"', 1)[0]
+        self.assertIn('no counted thread row', tile)
+        self.assertNotIn('threads &middot;', tile)
+        self.assertIn('128T row measures every core', tile)
+        # and the across-pins point of each line is stamped with that arm's own pin and date
+        across = fm.across_pins(self.history, [zen5])
+        for vendor, v in zen5['vendors'].items():
+            self.assertEqual((across[('zen5-cpu', vendor)][-1]['commit'], across[('zen5-cpu', vendor)][-1]['date']),
+                             (v['commit'], v['date']))
+
+    def test_an_arm_that_counted_nothing_is_measured_not_missing(self):
+        # Review of #132: "not measured" means no arm, on the tile, in the CLI and in the sections
+        # alike. ohtaka-cpu has an MKL arm whose only row is the 128T full-node one.
+        fm = gen_site.family_matrix
+        m = self.machines['ohtaka-cpu']
+        self.assertIn('mkl', m['vendors'])
+        self.assertNotIn('mkl', m['missing'])
+        self.assertEqual(fm.uncounted(m), ['mkl'])
+        self.assertIsNone(fm.not_measured(m, 'mkl'))
+        tile = self.strictest().split('<div class="tile" id="ohtaka-cpu">', 1)[1].split('<div class="tile"', 1)[0]
+        self.assertIn('vs OpenBLAS (AOCL not measured) (MKL measured, no cell counted)', tile)
+        self.assertNotIn('MKL, AOCL not measured', self.index)
+        self.assertNotIn('<code>ohtaka-cpu</code>', self.section('mkl').split('<p class="absent', 1)[-1]
+                         if '<p class="absent' in self.section('mkl') else '')
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            fm.main()
+        cli = out.getvalue().split('ohtaka-cpu ', 1)[1].split('\nkeyaki-64', 1)[0]
+        self.assertIn('vs OpenBLAS (AOCL not measured) (MKL measured, no cell counted)', cli)
+        self.assertIn('vs MKL       measured, no cell counted', cli)
 
     def test_grouping_by_vendor_changes_no_verdict(self):
         # #129 item 3: only the grouping changes. Every cell of the fastest-of-all view is the same

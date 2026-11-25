@@ -261,19 +261,40 @@ def tally(arms):
     return families, sorted(compared, key=vendor_rank)
 
 
-def by_vendor(arms):
-    """{vendor: (families, total)} in `vendor_rank` order, one entry per vendor a machine has an
-    arm of: `tally` over that vendor's arms alone. The cell rule and the verdict are `tally`'s; only
-    the grouping differs from the fastest-of-all view, so the per-vendor page and the CLI cannot
-    disagree with it on a cell."""
+def by_vendor(arms, pin=None):
+    """{vendor: entry} in `vendor_rank` order, one entry per vendor a machine has an arm of, where
+    `families` and `total` are `tally` over that vendor's arms alone. The cell rule and the verdict
+    are `tally`'s; only the grouping differs from the fastest-of-all view, so the per-vendor page
+    and the CLI cannot disagree with it on a cell.
+
+    Everything a vendor's tile states about its recording is that vendor's arms' own, never the
+    machine's: `threads` (the counted thread rows, empty when every row is a full-node row),
+    `os_shared`, `date` and `commit` of its newest arm, `behind` the pin (when `pin` is given),
+    `provisional`, `below_baseline` and `min_ratio`. A machine's arms can be recorded on different
+    days and, in principle, at different pins."""
     out = {}
     for vendor in sorted({a.vendor for a in arms}, key=vendor_rank):
-        families, _ = tally([a for a in arms if a.vendor == vendor])
-        out[vendor] = {'families': families, 'total': total(families),
-                       'threads': sorted({t for a in arms if a.vendor == vendor
-                                          for t in a.manifest['threads']['counts']
-                                          if t not in a.os_shared})}
+        mine = [a for a in arms if a.vendor == vendor]
+        families, _ = tally(mine)
+        newest = max(mine, key=lambda a: a.date)
+        out[vendor] = {
+            'families': families, 'total': total(families),
+            'threads': sorted({t for a in mine for t in a.manifest['threads']['counts']
+                               if t not in a.os_shared}),
+            'os_shared': sorted({t for a in mine for t in a.os_shared}),
+            'date': newest.date, 'commit': newest.commit,
+            'behind': behind_pin(newest.commit, pin) if pin else None,
+            'provisional': any(a.manifest['host'].get('role', 'development') != 'measurement' for a in mine),
+            'below_baseline': sorted({b for a in mine for b in a.below_baseline}),
+            'min_ratio': max((a.min_ratio for a in mine), default=1.0),
+        }
     return out
+
+
+def uncounted(machine):
+    """The vendors a machine has an arm of that decided no cell (ohtaka-cpu's MKL arm is one
+    128T full-node row, listed and never counted): measured, so never "not measured"."""
+    return machine['uncounted']
 
 
 def not_measured(machine, vendor):
@@ -388,14 +409,17 @@ def machines(order=None, pages=None):
         host = arms[0].manifest['host']
         arch, simd, model = architecture(host.get('cpu'))
         amd = 'AMD' in (host.get('cpu') or '')
-        missing = [v for v in features if v not in compared and (amd or v not in AMD_ONLY)]
+        # "not measured" means no arm at all, the same as `not_measured`; an arm that decided no
+        # cell is `uncounted`, not missing.
+        missing = [v for v in features if v not in {a.vendor for a in arms} and (amd or v not in AMD_ONLY)]
         newest = max(arms, key=lambda a: a.date)
         out.append({
             'profile': profile, 'arch': arch, 'simd': simd, 'model': model,
             'cores': cores(declared.get(profile, {})) or host.get('logical_cpus'),
             'arms': arms, 'excluded': excluded, 'families': families, 'compared': compared,
-            'vendors': by_vendor(arms), 'amd': amd,
+            'vendors': by_vendor(arms, pin), 'amd': amd,
             'missing': sorted(missing, key=vendor_rank),
+            'uncounted': [v for v in sorted({a.vendor for a in arms}, key=vendor_rank) if v not in compared],
             'threads': sorted({t for a in arms for t in a.manifest['threads']['counts']
                                if t not in a.os_shared}),
             'os_shared': sorted({t for a in arms for t in a.os_shared}),
@@ -447,9 +471,11 @@ def across_pins(history, machine_list):
     for m in machine_list:
         # An older pin is counted over the same universe as the current one: one page per suite
         # and arm (the newest, `history` is newest first), not every page recorded at that pin.
+        # An arm's current pin is that vendor's own (`by_vendor`), not the machine's newest.
+        current = {v: c['commit'] for v, c in m['vendors'].items()}
         groups = {}
         for row in history:
-            if row['profile'] == m['profile'] and row['library_commit'] != m['commit']:
+            if row['profile'] == m['profile'] and row['library_commit'] != current.get(row['vendor'], m['commit']):
                 group = groups.setdefault(row['library_commit'], [])
                 if not any(r['suite'] == row['suite'] and r['vendor'] == row['vendor'] for r in group):
                     group.append(row)
@@ -466,7 +492,7 @@ def across_pins(history, machine_list):
         # decided cell (e.g. an older, pre-fair pin) has no share there either.
         for vendor, counts in m['vendors'].items():
             per_vendor.setdefault(vendor, []).append({
-                **pin_point(m['commit'], m['date'], counts['total']),
+                **pin_point(counts['commit'], counts['date'], counts['total']),
                 'suites': sorted({a.suite for a in m['arms'] if a.vendor == vendor})})
         for vendor in sorted(per_vendor, key=vendor_rank):
             out[(m['profile'], vendor)] = sorted(per_vendor[vendor], key=lambda p: p['date'])
@@ -487,6 +513,8 @@ def main():
         print(f"{m['profile']:12} {m['arch']} ({m['simd']}) · {m['model']} · {m['cores']} cores · "
               f"vs {', '.join(VENDOR_LABELS[v] for v in m['compared'])}"
               + (f" ({', '.join(VENDOR_LABELS[v] for v in m['missing'])} not measured)" if m['missing'] else '')
+              + (f" ({', '.join(VENDOR_LABELS[v] for v in uncounted(m))} measured, no cell counted)"
+                 if uncounted(m) else '')
               + ' · ' + (f'win {s[0]}% / tie {s[1]}% / lose {s[2]}%' if s else 'nothing decided')
               + f" · {t['win']}/{t['tie']}/{t['lose']} cells, {t['no_spread']} without spread, "
               f"{t['unresolved']} unresolved, {t['withdrawn']} withdrawn · behind {m['behind']}")
@@ -498,7 +526,7 @@ def main():
                 print(f'    vs {label:9} {not_measured(m, vendor)}')
                 continue
             vt, vs = v['total'], percentages(v['total'])
-            print(f'    vs {label:9} ' + (f'win {vs[0]}% / tie {vs[1]}% / lose {vs[2]}%' if vs else 'nothing decided')
+            print(f'    vs {label:9} ' + (f'win {vs[0]}% / tie {vs[1]}% / lose {vs[2]}%' if vs else 'measured, no cell counted')
                   + f" · {vt['win']}/{vt['tie']}/{vt['lose']} cells, {vt['no_spread']} without spread, "
                   f"{vt['unresolved']} unresolved, {vt['withdrawn']} withdrawn")
         columns = [v for v in VENDOR_ROWS if v in m['vendors']]
