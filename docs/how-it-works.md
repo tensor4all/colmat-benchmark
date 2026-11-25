@@ -128,6 +128,17 @@ toolkit supplies them.
 pins, which is what `gen_index.py --check` needs to say whether a recorded page is
 current.
 
+On a fresh checkout, install the pinned toolkit before running any script or test (this is what
+CI does; the scripts and `tests/` import `campaign_toolkit`), then materialise the pins:
+
+```bash
+python3 -m pip install -r requirements.txt
+./scripts/setup_extern_deps.sh
+python3 -m unittest discover -s tests
+python3 scripts/gen_site.py          # the site under result/ (not committed)
+python3 scripts/family_matrix.py     # the counts the landing page shows, per vendor and fastest of all
+```
+
 For local development, install the toolkit from a checkout instead of from git:
 
 ```bash
