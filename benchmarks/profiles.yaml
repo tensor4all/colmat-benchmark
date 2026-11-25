@@ -24,6 +24,12 @@ profiles:
   # host as it is measured today has SMT off, so it is a second profile, not a second
   # reading of the first (faer-benchmark#55): one name must not point at two machines.
   - zen2-cpu
+  # The measurement host from the evo -> evo2 switch (colmat-benchmark#129). evo is
+  # 4 Zen5 + 8 Zen5c, so any thread set above 4 mixes core types; evo2 is 16 uniform full
+  # Zen5 cores, which is what the core-count story needs. The declaration lives in
+  # `campaign_toolkit/profiles/evo2-zen5-16c.yaml`; it ships 1/4/8T because 16T cannot
+  # leave an observer CPU on this machine while measuring one thread per core (see there).
+  - evo2-zen5-16c
   - name: zen2-64-smt-off
     role: measurement
     description: >-
