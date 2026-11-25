@@ -303,20 +303,41 @@ class LandingPageTest(unittest.TestCase):
         cls.order, cls.pages, cls.history = fm.collect()
         cls.machines = {m['profile']: m for m in fm.machines(cls.order, cls.pages)}
 
-    def test_the_sections_come_in_the_mockups_order(self):
+    def strictest(self):
+        """The folded "vs the fastest of all" section."""
+        return self.index.split('<details class="strictest" id="vs-fastest">', 1)[1].split('</details>\n', 1)[0]
+
+    def section(self, vendor):
+        return self.index.split(f'<section class="vendor" id="vs-{vendor}">', 1)[1].split('</section>', 1)[0]
+
+    def test_the_sections_come_in_the_issues_order(self):
         index = self.index
-        marks = ['class="headline"', '<div class="tiles">', 'Not recorded yet:', '<table class="share">',
-                 '<h2 id="pins">', '<h2 id="method">', '<h2 id="runs">', 'History of published records']
+        # #129: tabs, one section per vendor (MKL, OpenBLAS, AOCL), then the strictest view folded
+        marks = ['<nav class="tabs"', 'id="vs-mkl"', 'id="vs-openblas"', 'id="vs-aocl"', 'Not recorded yet:',
+                 '<details class="strictest" id="vs-fastest">', '<h2 id="pins">', '<h2 id="method">',
+                 '<h2 id="runs">', 'History of published records']
         positions = [index.index(m) for m in marks]
         self.assertEqual(positions, sorted(positions))
-        # one tile and one column per recorded machine, the os-shared run folded into its machine
+        tabs = index.split('<nav class="tabs"', 1)[1].split('</nav>', 1)[0]
+        self.assertEqual(re.findall(r'<a href="#([^"]+)">', tabs), ['vs-mkl', 'vs-openblas', 'vs-aocl', 'vs-fastest'])
+        # in the strictest view, one tile and one column per recorded machine, the os-shared run
+        # folded into its machine
         self.assertEqual(list(self.machines), ['zen5-cpu', 'ohtaka-cpu', 'keyaki-64', 'ohtaka-fat'])
-        head = index.split('<table class="share">', 1)[1].split('</thead>', 1)[0]
+        strictest = self.strictest()
+        head = strictest.split('<table class="share">', 1)[1].split('</thead>', 1)[0]
         self.assertEqual(re.findall(r'<a href="#([^"]+)">', head), list(self.machines))
-        self.assertEqual(index.count('<div class="tile" id='), 4)
+        self.assertEqual(strictest.count('<div class="tile" id='), 4)
+        # in a vendor's section, one tile and one column per machine that measured that arm
+        for vendor in ('mkl', 'openblas', 'aocl'):
+            measured = [p for p, m in self.machines.items() if vendor in m['vendors']]
+            section = self.section(vendor)
+            self.assertEqual(re.findall(r'<div class="tile" id="([^"]+)">', section),
+                             [f'{vendor}-{p}' for p in measured], vendor)
+            head = section.split('<table class="share">', 1)[1].split('</thead>', 1)[0]
+            self.assertEqual(re.findall(r'<a href="#([^"]+)">', head), [f'{vendor}-{p}' for p in measured])
 
     def test_the_headline_names_its_comparison_set(self):
-        headline = self.index.split('class="headline">', 1)[1].split('</p>', 1)[0]
+        headline = self.strictest().split('class="headline">', 1)[1].split('</p>', 1)[0]
         fm = gen_site.family_matrix
         for m in self.machines.values():
             split = fm.percentages(m['total'])
@@ -482,23 +503,39 @@ class LandingPageTest(unittest.TestCase):
         # with two pins the section draws the lines and their table
         fm = gen_site.family_matrix
         m = self.machines['zen5-cpu']
-        points = {'zen5-cpu': [{'commit': 'a' * 40, 'date': '2026-11-01', 'counts': m['total'], 'why': None},
-                               {'commit': m['commit'], 'date': m['date'], 'counts': m['total'], 'why': None}]}
+        # with two pins the section draws one line per (machine, vendor) and their table (#129)
+        mkl, openblas = m['vendors']['mkl']['total'], m['vendors']['openblas']['total']
+        points = {('zen5-cpu', 'mkl'): [
+                      {'commit': 'a' * 40, 'date': '2026-11-01', 'counts': mkl, 'why': None},
+                      {'commit': m['commit'], 'date': m['date'], 'counts': mkl, 'why': None}],
+                  ('zen5-cpu', 'openblas'): [
+                      {'commit': 'a' * 40, 'date': '2026-11-01', 'counts': openblas, 'why': None},
+                      {'commit': m['commit'], 'date': m['date'], 'counts': openblas, 'why': None}]}
         drawn = gen_site.across_pins_html(points, [m])
-        self.assertIn('<polyline', drawn)
+        self.assertEqual(drawn.count('<polyline'), 2)
+        self.assertIn('zen5-cpu · vs MKL</text>', drawn)
+        self.assertIn('zen5-cpu · vs OpenBLAS</text>', drawn)
         self.assertIn('table: the plotted numbers', drawn)
-        self.assertEqual(drawn.count('<tr><td>zen5-cpu</td>'), 2)
+        self.assertEqual(drawn.count('<tr><td>zen5-cpu</td><td>MKL</td>'), 2)
+        self.assertEqual(drawn.count('<tr><td>zen5-cpu</td><td>OpenBLAS</td>'), 2)
         # each point states its own denominator
         self.assertIn('<th>decided cells</th><th>suites</th>', drawn)
-        self.assertEqual(drawn.count(f'<td>{348}</td>'), 2)
+        self.assertEqual(drawn.count(f'<td>{348}</td>'), 4)
         self.assertIn('can be over different cell sets', drawn)
-        across = fm.across_pins(self.history, [m])['zen5-cpu']
-        self.assertTrue(across)
-        # an older pin is counted over one page per suite and arm, like the current one
-        for point in across[:-1]:
-            rows = [r for r in self.history if r['profile'] == 'zen5-cpu' and r['library_commit'] == point['commit']]
-            self.assertEqual(point['suites'], sorted({r['suite'] for r in rows}))
-        self.assertEqual(across[-1]['suites'], sorted({a.suite for a in m['arms']}))
+        across = fm.across_pins(self.history, [m])
+        # one line per vendor arm the machine recorded at its current pin
+        self.assertEqual({k for k in across}, {('zen5-cpu', v) for v in m['vendors']} | {
+            ('zen5-cpu', r['vendor']) for r in self.history if r['profile'] == 'zen5-cpu'})
+        for (profile, vendor), line in across.items():
+            # an older pin is counted over one page per suite of that arm, like the current one
+            for point in line:
+                if point['commit'] == m['commit']:
+                    self.assertEqual(point['suites'], sorted({a.suite for a in m['arms'] if a.vendor == vendor}))
+                    continue
+                rows = [r for r in self.history if r['profile'] == 'zen5-cpu' and r['vendor'] == vendor
+                        and r['library_commit'] == point['commit']]
+                self.assertEqual(point['suites'], sorted({r['suite'] for r in rows}))
+        self.assertEqual(across[('zen5-cpu', 'mkl')][-1]['counts'], mkl)
         # and with one arm per (suite, vendor): a pin with two pages of one arm (v1 and v2 timing)
         # is counted over the newest only
         seen = []
@@ -511,6 +548,8 @@ class LandingPageTest(unittest.TestCase):
         self.assertTrue(seen)
         for arms in seen:
             self.assertEqual(len(arms), len(set(arms)), arms)
+            # and every older point is over one vendor's arms
+            self.assertEqual(len({v for _, v in arms}), 1, arms)
 
     def test_a_pin_without_a_decided_cell_is_never_a_share_point(self):
         # The review's state on #125: an older pre-fair pin (every vendor row withdrawn) next to
@@ -520,25 +559,26 @@ class LandingPageTest(unittest.TestCase):
         withdrawn = {'win': 0, 'tie': 0, 'lose': 0, 'no_spread': 0, 'withdrawn': 348}
         why = 'vendor rows withdrawn (recorded before the fair harness)'
         # the consumer: even handed the undecided counts as a point, it never indexes a missing share
-        review = {'zen5-cpu': [{'commit': 'a' * 40, 'date': '2026-10-16', 'counts': withdrawn, 'why': 'withdrawn'},
-                               {'commit': m['commit'], 'date': m['date'], 'counts': m['total'], 'why': None}]}
+        review = {('zen5-cpu', 'mkl'): [
+            {'commit': 'a' * 40, 'date': '2026-10-16', 'counts': withdrawn, 'why': 'withdrawn'},
+            {'commit': m['commit'], 'date': m['date'], 'counts': m['total'], 'why': None}]}
         text = gen_site.across_pins_html(review, [m])
-        self.assertIn('<code>zen5-cpu</code>: 1 pin with a share, 1 pin(s) without one (withdrawn)', text)
+        self.assertIn('<code>zen5-cpu · vs MKL</code>: 1 pin with a share, 1 pin(s) without one (withdrawn)', text)
         self.assertNotIn('<polyline', text)
         # the producer: a pin with no decided cell carries no counts and says why, the current
         # pin included
         self.assertEqual(fm.pin_point('b' * 40, '2026-10-16', withdrawn),
                          {'commit': 'b' * 40, 'date': '2026-10-16', 'counts': None, 'why': why})
-        only_old = {**m, 'total': withdrawn}
-        points = fm.across_pins([], [only_old])['zen5-cpu']
+        only_old = {**m, 'total': withdrawn, 'vendors': {'mkl': {**m['vendors']['mkl'], 'total': withdrawn}}}
+        points = fm.across_pins([], [only_old])[('zen5-cpu', 'mkl')]
         self.assertEqual([(p['counts'], p['why']) for p in points], [(None, why)])
-        text = gen_site.across_pins_html({'zen5-cpu': points}, [only_old])
-        self.assertIn('<code>zen5-cpu</code>: no pin with a share, 1 pin(s) without one '
+        text = gen_site.across_pins_html({('zen5-cpu', 'mkl'): points}, [only_old])
+        self.assertIn('<code>zen5-cpu · vs MKL</code>: no pin with a share, 1 pin(s) without one '
                       '(vendor rows withdrawn (recorded before the fair harness))', text)
         self.assertNotIn('None', text)
         # one older decided pin plus a current pin without a decided cell: no crash, no line
         older = fm.pin_point('c' * 40, '2026-10-01', m['total'])
-        text = gen_site.across_pins_html({'zen5-cpu': [older] + points}, [only_old])
+        text = gen_site.across_pins_html({('zen5-cpu', 'mkl'): [older] + points}, [only_old])
         self.assertIn('1 pin with a share, 1 pin(s) without one', text)
 
     def test_the_page_and_the_cli_print_the_same_percentages(self):
@@ -565,6 +605,89 @@ class LandingPageTest(unittest.TestCase):
             self.assertNotIn('throughput-', tile, profile)
         zen5 = self.index.split('<div class="tile" id="zen5-cpu">', 1)[1].split('<div class="tile"', 1)[0]
         self.assertIn('throughput-f64-f.html', zen5)
+
+    def test_a_machine_with_several_arms_is_counted_per_vendor(self):
+        # #129: zen5-cpu measured MKL, OpenBLAS and AOCL. Each vendor's counts are `tally` over that
+        # vendor's arms alone, the CLI prints the same counts, and the page's tile and per-family
+        # table carry them; the fastest-of-all counts stay what they were.
+        fm = gen_site.family_matrix
+        m = self.machines['zen5-cpu']
+        self.assertEqual(list(m['vendors']), ['mkl', 'openblas', 'aocl'])
+        expected = {'mkl': (268, 34, 46, 77), 'openblas': (325, 12, 11, 93), 'aocl': (255, 51, 42, 73)}
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            fm.main()
+        cli = out.getvalue().split('zen5-cpu ', 1)[1].split('\nohtaka-cpu', 1)[0]
+        for vendor, (win, tie, lose, pct) in expected.items():
+            with self.subTest(vendor=vendor):
+                families, _ = fm.tally([a for a in m['arms'] if a.vendor == vendor])
+                self.assertEqual(m['vendors'][vendor]['families'], families)
+                t = m['vendors'][vendor]['total']
+                self.assertEqual((t['win'], t['tie'], t['lose']), (win, tie, lose))
+                self.assertEqual(fm.percentages(t)[0], pct)
+                label = fm.VENDOR_LABELS[vendor]
+                split = fm.percentages(t)
+                self.assertIn(f'vs {label:9} win {split[0]}% / tie {split[1]}% / lose {split[2]}% '
+                              f'· {win}/{tie}/{lose} cells', cli)
+                tile = self.index.split(f'<div class="tile" id="{vendor}-zen5-cpu">', 1)[1].split('<div class="tile"', 1)[0]
+                self.assertIn(f'{win} / {tie} / {lose} (win / tie / lose', tile)
+                self.assertIn(f'vs {label}</div>', tile)
+                self.assertIn(f'<b>{pct}%</b> on Zen 5 · 12 cores', self.section(vendor))
+        # the strictest view keeps today's number, beside the vendors in the per-family table
+        self.assertEqual(fm.percentages(m['total'])[0], 61)
+        table = self.strictest().split('id="vs-table-zen5-cpu">', 1)[1].split('</table>', 1)[0]
+        self.assertIn('<th>vs MKL</th><th>vs OpenBLAS</th><th>vs AOCL</th><th>vs fastest of all</th>', table)
+        self.assertIn('<b>77%</b> <span class="sm">(268/34/46)</span></td><td><b>93%</b> <span class="sm">'
+                      '(325/12/11)</span></td><td><b>73%</b> <span class="sm">(255/51/42)</span></td><td><b>61%</b> '
+                      '<span class="sm">(211/62/75)</span>', table)
+
+    def test_grouping_by_vendor_changes_no_verdict(self):
+        # #129 item 3: only the grouping changes. Every cell of the fastest-of-all view is the same
+        # cell, with the same result and medians, in the section of the vendor that was fastest there.
+        for m in self.machines.values():
+            for family, counts in m['families'].items():
+                for cell in counts['cells']:
+                    mine = m['vendors'][cell['vendor']]['families'][family]['cells']
+                    self.assertIn(cell, mine, (m['profile'], cell['at']))
+            # and a vendor's cells are cells some arm of that vendor compared
+            for vendor, v in m['vendors'].items():
+                for counts in v['families'].values():
+                    self.assertTrue(all(c['vendor'] == vendor for c in counts['cells']))
+
+    def test_a_machine_missing_an_arm_has_no_tile_and_says_not_measured(self):
+        # ohtaka-fat (Intel) measured MKL only: no OpenBLAS or AOCL tile or column; each section
+        # names it as not measured against that vendor, and AOCL says why (an AMD-host arm).
+        fm = gen_site.family_matrix
+        m = self.machines['ohtaka-fat']
+        self.assertEqual(list(m['vendors']), ['mkl'])
+        self.assertEqual(fm.not_measured(m, 'openblas'), 'not measured against OpenBLAS')
+        self.assertIn('AMD-host arm', fm.not_measured(m, 'aocl'))
+        self.assertIsNone(fm.not_measured(m, 'mkl'))
+        for vendor, label in (('openblas', 'OpenBLAS'), ('aocl', 'AOCL')):
+            section = self.section(vendor)
+            self.assertNotIn(f'id="{vendor}-ohtaka-fat"', section)
+            self.assertNotIn(f'href="#{vendor}-ohtaka-fat"', section)
+            absent = section.split('<p class="absent sm">', 1)[1].split('</p>', 1)[0]
+            self.assertIn(f'Not measured against {label}:', absent)
+            self.assertIn('<code>ohtaka-fat</code>', absent)
+        self.assertIn('id="mkl-ohtaka-fat"', self.section('mkl'))
+        self.assertNotIn('<p class="absent', self.section('mkl'))
+        # independent of the recorded data: drop zen5's AOCL arm and its AOCL section loses the tile
+        zen5 = self.machines['zen5-cpu']
+        cut = dict(zen5, vendors={v: c for v, c in zen5['vendors'].items() if v != 'aocl'})
+        families = fm.universe([cut])
+        section = gen_site.vendor_section_html('aocl', [cut], families, {})
+        self.assertNotIn('<div class="tile"', section)
+        self.assertNotIn('<table class="share">', section)
+        self.assertIn('Not measured against AOCL: Zen 5 · 12 cores <code>zen5-cpu</code>', section)
+        self.assertIn('No machine measured AOCL.', section)
+        self.assertIn('<div class="tile" id="mkl-zen5-cpu">', gen_site.vendor_section_html('mkl', [cut], families, {}))
+        # and the CLI says the same
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            fm.main()
+        cli = out.getvalue().split('ohtaka-fat ', 1)[1]
+        self.assertIn('vs OpenBLAS  not measured against OpenBLAS', cli)
 
     def test_how_the_numbers_are_made(self):
         method = self.index.split('<h2 id="method">', 1)[1].split('<h2', 1)[0]

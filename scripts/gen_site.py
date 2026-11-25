@@ -10,11 +10,16 @@ toolkit's (`campaign_toolkit.site`). The throughput charts are one page per reco
 `(dtype, order)` dataset (`result/throughput-<dtype>-<order>.html`, `benchmarks/throughput.yaml`
 `variants:`), linked from the landing page instead of carried on it.
 
-The landing page is this campaign's own (#116), in the toolkit's frame (`site.write_page`), and
-follows the maintainer's mockup on the issue: a generated headline whose every claim names its
-comparison set, one win-share tile per machine, the family x machine win-share matrix, the win
-share across pins, how the numbers are made, then each machine's provenance and run pages, folded.
-Every number on it comes from `family_matrix.py`. What is also this campaign's own is the four-way view: the MKL and
+The landing page is this campaign's own (#116), in the toolkit's frame (`site.write_page`). It
+leads with one section per vendor (#129), MKL, OpenBLAS, AOCL, reached by tabs at the top: each has
+a one-line headline, one win-share tile per machine that measured that arm (a machine without it
+gets no tile and the section names it "not measured against X") and the family x machine matrix for
+that arm alone. "vs the fastest of all", the per-cell minimum over every arm (#116's view), follows
+folded as the strictest view, with its own tiles, a per-family table that sets it beside each
+vendor, and its matrix. Then the win share across pins, one line per (machine, vendor), how the
+numbers are made, and each machine's provenance and run pages, folded. Every number on it comes
+from `family_matrix.py` (`by_vendor` and `tally`); the machines are whatever the data recorded, not
+a list kept here. What is also this campaign's own is the four-way view: the MKL and
 OpenBLAS arms (and, on AMD profiles once recorded, the AOCL arm) of the current `colmat-kernels` pages joined on the cell key by `gen_comparison.py`,
 written to `result/zen5-cpu/colmat-kernels/<rev12>-comparison.html` and linked from the landing page.
 
@@ -307,6 +312,13 @@ table.share td a{color:inherit;text-decoration:none;display:block}
 table.share td.na{background:#fff;border:1px dashed #c9c7bf;color:#888780;font-size:12px}
 .lw{color:#27500a}.ll{color:#791f1f}
 .placeholder{border:1px dashed #c9c7bf;border-radius:8px;padding:12px 14px}
+.tabs{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 14px}
+.tabs a{border:1px solid #dcdad3;border-radius:8px;padding:4px 12px;text-decoration:none}
+section.vendor{border-top:1px solid #dcdad3;padding-top:4px;margin-bottom:18px}
+section.vendor:target,details.strictest:target{outline:2px solid #b4b2a9;outline-offset:6px;border-radius:4px}
+.absent{border:1px dashed #c9c7bf;border-radius:8px;padding:8px 12px;margin:10px 0}
+details.strictest{border-top:1px solid #dcdad3;padding:6px 0 12px}
+details.strictest>summary{cursor:pointer;font-size:1.2em;font-weight:500}
 details.machine{border-top:1px solid #dcdad3;padding:6px 0}
 details.machine>summary{cursor:pointer;font-weight:500}
 figure{margin:1rem 0 .3rem}figure img{max-width:100%}
@@ -391,7 +403,9 @@ def subline_html(revision, version):
             '<a href="#method">how the numbers are made</a></p>\n')
 
 
-def tile_html(m, families, chart_href):
+def tile_html(m, families, chart_href, anchor=None, opponent='the fastest vendor arm'):
+    """One machine's win-share tile. `m` is a machine (`family_matrix.machines`) or its view against
+    one vendor (`vendor_view`); `anchor` is the tile's id, the profile unless given."""
     s = family_matrix.share(m['total'])
     t = m['total']
     lean = family_matrix.leaning(t)
@@ -419,7 +433,8 @@ def tile_html(m, families, chart_href):
                      + (f' ({html.escape(_vendors(m["missing"]))} not measured)' if m['missing'] else '')
                      + '</div>')
     else:
-        lines.append('<div class="big">&mdash;</div><div class="sm">no cell compared with a vendor</div>')
+        lines.append('<div class="big">&mdash;</div><div class="sm">no cell compared with '
+                     f'{html.escape(opponent)}</div>')
     covered = _families_text(m, families)
     if len([f for f in families if f in m['families']]) < len(families):
         covered = f'<b>{covered}</b>'
@@ -451,19 +466,19 @@ def tile_html(m, families, chart_href):
     link = (f'<a href="{html.escape(href)}">Throughput charts &rarr;</a>' if href
             else f'<a href="#runs-{html.escape(m["profile"])}">Recorded pages &rarr;</a>')
     simd = f' <span class="sm">({html.escape(m["simd"])})</span>' if m['simd'] else ''
-    return (f'<div class="tile" id="{html.escape(m["profile"])}"><div class="name">{html.escape(m["arch"])}{simd}</div>'
+    return (f'<div class="tile" id="{html.escape(anchor or m["profile"])}"><div class="name">{html.escape(m["arch"])}{simd}</div>'
             f'<div class="sm">{html.escape(m["model"])}'
             + (f' &middot; {m["cores"]} cores' if m['cores'] else '')
             + f' &middot; <code>{html.escape(m["profile"])}</code></div>'
             + ''.join(lines) + f'<div class="sm" style="margin-top:6px">{link}</div></div>\n')
 
 
-def tiles_html(machines, families, chart_href, unrecorded):
-    out = '<div class="tiles">\n' + ''.join(tile_html(m, families, chart_href) for m in machines) + '</div>\n'
-    out += ('<p class="sm" style="margin:8px 0 4px">Bar: <span class="lw">win</span> / tie / '
-            '<span class="ll">lose</span>, as shares of the cells compared with the fastest vendor arm '
-            'on that machine. A machine recorded at an older pin is shown, not hidden, with a badge '
-            'such as <span class="badge">older pin: N commits behind</span>.</p>\n')
+def legend_html(unrecorded):
+    """The tiles' legend and the declared machines with no recording yet."""
+    out = ('<p class="sm" style="margin:8px 0 4px">Bar: <span class="lw">win</span> / tie / '
+           '<span class="ll">lose</span>, as shares of the cells compared with that section\'s '
+           'opponent on that machine. A machine recorded at an older pin is shown, not hidden, with a '
+           'badge such as <span class="badge">older pin: N commits behind</span>.</p>\n')
     if unrecorded:
         names = ' &middot; '.join(
             f'{html.escape(u["arch"])}' + (f' ({html.escape(u["simd"])})' if u['simd'] else '')
@@ -473,6 +488,143 @@ def tiles_html(machines, families, chart_href, unrecorded):
     return out
 
 
+def _vendor_anchor(vendor):
+    return f'vs-{vendor}'
+
+
+def vendor_view(m, vendor):
+    """`m` seen against one vendor arm (#129): the same machine, with the families, the counts and
+    the thread rows of `family_matrix.by_vendor` in place of the fastest-of-all ones. None when the
+    machine has no arm of that vendor."""
+    v = m['vendors'].get(vendor)
+    if v is None:
+        return None
+    return dict(m, families=v['families'], total=v['total'], compared=[vendor], missing=[],
+                threads=v['threads'] or m['threads'])
+
+
+def vendor_headline_html(vendor, views, families):
+    """`colmat beats MKL in 77% on Zen 5 · 12 cores, ... of the cells compared.`: one claim per
+    machine that measured the arm, each carrying its coverage when it compared fewer families."""
+    label = family_matrix.VENDOR_LABELS.get(vendor, vendor)
+    parts, undecided = [], []
+    for m in views:
+        s = family_matrix.percentages(m['total'])
+        name = html.escape(_short(m))
+        if not s:
+            undecided.append(name)
+            continue
+        n = len([f for f in families if f in m['families']])
+        scope = f' ({n} of {len(families)} families)' if n < len(families) else ''
+        parts.append(f'<b>{s[0]}%</b> on {name}{html.escape(scope)}')
+    sentences = []
+    if parts:
+        joined = parts[0] if len(parts) == 1 else ', '.join(parts[:-1]) + ' and ' + parts[-1]
+        sentences.append(f'colmat beats {html.escape(label)} in {joined} of the cells compared.')
+    if undecided:
+        sentences.append(f'No cell decided against {html.escape(label)} on {", ".join(undecided)}.')
+    if not sentences:
+        sentences.append(f'No machine measured {html.escape(label)}.')
+    return f'<p class="headline">{" ".join(sentences)}</p>\n'
+
+
+def vendor_section_html(vendor, machines, families, chart_href):
+    """One vendor's section: headline, one tile per machine that measured the arm, the machines
+    that did not ("not measured against X", no tile), and the family x machine matrix for the arm."""
+    label = family_matrix.VENDOR_LABELS.get(vendor, vendor)
+    opponent = f'the {label} arm'
+    views = [v for v in (vendor_view(m, vendor) for m in machines) if v is not None]
+    absent = [m for m in machines if m['profile'] not in {v['profile'] for v in views}]
+    prefix = f'{vendor}-'
+    out = (f'<section class="vendor" id="{_vendor_anchor(vendor)}">\n<h2>vs {html.escape(label)}</h2>\n'
+           + vendor_headline_html(vendor, views, families))
+    if views:
+        out += ('<div class="tiles">\n'
+                + ''.join(tile_html(v, families, chart_href, anchor=prefix + v['profile'], opponent=opponent)
+                          for v in views)
+                + '</div>\n')
+    if absent:
+        names = ' &middot; '.join(
+            f'{html.escape(_short(m))} <code>{html.escape(m["profile"])}</code>'
+            + (' <span class="sm">(an AMD-host arm; not an AMD CPU)</span>'
+               if vendor in family_matrix.AMD_ONLY and not m.get('amd') else '')
+            for m in absent)
+        out += (f'<p class="absent sm">Not measured against {html.escape(label)}: {names}. '
+                'No tile and no column: a machine that never ran the arm has no share against it.</p>\n')
+    if views:
+        out += matrix_html(views, families, chart_href, anchor=f'families-{vendor}', prefix=prefix,
+                           opponent=opponent, heading=f'Win share by family vs {label}')
+    return out + '</section>\n'
+
+
+def tabs_html(vendors):
+    """The tabs at the top: one anchor per vendor section, then the strictest view."""
+    links = [f'<a href="#{_vendor_anchor(v)}">vs {html.escape(family_matrix.VENDOR_LABELS.get(v, v))}</a>'
+             for v in vendors]
+    links.append('<a href="#vs-fastest">vs the fastest of all</a>')
+    return f'<nav class="tabs" aria-label="opponent">{"".join(links)}</nav>\n'
+
+
+def comparison_table_html(m, families):
+    """One machine's per-family table: the win share against each vendor arm it measured beside the
+    one against the fastest of all, so a reader sees how much of the gap is the per-cell minimum."""
+    vendors = [v for v in family_matrix.VENDOR_ROWS if v in m['vendors']]
+    if not vendors:
+        return ''
+
+    def cell(counts):
+        if not counts:
+            return '<td class="sm">&ndash;</td>'
+        s = family_matrix.percentages(counts)
+        if not s:
+            return '<td class="sm">no decided cell</td>'
+        tie = f' <span class="sm">({s[1]}% tie)</span>' if s[1] >= 50 else ''
+        return (f'<td title="{counts["win"]} win / {counts["tie"]} tie / {counts["lose"]} lose">'
+                f'{s[0]}%{tie}</td>')
+
+    head = ''.join(f'<th>vs {html.escape(family_matrix.VENDOR_LABELS.get(v, v))}</th>' for v in vendors)
+    rows = []
+    for family in families:
+        if family not in m['families'] and not any(family in m['vendors'][v]['families'] for v in vendors):
+            continue
+        rows.append(f'<tr><td>{html.escape(family)}</td>'
+                    + ''.join(cell(m['vendors'][v]['families'].get(family)) for v in vendors)
+                    + cell(m['families'].get(family)) + '</tr>')
+
+    def whole(counts):
+        s = family_matrix.percentages(counts)
+        if not s:
+            return '<td class="sm">no decided cell</td>'
+        return f'<td><b>{s[0]}%</b> <span class="sm">({counts["win"]}/{counts["tie"]}/{counts["lose"]})</span></td>'
+    rows.append('<tr><td><b>all cells</b></td>' + ''.join(whole(m['vendors'][v]['total']) for v in vendors)
+                + whole(m['total']) + '</tr>')
+    return (f'<p class="sm" style="margin:10px 0 2px"><b>{html.escape(_short(m))}</b> '
+            f'<code>{html.escape(m["profile"])}</code></p>'
+            f'<div class="matrix-wrap"><table class="vs-table" id="vs-table-{html.escape(m["profile"])}">'
+            f'<tr><th>family</th>{head}<th>vs fastest of all</th></tr>'
+            + ''.join(rows) + '</table></div>\n')
+
+
+def strictest_html(machines, families, chart_href):
+    """"vs the fastest of all", folded: the per-cell minimum over every vendor arm (#116's view)."""
+    return ('<details class="strictest" id="vs-fastest">\n<summary>vs the fastest of all: the '
+            'strictest view</summary>\n'
+            '<p class="sm">Every cell compared with the vendor arm that was fastest at that cell, '
+            'whichever library it was, inside that arm\'s own process. The cell rule and the verdict '
+            'are the ones above; only the opponent differs. A machine with more arms faces a harder '
+            'opponent here, so this view does not compare machines with each other.</p>\n'
+            + headline_html(machines, families)
+            + '<div class="tiles">\n' + ''.join(tile_html(m, families, chart_href) for m in machines)
+            + '</div>\n'
+            + '<h3 id="vs-tables">Per family: each vendor beside the fastest of all</h3>\n'
+            + '<p class="sm">Win share of the decided cells (hover for win / tie / lose); the last '
+              'row gives the counts. The difference between a vendor column and the last one is the '
+              'part of the gap that comes from taking the per-cell minimum.</p>\n'
+            + ''.join(comparison_table_html(m, families) for m in machines)
+            + matrix_html(machines, families, chart_href, heading='Win share by family vs the fastest of all')
+            + '</details>\n')
+
+
 def _cell_href(m, family, chart_href):
     if m['profile'] in chart_href:
         return chart_href[m['profile']]
@@ -480,9 +632,12 @@ def _cell_href(m, family, chart_href):
     return _page_href(pages[0]) if pages else f'#runs-{m["profile"]}'
 
 
-def matrix_html(machines, families, chart_href):
-    """Win share by family: one row per family, one column per machine."""
-    head = ''.join(f'<th scope="col"><a href="#{html.escape(m["profile"])}">{html.escape(_short(m))}</a></th>'
+def matrix_html(machines, families, chart_href, *, anchor='families', prefix='',
+                opponent='the fastest vendor arm', heading='Win share by family'):
+    """Win share by family: one row per family, one column per machine. The machines are either
+    the machines (`opponent` the fastest arm) or their views against one vendor (`vendor_view`),
+    whose tiles carry `prefix` before the profile in their ids."""
+    head = ''.join(f'<th scope="col"><a href="#{html.escape(prefix + m["profile"])}">{html.escape(_short(m))}</a></th>'
                    for m in machines)
     words = {'win': ('w', 'mostly win'), 'lose': ('l', 'mostly lose'), 'tie': ('t', 'mostly tie'),
              'mixed': ('t', 'mixed')}
@@ -503,15 +658,15 @@ def matrix_html(machines, families, chart_href):
                 continue
             cls, word = words[family_matrix.leaning(counts)]
             title = (f"{counts['win']} win / {counts['tie']} tie / {counts['lose']} lose of "
-                     f"{counts['win'] + counts['tie'] + counts['lose']} cells against the fastest vendor arm")
+                     f"{counts['win'] + counts['tie'] + counts['lose']} cells against {opponent}")
             tds.append(f'<td class="{cls}"><a href="{html.escape(_cell_href(m, family, chart_href))}" '
                        f'title="{html.escape(title)}">{s[0]}% &middot; {word}</a></td>')
         rows.append(f'<tr><th scope="row">{html.escape(family)}</th>{"".join(tds)}</tr>')
-    return ('<h2 id="families">Win share by family</h2>\n'
+    return (f'<h3 id="{html.escape(anchor)}">{html.escape(heading)}</h3>\n'
             '<div class="matrix-wrap"><table class="share">\n'
             f'<thead><tr><th></th>{head}</tr></thead>\n<tbody>\n{chr(10).join(rows)}\n</tbody></table></div>\n'
             '<p class="sm" style="margin:6px 0 18px">Each cell is the share of that family\'s cells '
-            'colmat wins against the fastest vendor arm, and links to that machine\'s throughput charts '
+            f'colmat wins against {html.escape(opponent)}, and links to that machine\'s throughput charts '
             '(or, where it has none yet, the recorded page). Cell colour: mostly win / mixed or tie / '
             'mostly lose, where "mostly" is more than half of the cells; the word says the same. '
             '"Not measured" (the machine recorded no row of the family), "no vendor cell" (rows '
@@ -520,59 +675,76 @@ def matrix_html(machines, families, chart_href):
             'for the counts.</p>\n')
 
 
+def _line_name(key):
+    profile, vendor = key
+    return f'{profile} · vs {family_matrix.VENDOR_LABELS.get(vendor, vendor)}'
+
+
 def across_pins_html(points, machines):
-    """Win share across pins: one line per machine, from the second pin a machine has a share at."""
+    """Win share across pins: one line per (machine, vendor) (#129), from the second pin that line
+    has a share at. `points` is `family_matrix.across_pins`, keyed by (profile, vendor)."""
     # A pin without a decided cell has no share (`counts` None, `why` set): it is never plotted,
     # never tabled and never counted as a pin with a share, whatever the producer handed over.
     def has_share(p):
         return p['counts'] is not None and family_matrix.share(p['counts']) is not None
-    lines = {m['profile']: [p for p in points.get(m['profile'], []) if has_share(p)] for m in machines}
+    profiles = [m['profile'] for m in machines]
+    keys = sorted((k for k in points if k[0] in profiles),
+                  key=lambda k: (profiles.index(k[0]), family_matrix.vendor_rank(k[1])))
+    lines = {k: [p for p in points[k] if has_share(p)] for k in keys}
     drawn = {k: v for k, v in lines.items() if len(v) >= 2}
     out = '<h2 id="pins">Win share across pins</h2>\n'
     if not drawn:
         why = []
-        for m in machines:
-            skipped = [p for p in points.get(m['profile'], []) if not has_share(p)]
-            n = len(lines[m['profile']])
-            text = (f'<code>{html.escape(m["profile"])}</code>: '
+        for k in keys:
+            skipped = [p for p in points[k] if not has_share(p)]
+            n = len(lines[k])
+            text = (f'<code>{html.escape(_line_name(k))}</code>: '
                     + (f'{n} pin{"s" if n != 1 else ""} with a share' if n else 'no pin with a share'))
             if skipped:
                 reasons = sorted({p['why'] or 'no decided cell' for p in skipped})
                 text += f', {len(skipped)} pin(s) without one ({html.escape("; ".join(reasons))})'
             why.append(text)
-        return out + ('<div class="placeholder sm">One line per machine, appearing from the second pin '
-                      'with a share. Not yet: ' + '; '.join(why) + '.</div>\n')
+        return out + ('<div class="placeholder sm">One line per machine and vendor arm, appearing from '
+                      'the second pin with a share. Not yet: ' + '; '.join(why) + '.</div>\n')
     width, height, pad = 640, 220, 36
     every = sorted({p['date'] for v in drawn.values() for p in v})
     x = {d: pad + (width - 2 * pad) * (i / max(1, len(every) - 1)) for i, d in enumerate(every)}
     y = lambda share: height - pad - (height - 2 * pad) * share   # noqa: E731
     palette = ('#185fa5', '#639922', '#e24b4a', '#7f4fb5', '#b4801d')
+    # colour = machine, dash = vendor, and the end label names both
+    dashes = {'mkl': '', 'openblas': '6 3', 'aocl': '2 3'}
+    colours = {p: palette[i % len(palette)] for i, p in enumerate(dict.fromkeys(k[0] for k in drawn))}
     svg = [f'<svg viewBox="0 0 {width} {height}" width="100%" role="img" aria-label="win share across pins">',
            f'<text x="{pad}" y="14" font-size="11" fill="#5f5e5a">win share (% of cells), linear</text>']
     for level in (0, .5, 1):
         svg.append(f'<line x1="{pad}" x2="{width - pad}" y1="{y(level):.1f}" y2="{y(level):.1f}" stroke="#dcdad3"/>'
                    f'<text x="4" y="{y(level) + 4:.1f}" font-size="11" fill="#5f5e5a">{round(level * 100)}%</text>')
     table = []
-    for i, (profile, pts) in enumerate(drawn.items()):
-        colour = palette[i % len(palette)]
+    for key, pts in drawn.items():
+        colour, dash = colours[key[0]], dashes.get(key[1], '4 2')
         coords = ' '.join(f'{x[p["date"]]:.1f},{y(family_matrix.share(p["counts"])[0]):.1f}' for p in pts)
-        svg.append(f'<polyline fill="none" stroke="{colour}" stroke-width="2" points="{coords}"/>')
+        svg.append(f'<polyline fill="none" stroke="{colour}" stroke-width="2"'
+                   + (f' stroke-dasharray="{dash}"' if dash else '') + f' points="{coords}"/>')
         svg.append(f'<text x="{width - pad + 4}" y="{y(family_matrix.share(pts[-1]["counts"])[0]) + 4:.1f}" '
-                   f'font-size="11" fill="{colour}">{html.escape(profile)}</text>')
+                   f'font-size="11" fill="{colour}">{html.escape(_line_name(key))}</text>')
         for p in pts:
             s = family_matrix.percentages(p['counts'])
             n = p['counts']['win'] + p['counts']['tie'] + p['counts']['lose']
-            table.append(f'<tr><td>{html.escape(profile)}</td><td><code>{html.escape(p["commit"][:12])}</code></td>'
+            table.append(f'<tr><td>{html.escape(key[0])}</td>'
+                         f'<td>{html.escape(family_matrix.VENDOR_LABELS.get(key[1], key[1]))}</td>'
+                         f'<td><code>{html.escape(p["commit"][:12])}</code></td>'
                          f'<td>{html.escape(p["date"])}</td><td>{s[0]}%</td><td>{s[1]}%</td>'
                          f'<td>{s[2]}%</td><td>{n}</td><td>{html.escape(", ".join(p.get("suites", [])))}</td></tr>')
     svg.append('</svg>')
     return (out + ''.join(svg)
-            + '<p class="sm">x: the pins in recording order; y: win share, 0&ndash;100%. Each point is '
-              'over the decided cells of that pin\'s own pages (one per suite and arm), so two points '
-              'can be over different cell sets: the table gives each point\'s cells and suites.</p>\n'
+            + '<p class="sm">x: the pins in recording order; y: win share against one vendor arm, '
+              '0&ndash;100%; colour is the machine, dash the vendor (solid MKL, dashed OpenBLAS, dotted '
+              'AOCL). Each point is over the decided cells of that pin\'s own pages of that arm (one '
+              'per suite), so two points can be over different cell sets: the table gives each '
+              'point\'s cells and suites.</p>\n'
             + '<details><summary class="sm">table: the plotted numbers</summary><table>'
-            + '<tr><th>machine</th><th>colmat</th><th>recorded</th><th>win</th><th>tie</th><th>lose</th>'
-            '<th>decided cells</th><th>suites</th></tr>'
+            + '<tr><th>machine</th><th>vs</th><th>colmat</th><th>recorded</th><th>win</th><th>tie</th>'
+            '<th>lose</th><th>decided cells</th><th>suites</th></tr>'
             + ''.join(table) + '</table></details>\n')
 
 
@@ -627,8 +799,10 @@ def method_html(machines):
         '(<code>result/INDEX.md</code>, the index\'s own rule), under <code>data/results/</code>.</li>\n'
         f'<li>A cell: one family, shape, dtype and thread count, F order, {"/".join(family_matrix.DTYPES)}, '
         f'every dimension &ge; {family_matrix.MIN_N}, batch 1, the kernel route (the '
-        '<code>api-inclusive</code> rows are not counted). colmat is compared with the vendor row of '
-        'the fastest vendor arm for that cell, inside that arm\'s own process.</li>\n'
+        '<code>api-inclusive</code> rows are not counted). In a vendor\'s section colmat is compared '
+        'with that vendor\'s row, inside that arm\'s own process; in the folded strictest view, with '
+        'the vendor row of the fastest vendor arm for that cell. The grouping is the only difference '
+        '(<code>family_matrix.by_vendor</code> calls <code>tally</code> with one vendor\'s arms).</li>\n'
         '<li>Win / tie / lose: each recorded value is the median of the process medians, and '
         '<code>&plusmn;</code> the sample SD of those medians across process starts. A win or a loss '
         'is a difference larger than the two rows\' combined relative SD, floored at 5%, and larger '
@@ -731,6 +905,10 @@ def main(argv=None):
     machines = family_matrix.machines(order, pages)
     unrecorded = family_matrix.unrecorded(order, pages)
     families = family_matrix.universe(machines)
+    # One section per vendor arm the campaign declares, in MKL, OpenBLAS, AOCL order (#129).
+    features = descriptor.current().measured.get('features') or list(family_matrix.VENDOR_ROWS)
+    vendors = sorted({v for v in features if v in family_matrix.VENDOR_ROWS}
+                     | {v for m in machines for v in m['vendors']}, key=family_matrix.vendor_rank)
     # The machines the throughput charts are drawn from: the profiles of the current pages of the
     # suites `figures.throughput.runs` declares (#114 adds the others' charts).
     declared = yaml.safe_load((ROOT / 'benchmarks' / 'campaign.yaml').read_text())
@@ -781,11 +959,12 @@ def main(argv=None):
           f'<a href="{html.escape(first_chart)}">Throughput</a> &middot; <a href="#runs">Runs</a> &middot; '
           '<a href="history.html">History</a> &middot; <a href="#method">How the numbers are made</a></span></nav>\n'
         + '<section id="overview">\n'
-        + headline_html(machines, families)
         + subline_html(revision, version)
-        + tiles_html(machines, families, chart_href, unrecorded)
+        + tabs_html(vendors)
+        + ''.join(vendor_section_html(v, machines, families, chart_href) for v in vendors)
+        + legend_html(unrecorded)
+        + strictest_html(machines, families, chart_href)
         + '</section>\n'
-        + matrix_html(machines, families, chart_href)
         + across_pins_html(family_matrix.across_pins(history, machines), machines)
         + trend_html(trend)
         + method_html(machines)
