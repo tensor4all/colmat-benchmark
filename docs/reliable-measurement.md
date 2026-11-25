@@ -115,11 +115,14 @@ is never the difference between two harness choices:
   a driver writes (`S`, `U`, `Vt`, eigenvalues, eigenvectors, the explicit `Q`), the faer in-place
   routes' matrix, right-hand side, permutations and `MemStack` (sized by the library's own
   `*_scratch`), and both arms' reference buffers.
-- For `lu`, `cholesky`, `solve`, `qr`, `svd_values`, `svd_thin` and `eigh` every row makes the same
-  kind of call: `prepare` restores the input into the prepared buffer, outside the clock, and the
+- For `lu`, `cholesky`, `solve`, `qr`, `svd_values`, `svd_thin` and `eigh` (and `full_piv_lu`,
+  `triangular_solve`, `householder_apply`, which have a vendor route since #131) every row makes
+  the same kind of call: `prepare` restores the input into the prepared buffer, outside the clock, and the
   timed call is the decomposition (and solve, and output formation) alone -- `getrf_work`,
-  `potrf_work`, `gesv_work`, `geqrf_work` + `ormqr_work`, `gesdd_work`, `syevd_work`/`heevd_work` on
-  the vendor row; on both faer rows one shared body (`define_backend!`) calling `lu_in_place`,
+  `potrf_work`, `gesv_work`, `geqrf_work` + `ormqr_work`, `gesdd_work`, `syevd_work`/`heevd_work`,
+  and for `full_piv_lu`, `triangular_solve` and `householder_apply` `?getc2`, `cblas_?trsm` and
+  `?larfb_work`/`?ormqr_work` on the vendor row; on both faer rows one shared body
+  (`define_backend!`) calling `lu_in_place`,
   `cholesky_in_place`, `solve_in_place_with_conj`, `full_piv_lu_in_place`, `qr_in_place` +
   `apply_block_householder_sequence_on_the_left_in_place`, `self_adjoint_evd` and the thin SVD's
   in-place route, each on the input's own layout. The harness converts nothing; a copy a *library*
@@ -148,10 +151,37 @@ is never the difference between two harness choices:
 
 - **`f32`/`c32`**: the vendor arm has a `gemm` route in those two dtypes only, and reports the
   LAPACK families as `skipped` for them; the faer rows have no such gap.
-- **Families with no vendor route** (`triangular_solve`, `full_piv_lu`, `householder_apply`,
-  `upgrade_factor`, `eig`) are recorded as `skipped` with that reason and carry no `lapack-*` ratio.
-  The difference is a property of the libraries, and the harness does not invent a vendor call to
-  make the rows line up.
+- **`f32`/`c32`, continued**: `triangular_solve` is a CBLAS call (`?trsm`) and has a vendor route
+  in all four dtypes, like `gemm`; `full_piv_lu` (`?getc2`) and `householder_apply`
+  (`?larfb`/`?ormqr`/`?unmqr`) are LAPACK routines and, like the other drivers, are bound for
+  `f64`/`c64` only.
+- **`full_piv_lu`: the vendor route is unblocked `?getc2`, the faer rows' is the blocked
+  `lu_in_place`.** No vendor ships a blocked complete-pivoting LU, so the vendor row is a different
+  algorithm for the same contract (in place, `P A Q = L U`, prepared buffers), and the ratio is read
+  with that. `?getc2` is square only: a non-square `full_piv_lu` cell is `skipped` on the vendor
+  row with that reason. For `c64` the pivot metric differs too: `?zgetc2` picks the entry of
+  largest modulus `|z|`, colmat and faer the largest `|re| + |im|`, so the two rows' pivot orders
+  (and factors) differ while each is a complete-pivoting LU of the same matrix. LAPACKE does not
+  wrap `?getc2`, so it is called through its Fortran symbol, which is column-major only: a c-order
+  cell is `skipped` on the vendor row. The difference is declared in `fbench`
+  (`lapack::ROUTE_DIFFERENCES`) and printed by `fbench info` as `route_difference.full_piv_lu=...`,
+  which the recorder keeps in the run's `binary-info.txt`; the row's `note` stays empty, because
+  the note is the join key and a different note would leave the cell without its vendor row.
+- **`householder_apply`: the vendor applies colmat's reflectors.** `?larfb` (block form) and
+  `?ormqr`/`?unmqr` (sequence form) apply the reflectors of colmat's own `qr_in_place` of the
+  seeded matrix, converted to LAPACK's `H = I - tau v v^H` convention and with `?larft`'s `T`, all
+  built once outside the clock. A complex LAPACK QR would normalise `R`'s diagonal to real where
+  colmat keeps each pivot's phase, so the two rows would apply a different `Q`; with the same
+  reflectors they compute the same `Q C`. The timed call is the vendor routine alone, on the
+  colmat rows' notes (`block(..)`/`sequence(..)`), so block pairs with block and sequence with
+  sequence.
+- **A vendor route has to compute the colmat row's quantity**, not only pass its own residual
+  check: `fbench`'s `vendor_routes_agree_with_colmat` runs each route on its op's input and compares
+  the result with colmat's (`?trsm` and `?larfb`/`?ormqr`: the same numbers within the harness
+  tolerance; `?getc2`: the same pivots and factors for `f64`, the same determinant for `c64`).
+- **Families with no vendor route** (`upgrade_factor`, `eig`) are recorded as `skipped` with that
+  reason and carry no `lapack-*` ratio. The difference is a property of the libraries, and the
+  harness does not invent a vendor call to make the rows line up.
 - **A route difference between arms is a property to record, not to fix away.** When two arms make
   different kinds of call, the page says so (note, skip reason, this section) and the ratio is read
   with it; the harness does not add or remove work on one arm until the numbers agree.

@@ -225,6 +225,7 @@ mod tests {
     /// (`lapack.rs`, `DRIVER_FAMILIES`).
     const DRIVER_FAMILIES: &[&str] = &[
         "lu",
+        "full_piv_lu",
         "solve",
         "cholesky",
         "qr_factor",
@@ -232,7 +233,12 @@ mod tests {
         "svd_values",
         "svd_thin",
         "eigh",
+        "householder_apply",
     ];
+
+    /// The families whose vendor route is a CBLAS level-3 call, measured in both orders: the
+    /// row-major entry point moves no data (`lapack.rs`).
+    const BLAS_FAMILIES: &[&str] = &["gemm", "triangular_solve"];
 
     /// The families a faer row times twice: the owning route as the labelled `api-inclusive` row,
     /// and the allocation-free route as the primary (empty note) row.
@@ -572,12 +578,13 @@ mod tests {
             vendor::set_threads(1).unwrap();
         }
         // The cells a primary ratio is formed from: column-major everywhere (the vendor's driver
-        // route), plus row-major `gemm`, the only family the vendor also measures row-major. A
+        // route), plus row-major `gemm` and `triangular_solve`, the CBLAS families the vendor
+        // also measures row-major. A
         // row-major LAPACK-driver cell has no vendor counterpart (it is a skip, `lapack.rs`), and
         // the colmat row may allocate its own column-major copy inside the library call there
         // (`lu/partial_pivoting/factor.rs:396-418`), a declared blind spot in
         // benchmarks/suites/colmat-kernels.yaml, not a harness allocation.
-        for (order, families) in [(Order::F, FAMILIES), (Order::C, &["gemm"][..])] {
+        for (order, families) in [(Order::F, FAMILIES), (Order::C, BLAS_FAMILIES)] {
             for row in crate::engine_rows() {
                 for family in families {
                     for dtype in [Dtype::F64, Dtype::C64] {
@@ -659,21 +666,62 @@ mod tests {
             );
             cell(Order::F).unwrap_or_else(|e| panic!("{family} in f order: {e}"));
         }
-        for order in [Order::C, Order::F] {
-            crate::ops_for(
-                &row,
-                Dtype::F64,
-                "gemm",
-                Case {
-                    m: 8,
-                    n: 8,
-                    k: Some(8),
-                    batch: 1,
-                },
-                order,
-            )
-            .unwrap_or_else(|e| panic!("gemm {}: {e}", order.label()));
+        for family in BLAS_FAMILIES {
+            for order in [Order::C, Order::F] {
+                crate::ops_for(
+                    &row,
+                    Dtype::F64,
+                    family,
+                    Case {
+                        m: 8,
+                        n: 8,
+                        k: (*family == "gemm").then_some(8),
+                        batch: 1,
+                    },
+                    order,
+                )
+                .unwrap_or_else(|e| panic!("{family} {}: {e}", order.label()));
+            }
         }
+    }
+
+    /// **`full_piv_lu`'s vendor route is `?getc2`: square only, and a different algorithm.**
+    /// A non-square cell is an explicit skip with the reason in it (the faer rows take any shape,
+    /// so the cell is not silently left without its vendor row), and the route difference -- the
+    /// unblocked `?getc2` against the blocked `lu_in_place` -- is declared where `fbench info`
+    /// prints it for the run's `binary-info.txt`.
+    #[test]
+    fn full_piv_lu_vendor_route_is_square_getc2() {
+        let _budget = hold_budget();
+        if vendor::NAME == "none" {
+            assert!(crate::lapack::ROUTE_DIFFERENCES.is_empty());
+            return;
+        }
+        let row = crate::lapack::row_name().to_owned();
+        for (m, n) in [(16, 8), (8, 16)] {
+            let case = Case {
+                m,
+                n,
+                k: None,
+                batch: 1,
+            };
+            let error = match crate::ops_for(&row, Dtype::F64, "full_piv_lu", case, Order::F) {
+                Ok(_) => panic!("full_piv_lu {m}x{n}: a non-square vendor cell must be a skip"),
+                Err(error) => error,
+            };
+            assert!(
+                error.contains("?getc2") && error.contains("square only"),
+                "the skip must name the reason, got {error:?}"
+            );
+            // the faer rows still measure the cell
+            assert!(crate::ops_for(crate::ROW_COLMAT, Dtype::F64, "full_piv_lu", case, Order::F).is_ok());
+        }
+        let route = crate::lapack::ROUTE_DIFFERENCES
+            .iter()
+            .find(|(family, _)| *family == "full_piv_lu")
+            .map(|(_, route)| *route)
+            .expect("full_piv_lu's route difference is recorded");
+        assert!(route.contains("unblocked ?getc2") && route.contains("blocked full_piv_lu"));
     }
 
     /// **The page divides like with like.** The joined page's cell key includes the `note`
@@ -683,7 +731,11 @@ mod tests {
     /// * a faer row that times two routes emits the owning one as `api-inclusive` and the
     ///   allocation-free one with an EMPTY note, so the vendor row (empty note) can only pair with
     ///   the allocation-free route -- in-place with in-place, never owning with in-place;
-    /// * every vendor route carries the empty note, so it never lands in the API-cost row.
+    /// * a vendor route carries exactly the notes of the colmat row's allocation-free ops (the
+    ///   empty note, or `block(..)`/`sequence(..)` for `householder_apply`), in the same order, so
+    ///   it pairs with the in-place route and never lands in the API-cost row. A route
+    ///   difference is not written into the note -- that would unpair the cell -- but into
+    ///   `lapack::ROUTE_DIFFERENCES`.
     #[test]
     fn notes_pair_the_same_contract() {
         let _budget = hold_budget();
@@ -711,18 +763,28 @@ mod tests {
             return;
         }
         let row = crate::lapack::row_name().to_owned();
-        for family in DRIVER_FAMILIES.iter().copied().chain(["gemm"]) {
+        for &family in FAMILIES {
             let case = Case {
                 m: 8,
                 n: 8,
                 k: if family == "gemm" { Some(8) } else { None },
                 batch: 1,
             };
-            let ops = crate::ops_for(&row, Dtype::F64, family, case, Order::F).unwrap();
-            assert_eq!(ops.len(), 1, "{family}");
+            let vendor: Vec<String> = crate::ops_for(&row, Dtype::F64, family, case, Order::F)
+                .unwrap_or_else(|e| panic!("{family}: every family has a vendor route: {e}"))
+                .into_iter()
+                .map(|op| op.note)
+                .collect();
+            let colmat: Vec<String> =
+                crate::ops_for(crate::ROW_COLMAT, Dtype::F64, family, case, Order::F)
+                    .unwrap()
+                    .into_iter()
+                    .map(|op| op.note)
+                    .filter(|note| note != "api-inclusive")
+                    .collect();
             assert_eq!(
-                ops[0].note, "",
-                "{family}: a vendor route is always the primary, allocation-free row"
+                vendor, colmat,
+                "{family}: a vendor route pairs with the colmat row's allocation-free ops"
             );
         }
     }

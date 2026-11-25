@@ -296,6 +296,27 @@ pub fn fill_seeded<T: Scalar>(len: usize, seed: u64) -> Vec<T> {
         .collect()
 }
 
+/// A diagonally dominant upper triangular `n x n` matrix, replicated `batch` times: the
+/// `triangular_solve` input. One definition for every arm (the faer rows and the vendor's `?trsm`),
+/// so every row of a cell solves the same system.
+pub fn upper_triangular<T: Scalar>(n: usize, batch: usize, order: Order, seed: u64) -> Vec<T> {
+    let raw = fill_seeded::<T>(n * n, seed);
+    let mut out = vec![T::zero(); n * n];
+    for j in 0..n {
+        for i in 0..n {
+            if i <= j {
+                out[idx(i, j, n, n, order)] = raw[idx(i, j, n, n, order)];
+            }
+        }
+        out[idx(j, j, n, n, order)].add_assign(T::from_f64(n as f64 + 1.0));
+    }
+    let mut replicated = Vec::with_capacity(out.len() * batch);
+    for _ in 0..batch {
+        replicated.extend_from_slice(&out);
+    }
+    replicated
+}
+
 /// Blocking of [`mm`], in elements. `JBLK` columns of `c` are accumulated at once, so `a`'s block is
 /// streamed once per `JBLK` columns rather than once per column; `IBLK` rows of `c` and `KBLK` terms
 /// of `p` are what stay resident in L1/L2 while that stream runs.
