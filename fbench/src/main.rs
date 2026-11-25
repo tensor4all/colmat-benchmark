@@ -173,21 +173,33 @@ fn measure_row(
     ops: &mut op::Op,
     prime_ms: u64,
     reps: usize,
+    phases: &mut timing::Phases,
 ) -> Result<Vec<f64>, String> {
     #[cfg(feature = "fork-team")]
     if threads > 1 && row == ROW_COLMAT {
         return colmat::team::with_team(threads, |par| {
             let mut token = op::Token::Fork(par);
-            timing::measure(ops, prime_ms, reps, &mut token)
+            timing::measure_phased(ops, prime_ms, reps, &mut token, phases)
         });
     }
     if threads > 1 && (row == ROW_COLMAT || row == ROW_FAER) {
         spindle::with_lock(threads, || {
-            timing::measure(ops, prime_ms, reps, &mut op::Token::none())
+            timing::measure_phased(ops, prime_ms, reps, &mut op::Token::none(), phases)
         })
     } else {
-        timing::measure(ops, prime_ms, reps, &mut op::Token::none())
+        timing::measure_phased(ops, prime_ms, reps, &mut op::Token::none(), phases)
     }
+}
+
+/// `FBENCH_PHASES=1` asks for one `PHASES` line on stderr per measured or verified variant: where
+/// the wall time outside the clocked region went. Diagnostic only: stderr is the guard log, never
+/// the CSV, and the instants it reads are all taken between clocked regions.
+fn phases_enabled() -> bool {
+    std::env::var_os("FBENCH_PHASES").is_some_and(|v| v == "1")
+}
+
+fn ms(d: Duration) -> String {
+    format!("{:.3}", d.as_secs_f64() * 1e3)
 }
 
 fn summarize(samples: &[f64], statistic: Statistic) -> Option<f64> {
@@ -649,6 +661,7 @@ impl CellSpec {
 /// it measured and the parent kills it at the deadline, which is what makes the limit hold even when
 /// a call never returns.
 fn child_main(spec_text: &str) -> ExitCode {
+    let started = Instant::now();
     let spec = match CellSpec::decode(spec_text) {
         Ok(spec) => spec,
         Err(e) => {
@@ -673,6 +686,7 @@ fn child_main(spec_text: &str) -> ExitCode {
         rayon::current_num_threads(),
         vendor::reported_threads()
     );
+    let configured = Instant::now();
     let ops = match ops_for(&spec.row, spec.dtype, &spec.family, spec.case, spec.order) {
         Ok(ops) => ops,
         Err(note) => {
@@ -683,6 +697,21 @@ fn child_main(spec_text: &str) -> ExitCode {
     };
     // The parent needs the variant count to know which `RESULT` is the last one, and therefore which
     // row to hold until the child's exit is known.
+    let built = Instant::now();
+    if phases_enabled() {
+        eprintln!(
+            "PHASES\tchild\trow={} family={} dtype={} order={} shape={} threads={} configure_ms={} build_ms={} variants={}",
+            spec.row,
+            spec.family,
+            spec.dtype.label(),
+            spec.order.label(),
+            spec.case.shape(),
+            spec.threads,
+            ms(configured - started),
+            ms(built - configured),
+            ops.len()
+        );
+    }
     println!("COUNT\t{}", ops.len());
     let _ = std::io::stdout().flush();
     for (index, mut op) in ops.into_iter().enumerate() {
@@ -696,7 +725,32 @@ fn child_main(spec_text: &str) -> ExitCode {
             eprintln!("before {} {}: {e}", spec.row, spec.family);
             return ExitCode::from(2);
         }
-        let measured = measure_row(&spec.row, spec.threads, &mut op, spec.prime_ms, spec.reps);
+        let mut phases = timing::Phases::default();
+        let measured = measure_row(
+            &spec.row,
+            spec.threads,
+            &mut op,
+            spec.prime_ms,
+            spec.reps,
+            &mut phases,
+        );
+        if phases_enabled() {
+            eprintln!(
+                "PHASES\tmeasure\trow={} family={} dtype={} order={} shape={} threads={} note={:?} prime_ms={} timed_loop_ms={} sampled_ms={} check_ms={} restore_ms={}",
+                spec.row,
+                spec.family,
+                spec.dtype.label(),
+                spec.order.label(),
+                spec.case.shape(),
+                spec.threads,
+                op.note,
+                ms(phases.prime),
+                ms(phases.timed_loop),
+                ms(phases.sampled),
+                ms(phases.check),
+                ms(phases.restore)
+            );
+        }
         if let Err(e) = require_threads(spec.threads) {
             eprintln!("after {} {}: {e}", spec.row, spec.family);
             return ExitCode::from(2);
@@ -1284,6 +1338,7 @@ fn main() -> ExitCode {
                             if run {
                                 // One build in its own process: the parent writes the rows and
                                 // enforces the cell's limit by killing it.
+                                let spawned = Instant::now();
                                 run_build_in_child(
                                     &args,
                                     &mut records,
@@ -1295,8 +1350,18 @@ fn main() -> ExitCode {
                                     case,
                                     order,
                                 );
+                                if phases_enabled() {
+                                    eprintln!(
+                                        "PHASES\tcell\trow={row} family={family} dtype={} order={} shape={} threads={threads} wall_ms={}",
+                                        dtype.label(),
+                                        order.label(),
+                                        case.shape(),
+                                        ms(spawned.elapsed())
+                                    );
+                                }
                                 continue;
                             }
+                            let building = Instant::now();
                             let ops = match ops_for(row, *dtype, family, case, order) {
                                 Ok(ops) => ops,
                                 Err(note) => {
@@ -1325,6 +1390,7 @@ fn main() -> ExitCode {
                                     continue;
                                 }
                             };
+                            let build = building.elapsed();
                             for mut ops in ops {
                                 let label = format!(
                                     "{row} {} {} {} {}",
@@ -1333,14 +1399,31 @@ fn main() -> ExitCode {
                                     order.label(),
                                     case.shape()
                                 );
+                                let t0 = Instant::now();
+                                let mut t1 = t0;
+                                let mut t2 = t0;
                                 let outcome = ops
                                     .prepare()
                                     .and_then(|()| {
+                                        t1 = Instant::now();
                                         // the verification pass runs each op once, outside any
                                         // budget: a sequential token
                                         ops.run(op::Token::none())
                                     })
-                                    .and_then(|()| ops.check());
+                                    .and_then(|()| {
+                                        t2 = Instant::now();
+                                        ops.check()
+                                    });
+                                if phases_enabled() {
+                                    eprintln!(
+                                        "PHASES\tverify\t{label} threads={threads} note={:?} build_ms={} prepare_ms={} run_ms={} check_ms={}",
+                                        ops.note,
+                                        ms(build),
+                                        ms(t1 - t0),
+                                        ms(t2.saturating_duration_since(t1)),
+                                        ms(t2.elapsed())
+                                    );
+                                }
                                 match outcome {
                                     Ok(()) => {
                                         println!("ok {label} {}", ops.note);
