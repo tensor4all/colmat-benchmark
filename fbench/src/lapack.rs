@@ -1842,7 +1842,7 @@ mod imp {
             // point, and it is column-major by definition.
             return "full_piv_lu in c order has no vendor route: ?getc2 is a Fortran routine \
                     with no row-major entry point (LAPACKE does not wrap it), so a row-major \
-                    input would need a transposed copy the faer rows do not make. The vendor row \
+                    input would need a transposed copy inside the vendor's clock. The vendor row \
                     is measured in f order, where both arms run column-major"
                 .to_owned();
         }

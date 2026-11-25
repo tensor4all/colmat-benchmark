@@ -149,12 +149,10 @@ is never the difference between two harness choices:
 
 ### Route differences that remain
 
-- **`f32`/`c32`**: the vendor arm has a `gemm` route in those two dtypes only, and reports the
-  LAPACK families as `skipped` for them; the faer rows have no such gap.
-- **`f32`/`c32`, continued**: `triangular_solve` is a CBLAS call (`?trsm`) and has a vendor route
-  in all four dtypes, like `gemm`; `full_piv_lu` (`?getc2`) and `householder_apply`
-  (`?larfb`/`?ormqr`/`?unmqr`) are LAPACK routines and, like the other drivers, are bound for
-  `f64`/`c64` only.
+- **`f32`/`c32`**: the vendor arm has the CBLAS routes in those two dtypes only -- `gemm`
+  (`?gemm`) and `triangular_solve` (`?trsm`) -- and reports the LAPACK families as `skipped` for
+  them, `full_piv_lu` (`?getc2`) and `householder_apply` (`?larfb`/`?ormqr`/`?unmqr`) included:
+  the LAPACK drivers are bound for `f64`/`c64` only. The faer rows have no such gap.
 - **`full_piv_lu`: the vendor route is unblocked `?getc2`, the faer rows' is the blocked
   `lu_in_place`.** No vendor ships a blocked complete-pivoting LU, so the vendor row is a different
   algorithm for the same contract (in place, `P A Q = L U`, prepared buffers), and the ratio is read
