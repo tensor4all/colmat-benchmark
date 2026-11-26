@@ -86,6 +86,8 @@ Status of the datasets (host role `development`, so each is already **provisiona
 | `result/zen5-cpu/faer-kernels/` | 18 (`0627828d965b`, `0e15729ad011`, `2240b076a030`, `2870062a7ee6`, `50c2b989484f`, `52b113acd2e2`, `5578ccc3df0d`, `71b25ffb7ae3`, `a5e6b7d23946`, `bfe4041cd991`; mkl and openblas arms, incl. the two pre-`timing-v2` `bfe4041cd991` pages) | **provisional**; the families below are **withdrawn pending re-measurement** |
 | `result/zen5-cpu/faer-kernels-large/` | 7 (`0e15729ad011`, `71b25ffb7ae3`, `a5e6b7d23946`, `bfe4041cd991`; mkl and openblas arms) | same. Its `linalg-large` and `linalg-boundary` sections contain the same families |
 
+> `zen5-cpu` correction (#130): every row under `result/zen5-cpu/` was pinned to CPUs 4-11, the Zen5c compact cores (8 MiB L3). See [zen5-cpu-core-types.md](zen5-cpu-core-types.md).
+
 The status applies to every shape, memory order (c and f), dtype (`f64`, `c64`) and thread count in those
 pages, because the harness path is the same for all of them; the audit read the 1T, c-order,
 `linalg-small` values of pages `71b25ffb` and `2240b076` number by number and traced the rest.

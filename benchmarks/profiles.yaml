@@ -6,8 +6,12 @@ profiles:
   - name: zen5-cpu
     description: >-
       AMD Ryzen AI 9 HX 470 (Zen5 mobile APU), 12 physical / 24 logical cores.
-      Heterogeneous L3: CPUs 0-3 share 16 MiB, CPUs 4-11 share 8 MiB, so a
-      thread set must be stated together with the domain it sits in. SMT
+      Hybrid: CPUs 0-3 are the four full Zen5 cores (amd_pstate_highest_perf
+      196, 16 MiB L3); CPUs 4-11 are the eight Zen5c compact cores
+      (highest_perf 124, 8 MiB L3). Every row recorded under this profile was
+      pinned to CPUs 4-11 (1T on CPU 4, 4T on 4-7, 8T on 4-11), i.e. measured
+      on Zen5c compact cores only (docs/zen5-cpu-core-types.md, #130). A thread
+      set must be stated together with the core type and L3 domain it sits in. SMT
       siblings of CPUs 4-11 are 16-23; the idle gate checks them too, because a
       busy sibling contends with the physical core being measured.
     cpu: AMD Ryzen AI 9 HX 470

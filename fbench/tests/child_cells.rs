@@ -241,6 +241,59 @@ fn a_final_child_that_hangs_is_killed_and_the_run_fails() {
     );
 }
 
+/// The path of a sidecar the harness writes beside the run's CSV.
+fn sidecar(name: &str, suffix: &str) -> String {
+    std::fs::read_to_string(format!("{}{suffix}", csv_path(name).display())).unwrap_or_default()
+}
+
+/// #65: every way a child can end without a clean exit fails the run, and the record says so. A
+/// child that exits non-zero before reporting, one that is SIGKILLed from outside (before and after
+/// its last result), and one that outlives the cell's timeout: each is a non-zero run, no `ok` row,
+/// and a `.partial` marker next to the CSV, so rows written before the kill are never mistaken for a
+/// finished run.
+#[test]
+fn every_abnormal_child_end_fails_the_run_and_marks_it_partial() {
+    for (name, mode, expect) in [
+        ("exit-nonzero", "crash_first", "failed"),
+        ("sigkill-early", "kill_self", "failed"),
+        ("sigkill-late", "kill_after_last", "failed"),
+        ("timeout", "hang", "timeout"),
+    ] {
+        let run = run(name, Some((mode, 1)), &[]);
+        assert_eq!(run.code, Some(1), "{mode}: {:?}", run.csv);
+        assert_eq!(statuses(&run), [expect, expect], "{mode}: {:?}", run.csv);
+        let marker = sidecar(name, ".partial");
+        assert!(marker.contains("partial: true"), "{mode}: no partial marker: {marker:?}");
+        assert!(marker.contains(&format!("{expect}=2")), "{mode}: {marker}");
+        assert!(run.survivors.is_empty(), "{mode}: {:?}", run.survivors);
+    }
+}
+
+/// A SIGKILLed child's row says which signal ended it, not just that it failed.
+#[test]
+fn a_sigkilled_child_names_the_signal_in_its_row() {
+    let run = run("sigkill-note", Some(("kill_after_last", 1)), &[]);
+    let note = run.csv.get(1).and_then(|row| row.get(13)).cloned().unwrap_or_default();
+    assert!(note.contains("9") || note.to_lowercase().contains("kill"), "{note}");
+}
+
+/// A finished run has no partial marker (a stale one from an earlier attempt is removed), and every
+/// run records the CPU set it was observed to run on.
+#[test]
+fn a_finished_run_has_no_marker_and_records_its_observed_affinity() {
+    let name = "observed";
+    std::fs::write(format!("{}.partial", csv_path(name).display()), "partial: true\n").unwrap();
+    let run = run(name, None, &["--cell-timeout", "60"]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert_eq!(sidecar(name, ".partial"), "", "a finished run must not carry a partial marker");
+    let report = sidecar(name, ".affinity");
+    let allowed = std::fs::read_to_string("/proc/self/status").unwrap();
+    let cpus = allowed.lines().find_map(|l| l.strip_prefix("Cpus_allowed_list:")).unwrap().trim();
+    assert!(report.contains(&format!("observed_cpus: {cpus}")), "{report}");
+    assert!(report.contains("amd_pstate_highest_perf:"), "{report}");
+    assert!(run.stderr.contains("CELL affinity observed_cpus:"), "{}", run.stderr);
+}
+
 /// Library-only builds must accept parallel budgets without configuring an absent vendor.
 #[cfg(not(any(feature = "link-mkl", feature = "link-openblas", feature = "link-aocl")))]
 #[test]
