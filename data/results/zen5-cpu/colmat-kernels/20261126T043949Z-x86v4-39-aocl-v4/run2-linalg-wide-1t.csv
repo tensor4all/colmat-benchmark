@@ -1,0 +1,233 @@
+regime,family,dtype,order,m,n,k,batch,row,threads,total_ms,per_item_us,status,note,samples_ms,rayon_threads,vendor_threads,profile
+linalg-wide,full_piv_lu,f64,c,64,1024,,1,lapack-aocl,1,,,skipped,"full_piv_lu in c order has no vendor route: ?getc2 is a Fortran routine with no row-major entry point (LAPACKE does not wrap it), so a row-major input would need a transposed copy inside the vendor's clock. The vendor row is measured in f order, where both arms run column-major",,1,1,zen5-cpu
+linalg-wide,full_piv_lu,f64,c,64,1024,,1,colmat,1,1.321696,1321.696000,ok,api-inclusive,"[1.316646, 1.331744, 1.321696, 1.319893, 1.331153]",1,1,zen5-cpu
+linalg-wide,full_piv_lu,f64,c,64,1024,,1,colmat,1,0.624706,624.706000,ok,,"[0.628032, 0.625167, 0.620518, 0.6247060000000001, 0.62146]",1,1,zen5-cpu
+linalg-wide,full_piv_lu,f64,c,64,1024,,1,faer,1,1.193448,1193.448000,ok,api-inclusive,"[1.1967539999999999, 1.1930669999999999, 1.197446, 1.189571, 1.1934479999999998]",1,1,zen5-cpu
+linalg-wide,full_piv_lu,f64,c,64,1024,,1,faer,1,0.718510,718.510000,ok,,"[0.720874, 0.7142109999999999, 0.71851, 0.7110960000000001, 0.721925]",1,1,zen5-cpu
+linalg-wide,full_piv_lu,f64,f,64,1024,,1,lapack-aocl,1,,,skipped,"full_piv_lu has no vendor route for the non-square shape 64x1024: ?getc2, the only complete-pivoting LU LAPACK ships, is square only; the vendor row is skipped",,1,1,zen5-cpu
+linalg-wide,full_piv_lu,f64,f,64,1024,,1,colmat,1,1.233253,1233.253000,ok,api-inclusive,"[1.232591, 1.2286739999999998, 1.234464, 1.233253, 1.235356]",1,1,zen5-cpu
+linalg-wide,full_piv_lu,f64,f,64,1024,,1,colmat,1,1.267565,1267.565000,ok,,"[1.261916, 1.2693780000000001, 1.26973, 1.267565, 1.266053]",1,1,zen5-cpu
+linalg-wide,full_piv_lu,f64,f,64,1024,,1,faer,1,0.981336,981.336000,ok,api-inclusive,"[0.9800340000000001, 0.9821980000000001, 0.9826380000000001, 0.981336, 0.975705]",1,1,zen5-cpu
+linalg-wide,full_piv_lu,f64,f,64,1024,,1,faer,1,1.035616,1035.616000,ok,,"[1.036418, 1.03228, 1.035616, 1.039203, 1.0348650000000001]",1,1,zen5-cpu
+linalg-wide,full_piv_lu,f64,c,256,4096,,1,lapack-aocl,1,,,skipped,"full_piv_lu in c order has no vendor route: ?getc2 is a Fortran routine with no row-major entry point (LAPACKE does not wrap it), so a row-major input would need a transposed copy inside the vendor's clock. The vendor row is measured in f order, where both arms run column-major",,1,1,zen5-cpu
+linalg-wide,full_piv_lu,f64,c,256,4096,,1,colmat,1,51.711529,51711.529000,ok,api-inclusive,"[52.967393, 52.292384, 51.478257, 51.711529, 51.241779]",1,1,zen5-cpu
+linalg-wide,full_piv_lu,f64,c,256,4096,,1,colmat,1,44.724400,44724.400000,ok,,"[44.819236, 44.602294, 44.724399999999996, 44.516395, 44.840636]",1,1,zen5-cpu
+linalg-wide,full_piv_lu,f64,c,256,4096,,1,faer,1,68.624968,68624.968000,ok,api-inclusive,"[68.562421, 68.222804, 68.76732100000001, 68.684888, 68.624968]",1,1,zen5-cpu
+linalg-wide,full_piv_lu,f64,c,256,4096,,1,faer,1,46.751842,46751.842000,ok,,"[46.751842, 46.468267, 46.811963999999996, 46.770117, 46.697511999999996]",1,1,zen5-cpu
+linalg-wide,full_piv_lu,f64,f,256,4096,,1,lapack-aocl,1,,,skipped,"full_piv_lu has no vendor route for the non-square shape 256x4096: ?getc2, the only complete-pivoting LU LAPACK ships, is square only; the vendor row is skipped",,1,1,zen5-cpu
+linalg-wide,full_piv_lu,f64,f,256,4096,,1,colmat,1,50.088147,50088.147000,ok,api-inclusive,"[50.024519000000005, 49.418848000000004, 50.088147, 51.479481, 50.699979]",1,1,zen5-cpu
+linalg-wide,full_piv_lu,f64,f,256,4096,,1,colmat,1,59.741971,59741.971000,ok,,"[59.505934, 59.653888, 59.741971, 60.264428, 60.308078]",1,1,zen5-cpu
+linalg-wide,full_piv_lu,f64,f,256,4096,,1,faer,1,61.611580,61611.580000,ok,api-inclusive,"[63.47760400000001, 62.32999, 61.61158, 61.375583999999996, 61.196042]",1,1,zen5-cpu
+linalg-wide,full_piv_lu,f64,f,256,4096,,1,faer,1,69.360131,69360.131000,ok,,"[68.062209, 69.389685, 70.222847, 67.681383, 69.36013100000001]",1,1,zen5-cpu
+linalg-wide,triangular_solve,f64,c,64,1024,,1,lapack-aocl,1,,,skipped,triangular_solve needs a square matrix; 64x1024 is not,,1,1,zen5-cpu
+linalg-wide,triangular_solve,f64,c,64,1024,,1,colmat,1,,,skipped,triangular_solve needs a square matrix; 64x1024 is not,,1,1,zen5-cpu
+linalg-wide,triangular_solve,f64,c,64,1024,,1,faer,1,,,skipped,triangular_solve needs a square matrix; 64x1024 is not,,1,1,zen5-cpu
+linalg-wide,triangular_solve,f64,f,64,1024,,1,lapack-aocl,1,,,skipped,triangular_solve needs a square matrix; 64x1024 is not,,1,1,zen5-cpu
+linalg-wide,triangular_solve,f64,f,64,1024,,1,colmat,1,,,skipped,triangular_solve needs a square matrix; 64x1024 is not,,1,1,zen5-cpu
+linalg-wide,triangular_solve,f64,f,64,1024,,1,faer,1,,,skipped,triangular_solve needs a square matrix; 64x1024 is not,,1,1,zen5-cpu
+linalg-wide,triangular_solve,f64,c,256,4096,,1,lapack-aocl,1,,,skipped,triangular_solve needs a square matrix; 256x4096 is not,,1,1,zen5-cpu
+linalg-wide,triangular_solve,f64,c,256,4096,,1,colmat,1,,,skipped,triangular_solve needs a square matrix; 256x4096 is not,,1,1,zen5-cpu
+linalg-wide,triangular_solve,f64,c,256,4096,,1,faer,1,,,skipped,triangular_solve needs a square matrix; 256x4096 is not,,1,1,zen5-cpu
+linalg-wide,triangular_solve,f64,f,256,4096,,1,lapack-aocl,1,,,skipped,triangular_solve needs a square matrix; 256x4096 is not,,1,1,zen5-cpu
+linalg-wide,triangular_solve,f64,f,256,4096,,1,colmat,1,,,skipped,triangular_solve needs a square matrix; 256x4096 is not,,1,1,zen5-cpu
+linalg-wide,triangular_solve,f64,f,256,4096,,1,faer,1,,,skipped,triangular_solve needs a square matrix; 256x4096 is not,,1,1,zen5-cpu
+linalg-wide,qr_factor,f64,c,64,1024,,1,lapack-aocl,1,,,skipped,"qr_factor in c order has no vendor route that leaves the clock free of allocation and layout conversion: LAPACKE's row-major path allocates a transposed copy and transposes in and out of it inside the call. The vendor row is measured in f order, where both arms run column-major",,1,1,zen5-cpu
+linalg-wide,qr_factor,f64,c,64,1024,,1,colmat,1,1.000190,1000.190000,ok,,"[0.9987380000000001, 1.00019, 0.9882190000000001, 1.0086069999999998, 1.002005]",1,1,zen5-cpu
+linalg-wide,qr_factor,f64,c,64,1024,,1,faer,1,1.013205,1013.205000,ok,,"[1.011813, 1.022513, 1.016931, 1.0132050000000001, 1.009568]",1,1,zen5-cpu
+linalg-wide,qr_factor,f64,f,64,1024,,1,lapack-aocl,1,0.925763,925.763000,ok,,"[0.925763, 0.927586, 0.9238999999999999, 0.919782, 0.927366]",1,1,zen5-cpu
+linalg-wide,qr_factor,f64,f,64,1024,,1,colmat,1,0.568271,568.271000,ok,,"[0.568271, 0.570055, 0.565416, 0.573071, 0.564244]",1,1,zen5-cpu
+linalg-wide,qr_factor,f64,f,64,1024,,1,faer,1,0.572519,572.519000,ok,,"[0.57286, 0.566178, 0.5735319999999999, 0.5656669999999999, 0.572519]",1,1,zen5-cpu
+linalg-wide,qr_factor,f64,c,256,4096,,1,lapack-aocl,1,,,skipped,"qr_factor in c order has no vendor route that leaves the clock free of allocation and layout conversion: LAPACKE's row-major path allocates a transposed copy and transposes in and out of it inside the call. The vendor row is measured in f order, where both arms run column-major",,1,1,zen5-cpu
+linalg-wide,qr_factor,f64,c,256,4096,,1,colmat,1,27.236081,27236.081000,ok,,"[27.236081, 27.206426, 27.302223, 27.238225, 27.230230000000002]",1,1,zen5-cpu
+linalg-wide,qr_factor,f64,c,256,4096,,1,faer,1,27.183023,27183.023000,ok,,"[27.21939, 27.251649999999998, 27.183023000000002, 27.180328, 27.176901]",1,1,zen5-cpu
+linalg-wide,qr_factor,f64,f,256,4096,,1,lapack-aocl,1,85.938863,85938.863000,ok,,"[85.895061, 85.85999699999999, 85.95347000000001, 86.12223200000001, 85.938863]",1,1,zen5-cpu
+linalg-wide,qr_factor,f64,f,256,4096,,1,colmat,1,25.157155,25157.155000,ok,,"[25.418628, 25.303566, 25.157155, 25.101291, 25.148468]",1,1,zen5-cpu
+linalg-wide,qr_factor,f64,f,256,4096,,1,faer,1,25.020782,25020.782000,ok,,"[25.10047, 25.020781999999997, 25.073199000000002, 25.002888000000002, 25.020712]",1,1,zen5-cpu
+linalg-wide,qr,f64,c,64,1024,,1,lapack-aocl,1,,,skipped,"qr in c order has no vendor route that leaves the clock free of allocation and layout conversion: LAPACKE's row-major path allocates a transposed copy and transposes in and out of it inside the call. The vendor row is measured in f order, where both arms run column-major",,1,1,zen5-cpu
+linalg-wide,qr,f64,c,64,1024,,1,colmat,1,0.739769,739.769000,ok,api-inclusive,"[0.736213, 0.739769, 0.741542, 0.732996, 0.752653]",1,1,zen5-cpu
+linalg-wide,qr,f64,c,64,1024,,1,colmat,1,1.028102,1028.102000,ok,,"[1.026299, 1.0281019999999998, 1.0326009999999999, 1.025388, 1.033983]",1,1,zen5-cpu
+linalg-wide,qr,f64,c,64,1024,,1,faer,1,0.834554,834.554000,ok,api-inclusive,"[0.834554, 0.835306, 0.834314, 0.837219, 0.833072]",1,1,zen5-cpu
+linalg-wide,qr,f64,c,64,1024,,1,faer,1,1.039944,1039.944000,ok,,"[1.034655, 1.0351659999999998, 1.039944, 1.0465470000000001, 1.044654]",1,1,zen5-cpu
+linalg-wide,qr,f64,f,64,1024,,1,lapack-aocl,1,0.997886,997.886000,ok,,"[0.9978859999999999, 1.0006119999999998, 0.997265, 0.996895, 0.99942]",1,1,zen5-cpu
+linalg-wide,qr,f64,f,64,1024,,1,colmat,1,0.626871,626.871000,ok,api-inclusive,"[0.6278520000000001, 0.624846, 0.618464, 0.628443, 0.626871]",1,1,zen5-cpu
+linalg-wide,qr,f64,f,64,1024,,1,colmat,1,0.600562,600.562000,ok,,"[0.602605, 0.5970650000000001, 0.602305, 0.596895, 0.600562]",1,1,zen5-cpu
+linalg-wide,qr,f64,f,64,1024,,1,faer,1,0.631118,631.118000,ok,api-inclusive,"[0.6327309999999999, 0.632, 0.626309, 0.631118, 0.626469]",1,1,zen5-cpu
+linalg-wide,qr,f64,f,64,1024,,1,faer,1,0.604739,604.739000,ok,,"[0.605671, 0.603887, 0.599659, 0.6048790000000001, 0.6047389999999999]",1,1,zen5-cpu
+linalg-wide,qr,f64,c,256,4096,,1,lapack-aocl,1,,,skipped,"qr in c order has no vendor route that leaves the clock free of allocation and layout conversion: LAPACKE's row-major path allocates a transposed copy and transposes in and out of it inside the call. The vendor row is measured in f order, where both arms run column-major",,1,1,zen5-cpu
+linalg-wide,qr,f64,c,256,4096,,1,colmat,1,30.486568,30486.568000,ok,api-inclusive,"[30.553672, 30.486568, 30.392394, 30.467133, 30.609385]",1,1,zen5-cpu
+linalg-wide,qr,f64,c,256,4096,,1,colmat,1,29.366886,29366.886000,ok,,"[29.366885999999997, 29.360264, 29.441435, 29.53654, 29.358410000000003]",1,1,zen5-cpu
+linalg-wide,qr,f64,c,256,4096,,1,faer,1,33.249472,33249.472000,ok,api-inclusive,"[33.500285999999996, 33.249472000000004, 33.782899, 32.435274, 32.342102]",1,1,zen5-cpu
+linalg-wide,qr,f64,c,256,4096,,1,faer,1,28.798404,28798.404000,ok,,"[28.704159, 28.825034, 28.710020999999998, 28.868914999999998, 28.798403999999998]",1,1,zen5-cpu
+linalg-wide,qr,f64,f,256,4096,,1,lapack-aocl,1,87.729213,87729.213000,ok,,"[87.55750499999999, 87.68060299999999, 87.729213, 87.75480099999999, 87.841511]",1,1,zen5-cpu
+linalg-wide,qr,f64,f,256,4096,,1,colmat,1,27.564952,27564.952000,ok,api-inclusive,"[27.57503, 27.576383, 27.564952, 27.486628, 27.49353]",1,1,zen5-cpu
+linalg-wide,qr,f64,f,256,4096,,1,colmat,1,26.616047,26616.047000,ok,,"[26.63381, 26.869736000000003, 26.540376000000002, 26.609925, 26.616047000000002]",1,1,zen5-cpu
+linalg-wide,qr,f64,f,256,4096,,1,faer,1,27.680327,27680.327000,ok,api-inclusive,"[27.701345, 27.605668, 27.680327000000002, 27.598195, 27.840592]",1,1,zen5-cpu
+linalg-wide,qr,f64,f,256,4096,,1,faer,1,26.896156,26896.156000,ok,,"[26.794767, 26.896156, 27.009104, 26.899332, 26.738263000000003]",1,1,zen5-cpu
+linalg-wide,svd_values,f64,c,64,1024,,1,lapack-aocl,1,,,skipped,"svd_values in c order has no vendor route that leaves the clock free of allocation and layout conversion: LAPACKE's row-major path allocates a transposed copy and transposes in and out of it inside the call. The vendor row is measured in f order, where both arms run column-major",,1,1,zen5-cpu
+linalg-wide,svd_values,f64,c,64,1024,,1,colmat,1,0.950800,950.800000,ok,api-inclusive,"[0.9490059999999999, 0.950248, 0.9508, 0.954587, 0.955719]",1,1,zen5-cpu
+linalg-wide,svd_values,f64,c,64,1024,,1,colmat,1,0.955919,955.919000,ok,,"[0.955919, 0.960067, 0.9552780000000001, 0.9543470000000001, 0.957452]",1,1,zen5-cpu
+linalg-wide,svd_values,f64,c,64,1024,,1,faer,1,1.410220,1410.220000,ok,api-inclusive,"[1.407745, 1.41022, 1.404278, 1.41585, 1.413226]",1,1,zen5-cpu
+linalg-wide,svd_values,f64,c,64,1024,,1,faer,1,1.406133,1406.133000,ok,,"[1.4117730000000002, 1.4061329999999999, 1.4050799999999999, 1.404309, 1.411603]",1,1,zen5-cpu
+linalg-wide,svd_values,f64,f,64,1024,,1,lapack-aocl,1,2.396976,2396.976000,ok,,"[2.400793, 2.3844320000000003, 2.399851, 2.374965, 2.396976]",1,1,zen5-cpu
+linalg-wide,svd_values,f64,f,64,1024,,1,colmat,1,1.036768,1036.768000,ok,api-inclusive,"[1.043551, 1.025048, 1.036768, 1.027031, 1.040135]",1,1,zen5-cpu
+linalg-wide,svd_values,f64,f,64,1024,,1,colmat,1,1.039554,1039.554000,ok,,"[1.036008, 1.039554, 1.037249, 1.043241, 1.043792]",1,1,zen5-cpu
+linalg-wide,svd_values,f64,f,64,1024,,1,faer,1,1.465753,1465.753000,ok,api-inclusive,"[1.4601819999999999, 1.465753, 1.4656719999999999, 1.468086, 1.4760520000000001]",1,1,zen5-cpu
+linalg-wide,svd_values,f64,f,64,1024,,1,faer,1,1.470572,1470.572000,ok,,"[1.4697200000000001, 1.468718, 1.470572, 1.4762620000000002, 1.478807]",1,1,zen5-cpu
+linalg-wide,svd_values,f64,c,256,4096,,1,lapack-aocl,1,,,skipped,"svd_values in c order has no vendor route that leaves the clock free of allocation and layout conversion: LAPACKE's row-major path allocates a transposed copy and transposes in and out of it inside the call. The vendor row is measured in f order, where both arms run column-major",,1,1,zen5-cpu
+linalg-wide,svd_values,f64,c,256,4096,,1,colmat,1,32.190965,32190.965000,ok,api-inclusive,"[32.176258, 33.119553, 32.190965, 32.163053, 32.200503999999995]",1,1,zen5-cpu
+linalg-wide,svd_values,f64,c,256,4096,,1,colmat,1,32.344349,32344.349000,ok,,"[32.344349, 32.375136, 32.287084, 32.225539999999995, 32.385155]",1,1,zen5-cpu
+linalg-wide,svd_values,f64,c,256,4096,,1,faer,1,38.804385,38804.385000,ok,api-inclusive,"[38.707225, 39.178457, 38.804384999999996, 38.988146, 38.763659]",1,1,zen5-cpu
+linalg-wide,svd_values,f64,c,256,4096,,1,faer,1,38.653246,38653.246000,ok,,"[38.653246, 38.547320000000006, 38.763009000000004, 38.58556, 38.662352]",1,1,zen5-cpu
+linalg-wide,svd_values,f64,f,256,4096,,1,lapack-aocl,1,78.414662,78414.662000,ok,,"[78.41466199999999, 78.516341, 78.608501, 78.186019, 78.350604]",1,1,zen5-cpu
+linalg-wide,svd_values,f64,f,256,4096,,1,colmat,1,37.530379,37530.379000,ok,api-inclusive,"[37.553309999999996, 37.530379, 37.506133, 37.492588, 38.391792]",1,1,zen5-cpu
+linalg-wide,svd_values,f64,f,256,4096,,1,colmat,1,37.604516,37604.516000,ok,,"[37.604516, 37.589056, 37.557970000000005, 37.61234, 37.620495]",1,1,zen5-cpu
+linalg-wide,svd_values,f64,f,256,4096,,1,faer,1,44.373684,44373.684000,ok,api-inclusive,"[44.476344, 44.416733, 44.373684, 44.371429, 44.31772]",1,1,zen5-cpu
+linalg-wide,svd_values,f64,f,256,4096,,1,faer,1,44.366971,44366.971000,ok,,"[45.320415000000004, 44.292233, 44.44108799999999, 44.366971, 44.359638]",1,1,zen5-cpu
+linalg-wide,svd_thin,f64,c,64,1024,,1,lapack-aocl,1,,,skipped,"svd_thin in c order has no vendor route that leaves the clock free of allocation and layout conversion: LAPACKE's row-major path allocates a transposed copy and transposes in and out of it inside the call. The vendor row is measured in f order, where both arms run column-major",,1,1,zen5-cpu
+linalg-wide,svd_thin,f64,c,64,1024,,1,colmat,1,1.968293,1968.293000,ok,api-inclusive,"[1.9720800000000003, 1.969144, 1.9644350000000002, 1.9660290000000002, 1.9682929999999998]",1,1,zen5-cpu
+linalg-wide,svd_thin,f64,c,64,1024,,1,colmat,1,1.967721,1967.721000,ok,,"[1.9671900000000002, 1.967721, 1.976669, 1.971328, 1.967351]",1,1,zen5-cpu
+linalg-wide,svd_thin,f64,c,64,1024,,1,faer,1,2.275251,2275.251000,ok,api-inclusive,"[2.268799, 2.275251, 2.27479, 2.281342, 2.2904090000000004]",1,1,zen5-cpu
+linalg-wide,svd_thin,f64,c,64,1024,,1,faer,1,2.254423,2254.423000,ok,,"[2.248612, 2.255995, 2.255765, 2.254423, 2.243582]",1,1,zen5-cpu
+linalg-wide,svd_thin,f64,f,64,1024,,1,lapack-aocl,1,4.444085,4444.085000,ok,,"[4.439095, 4.4726870000000005, 4.486763000000001, 4.429488, 4.444085]",1,1,zen5-cpu
+linalg-wide,svd_thin,f64,f,64,1024,,1,colmat,1,2.072175,2072.175000,ok,api-inclusive,"[2.072455, 2.062988, 2.062548, 2.072175, 2.075872]",1,1,zen5-cpu
+linalg-wide,svd_thin,f64,f,64,1024,,1,colmat,1,2.049543,2049.543000,ok,,"[2.038593, 2.0552040000000003, 2.060133, 2.049543, 2.0357079999999996]",1,1,zen5-cpu
+linalg-wide,svd_thin,f64,f,64,1024,,1,faer,1,2.321396,2321.396000,ok,api-inclusive,"[2.3245620000000002, 2.313762, 2.326415, 2.314404, 2.321396]",1,1,zen5-cpu
+linalg-wide,svd_thin,f64,f,64,1024,,1,faer,1,2.310867,2310.867000,ok,,"[2.3186109999999998, 2.311688, 2.3061380000000002, 2.3071900000000003, 2.310867]",1,1,zen5-cpu
+linalg-wide,svd_thin,f64,c,256,4096,,1,lapack-aocl,1,,,skipped,"svd_thin in c order has no vendor route that leaves the clock free of allocation and layout conversion: LAPACKE's row-major path allocates a transposed copy and transposes in and out of it inside the call. The vendor row is measured in f order, where both arms run column-major",,1,1,zen5-cpu
+linalg-wide,svd_thin,f64,c,256,4096,,1,colmat,1,77.703091,77703.091000,ok,api-inclusive,"[77.69909299999999, 77.728278, 77.703091, 77.69915400000001, 78.630848]",1,1,zen5-cpu
+linalg-wide,svd_thin,f64,c,256,4096,,1,colmat,1,78.030156,78030.156000,ok,,"[78.030156, 77.991325, 78.047198, 77.93833699999999, 78.12952]",1,1,zen5-cpu
+linalg-wide,svd_thin,f64,c,256,4096,,1,faer,1,83.345875,83345.875000,ok,api-inclusive,"[83.345875, 84.471178, 83.565963, 82.27252, 82.01884]",1,1,zen5-cpu
+linalg-wide,svd_thin,f64,c,256,4096,,1,faer,1,81.730076,81730.076000,ok,,"[81.685533, 81.730076, 81.783064, 81.887027, 81.67325100000001]",1,1,zen5-cpu
+linalg-wide,svd_thin,f64,f,256,4096,,1,lapack-aocl,1,168.193014,168193.014000,ok,,"[168.364531, 168.05551899999998, 168.193014, 168.359381, 167.897627]",1,1,zen5-cpu
+linalg-wide,svd_thin,f64,f,256,4096,,1,colmat,1,83.385552,83385.552000,ok,api-inclusive,"[83.446184, 83.404938, 83.383228, 83.385552, 83.28186]",1,1,zen5-cpu
+linalg-wide,svd_thin,f64,f,256,4096,,1,colmat,1,83.716866,83716.866000,ok,,"[83.716866, 83.525231, 83.564313, 83.76916299999999, 83.75695]",1,1,zen5-cpu
+linalg-wide,svd_thin,f64,f,256,4096,,1,faer,1,87.493847,87493.847000,ok,api-inclusive,"[87.493847, 87.482867, 87.49599099999999, 87.429869, 87.55486]",1,1,zen5-cpu
+linalg-wide,svd_thin,f64,f,256,4096,,1,faer,1,87.320167,87320.167000,ok,,"[87.320167, 88.137569, 87.080733, 87.096312, 87.334914]",1,1,zen5-cpu
+linalg-wide,eigh,f64,c,64,1024,,1,lapack-aocl,1,,,skipped,"eigh in c order has no vendor route that leaves the clock free of allocation and layout conversion: LAPACKE's row-major path allocates a transposed copy and transposes in and out of it inside the call. The vendor row is measured in f order, where both arms run column-major",,1,1,zen5-cpu
+linalg-wide,eigh,f64,c,64,1024,,1,colmat,1,,,skipped,eigh needs a square matrix; 64x1024 is not,,1,1,zen5-cpu
+linalg-wide,eigh,f64,c,64,1024,,1,faer,1,,,skipped,eigh needs a square matrix; 64x1024 is not,,1,1,zen5-cpu
+linalg-wide,eigh,f64,f,64,1024,,1,lapack-aocl,1,,,skipped,eigh needs a square matrix; 64x1024 is not,,1,1,zen5-cpu
+linalg-wide,eigh,f64,f,64,1024,,1,colmat,1,,,skipped,eigh needs a square matrix; 64x1024 is not,,1,1,zen5-cpu
+linalg-wide,eigh,f64,f,64,1024,,1,faer,1,,,skipped,eigh needs a square matrix; 64x1024 is not,,1,1,zen5-cpu
+linalg-wide,eigh,f64,c,256,4096,,1,lapack-aocl,1,,,skipped,"eigh in c order has no vendor route that leaves the clock free of allocation and layout conversion: LAPACKE's row-major path allocates a transposed copy and transposes in and out of it inside the call. The vendor row is measured in f order, where both arms run column-major",,1,1,zen5-cpu
+linalg-wide,eigh,f64,c,256,4096,,1,colmat,1,,,skipped,eigh needs a square matrix; 256x4096 is not,,1,1,zen5-cpu
+linalg-wide,eigh,f64,c,256,4096,,1,faer,1,,,skipped,eigh needs a square matrix; 256x4096 is not,,1,1,zen5-cpu
+linalg-wide,eigh,f64,f,256,4096,,1,lapack-aocl,1,,,skipped,eigh needs a square matrix; 256x4096 is not,,1,1,zen5-cpu
+linalg-wide,eigh,f64,f,256,4096,,1,colmat,1,,,skipped,eigh needs a square matrix; 256x4096 is not,,1,1,zen5-cpu
+linalg-wide,eigh,f64,f,256,4096,,1,faer,1,,,skipped,eigh needs a square matrix; 256x4096 is not,,1,1,zen5-cpu
+linalg-wide,full_piv_lu,c64,c,64,1024,,1,lapack-aocl,1,,,skipped,"full_piv_lu in c order has no vendor route: ?getc2 is a Fortran routine with no row-major entry point (LAPACKE does not wrap it), so a row-major input would need a transposed copy inside the vendor's clock. The vendor row is measured in f order, where both arms run column-major",,1,1,zen5-cpu
+linalg-wide,full_piv_lu,c64,c,64,1024,,1,colmat,1,2.142165,2142.165000,ok,api-inclusive,"[2.139059, 2.1421650000000003, 2.133308, 2.14466, 2.148196]",1,1,zen5-cpu
+linalg-wide,full_piv_lu,c64,c,64,1024,,1,colmat,1,1.384152,1384.152000,ok,,"[1.3871179999999999, 1.380445, 1.379183, 1.384152, 1.387649]",1,1,zen5-cpu
+linalg-wide,full_piv_lu,c64,c,64,1024,,1,faer,1,2.400282,2400.282000,ok,api-inclusive,"[2.3923479999999997, 2.414439, 2.394201, 2.4002820000000002, 2.411153]",1,1,zen5-cpu
+linalg-wide,full_piv_lu,c64,c,64,1024,,1,faer,1,1.507810,1507.810000,ok,,"[1.5067789999999999, 1.505587, 1.5219369999999999, 1.508943, 1.50781]",1,1,zen5-cpu
+linalg-wide,full_piv_lu,c64,f,64,1024,,1,lapack-aocl,1,,,skipped,"full_piv_lu has no vendor route for the non-square shape 64x1024: ?getc2, the only complete-pivoting LU LAPACK ships, is square only; the vendor row is skipped",,1,1,zen5-cpu
+linalg-wide,full_piv_lu,c64,f,64,1024,,1,colmat,1,2.024217,2024.217000,ok,api-inclusive,"[2.027653, 2.022003, 2.018967, 2.024217, 2.02598]",1,1,zen5-cpu
+linalg-wide,full_piv_lu,c64,f,64,1024,,1,colmat,1,2.080411,2080.411000,ok,,"[2.0802709999999998, 2.078087, 2.080411, 2.084037, 2.08546]",1,1,zen5-cpu
+linalg-wide,full_piv_lu,c64,f,64,1024,,1,faer,1,2.211954,2211.954000,ok,api-inclusive,"[2.211142, 2.211954, 2.2137569999999998, 2.208278, 2.214448]",1,1,zen5-cpu
+linalg-wide,full_piv_lu,c64,f,64,1024,,1,faer,1,2.268328,2268.328000,ok,,"[2.269831, 2.2595620000000003, 2.268328, 2.257148, 2.272306]",1,1,zen5-cpu
+linalg-wide,full_piv_lu,c64,c,256,4096,,1,lapack-aocl,1,,,skipped,"full_piv_lu in c order has no vendor route: ?getc2 is a Fortran routine with no row-major entry point (LAPACKE does not wrap it), so a row-major input would need a transposed copy inside the vendor's clock. The vendor row is measured in f order, where both arms run column-major",,1,1,zen5-cpu
+linalg-wide,full_piv_lu,c64,c,256,4096,,1,colmat,1,145.702369,145702.369000,ok,api-inclusive,"[145.427319, 146.26637300000002, 145.702369, 145.850533, 145.612964]",1,1,zen5-cpu
+linalg-wide,full_piv_lu,c64,c,256,4096,,1,colmat,1,123.002366,123002.366000,ok,,"[122.898263, 123.196124, 123.074549, 122.80442, 123.002366]",1,1,zen5-cpu
+linalg-wide,full_piv_lu,c64,c,256,4096,,1,faer,1,174.128458,174128.458000,ok,api-inclusive,"[173.58419899999998, 174.23149800000002, 174.317788, 174.12845800000002, 173.714692]",1,1,zen5-cpu
+linalg-wide,full_piv_lu,c64,c,256,4096,,1,faer,1,124.450899,124450.899000,ok,,"[124.293127, 124.603692, 124.714107, 124.450899, 124.268041]",1,1,zen5-cpu
+linalg-wide,full_piv_lu,c64,f,256,4096,,1,lapack-aocl,1,,,skipped,"full_piv_lu has no vendor route for the non-square shape 256x4096: ?getc2, the only complete-pivoting LU LAPACK ships, is square only; the vendor row is skipped",,1,1,zen5-cpu
+linalg-wide,full_piv_lu,c64,f,256,4096,,1,colmat,1,142.726759,142726.759000,ok,api-inclusive,"[142.72675900000002, 142.650057, 142.558358, 143.20728799999998, 142.945253]",1,1,zen5-cpu
+linalg-wide,full_piv_lu,c64,f,256,4096,,1,colmat,1,147.535973,147535.973000,ok,,"[148.96879299999998, 148.614728, 146.401371, 146.41032900000002, 147.53597299999998]",1,1,zen5-cpu
+linalg-wide,full_piv_lu,c64,f,256,4096,,1,faer,1,169.223226,169223.226000,ok,api-inclusive,"[169.292794, 170.757555, 168.731065, 169.223226, 168.476845]",1,1,zen5-cpu
+linalg-wide,full_piv_lu,c64,f,256,4096,,1,faer,1,175.398909,175398.909000,ok,,"[175.577258, 175.127026, 175.398909, 175.12929, 175.595493]",1,1,zen5-cpu
+linalg-wide,triangular_solve,c64,c,64,1024,,1,lapack-aocl,1,,,skipped,triangular_solve needs a square matrix; 64x1024 is not,,1,1,zen5-cpu
+linalg-wide,triangular_solve,c64,c,64,1024,,1,colmat,1,,,skipped,triangular_solve needs a square matrix; 64x1024 is not,,1,1,zen5-cpu
+linalg-wide,triangular_solve,c64,c,64,1024,,1,faer,1,,,skipped,triangular_solve needs a square matrix; 64x1024 is not,,1,1,zen5-cpu
+linalg-wide,triangular_solve,c64,f,64,1024,,1,lapack-aocl,1,,,skipped,triangular_solve needs a square matrix; 64x1024 is not,,1,1,zen5-cpu
+linalg-wide,triangular_solve,c64,f,64,1024,,1,colmat,1,,,skipped,triangular_solve needs a square matrix; 64x1024 is not,,1,1,zen5-cpu
+linalg-wide,triangular_solve,c64,f,64,1024,,1,faer,1,,,skipped,triangular_solve needs a square matrix; 64x1024 is not,,1,1,zen5-cpu
+linalg-wide,triangular_solve,c64,c,256,4096,,1,lapack-aocl,1,,,skipped,triangular_solve needs a square matrix; 256x4096 is not,,1,1,zen5-cpu
+linalg-wide,triangular_solve,c64,c,256,4096,,1,colmat,1,,,skipped,triangular_solve needs a square matrix; 256x4096 is not,,1,1,zen5-cpu
+linalg-wide,triangular_solve,c64,c,256,4096,,1,faer,1,,,skipped,triangular_solve needs a square matrix; 256x4096 is not,,1,1,zen5-cpu
+linalg-wide,triangular_solve,c64,f,256,4096,,1,lapack-aocl,1,,,skipped,triangular_solve needs a square matrix; 256x4096 is not,,1,1,zen5-cpu
+linalg-wide,triangular_solve,c64,f,256,4096,,1,colmat,1,,,skipped,triangular_solve needs a square matrix; 256x4096 is not,,1,1,zen5-cpu
+linalg-wide,triangular_solve,c64,f,256,4096,,1,faer,1,,,skipped,triangular_solve needs a square matrix; 256x4096 is not,,1,1,zen5-cpu
+linalg-wide,qr_factor,c64,c,64,1024,,1,lapack-aocl,1,,,skipped,"qr_factor in c order has no vendor route that leaves the clock free of allocation and layout conversion: LAPACKE's row-major path allocates a transposed copy and transposes in and out of it inside the call. The vendor row is measured in f order, where both arms run column-major",,1,1,zen5-cpu
+linalg-wide,qr_factor,c64,c,64,1024,,1,colmat,1,2.622203,2622.203000,ok,,"[2.6240259999999997, 2.622203, 2.6336049999999998, 2.617906, 2.604291]",1,1,zen5-cpu
+linalg-wide,qr_factor,c64,c,64,1024,,1,faer,1,2.636049,2636.049000,ok,,"[2.640447, 2.632463, 2.638283, 2.6360490000000003, 2.626732]",1,1,zen5-cpu
+linalg-wide,qr_factor,c64,f,64,1024,,1,lapack-aocl,1,3.139421,3139.421000,ok,,"[3.139902, 3.139421, 3.143388, 3.1336, 3.134893]",1,1,zen5-cpu
+linalg-wide,qr_factor,c64,f,64,1024,,1,colmat,1,2.241860,2241.860000,ok,,"[2.2633, 2.239736, 2.240066, 2.24186, 2.255535]",1,1,zen5-cpu
+linalg-wide,qr_factor,c64,f,64,1024,,1,faer,1,2.233734,2233.734000,ok,,"[2.242401, 2.233284, 2.22633, 2.2337339999999997, 2.2524390000000003]",1,1,zen5-cpu
+linalg-wide,qr_factor,c64,c,256,4096,,1,lapack-aocl,1,,,skipped,"qr_factor in c order has no vendor route that leaves the clock free of allocation and layout conversion: LAPACKE's row-major path allocates a transposed copy and transposes in and out of it inside the call. The vendor row is measured in f order, where both arms run column-major",,1,1,zen5-cpu
+linalg-wide,qr_factor,c64,c,256,4096,,1,colmat,1,97.777868,97777.868000,ok,,"[97.695024, 97.765064, 97.87349400000001, 97.777868, 97.912577]",1,1,zen5-cpu
+linalg-wide,qr_factor,c64,c,256,4096,,1,faer,1,98.364094,98364.094000,ok,,"[98.41605, 98.180564, 98.364094, 98.21034900000001, 99.380104]",1,1,zen5-cpu
+linalg-wide,qr_factor,c64,f,256,4096,,1,lapack-aocl,1,156.648070,156648.070000,ok,,"[156.609779, 156.265352, 156.64807, 157.04203, 158.07565400000001]",1,1,zen5-cpu
+linalg-wide,qr_factor,c64,f,256,4096,,1,colmat,1,95.665731,95665.731000,ok,,"[96.103201, 95.62952399999999, 95.60588100000001, 95.66573100000001, 96.329129]",1,1,zen5-cpu
+linalg-wide,qr_factor,c64,f,256,4096,,1,faer,1,95.752292,95752.292000,ok,,"[95.45943, 95.616821, 96.016021, 95.941473, 95.752292]",1,1,zen5-cpu
+linalg-wide,qr,c64,c,64,1024,,1,lapack-aocl,1,,,skipped,"qr in c order has no vendor route that leaves the clock free of allocation and layout conversion: LAPACKE's row-major path allocates a transposed copy and transposes in and out of it inside the call. The vendor row is measured in f order, where both arms run column-major",,1,1,zen5-cpu
+linalg-wide,qr,c64,c,64,1024,,1,colmat,1,2.555560,2555.560000,ok,api-inclusive,"[2.5555600000000003, 2.5546290000000003, 2.549058, 2.5571040000000003, 2.562283]",1,1,zen5-cpu
+linalg-wide,qr,c64,c,64,1024,,1,colmat,1,2.744761,2744.761000,ok,,"[2.744761, 2.7308950000000003, 2.749179, 2.759087, 2.73884]",1,1,zen5-cpu
+linalg-wide,qr,c64,c,64,1024,,1,faer,1,2.634848,2634.848000,ok,api-inclusive,"[2.6359790000000003, 2.634848, 2.628375, 2.633425, 2.635128]",1,1,zen5-cpu
+linalg-wide,qr,c64,c,64,1024,,1,faer,1,2.749439,2749.439000,ok,,"[2.74465, 2.7494389999999997, 2.7518540000000002, 2.746244, 2.758596]",1,1,zen5-cpu
+linalg-wide,qr,c64,f,64,1024,,1,lapack-aocl,1,3.311660,3311.660000,ok,,"[3.304878, 3.315497, 3.307442, 3.3116600000000003, 3.313794]",1,1,zen5-cpu
+linalg-wide,qr,c64,f,64,1024,,1,colmat,1,2.429197,2429.197000,ok,api-inclusive,"[2.4206309999999998, 2.418567, 2.432302, 2.4325229999999998, 2.4291970000000003]",1,1,zen5-cpu
+linalg-wide,qr,c64,f,64,1024,,1,colmat,1,2.400404,2400.404000,ok,,"[2.397859, 2.428665, 2.400404, 2.410041, 2.385756]",1,1,zen5-cpu
+linalg-wide,qr,c64,f,64,1024,,1,faer,1,2.417334,2417.334000,ok,api-inclusive,"[2.4173340000000003, 2.408668, 2.417214, 2.426733, 2.4248279999999998]",1,1,zen5-cpu
+linalg-wide,qr,c64,f,64,1024,,1,faer,1,2.370759,2370.759000,ok,,"[2.370759, 2.368594, 2.377651, 2.3751670000000003, 2.3671510000000002]",1,1,zen5-cpu
+linalg-wide,qr,c64,c,256,4096,,1,lapack-aocl,1,,,skipped,"qr in c order has no vendor route that leaves the clock free of allocation and layout conversion: LAPACKE's row-major path allocates a transposed copy and transposes in and out of it inside the call. The vendor row is measured in f order, where both arms run column-major",,1,1,zen5-cpu
+linalg-wide,qr,c64,c,256,4096,,1,colmat,1,107.779080,107779.080000,ok,api-inclusive,"[107.679175, 107.767057, 107.77908, 108.154284, 107.986193]",1,1,zen5-cpu
+linalg-wide,qr,c64,c,256,4096,,1,colmat,1,103.576192,103576.192000,ok,,"[103.739593, 103.545875, 103.79370300000001, 103.57619199999999, 103.320388]",1,1,zen5-cpu
+linalg-wide,qr,c64,c,256,4096,,1,faer,1,106.952232,106952.232000,ok,api-inclusive,"[106.821549, 107.171547, 106.944046, 107.592436, 106.952232]",1,1,zen5-cpu
+linalg-wide,qr,c64,c,256,4096,,1,faer,1,104.236746,104236.746000,ok,,"[104.055431, 104.195009, 104.262173, 104.23674600000001, 105.037318]",1,1,zen5-cpu
+linalg-wide,qr,c64,f,256,4096,,1,lapack-aocl,1,169.549772,169549.772000,ok,,"[170.681044, 169.630741, 169.549772, 168.44219199999998, 169.04823299999998]",1,1,zen5-cpu
+linalg-wide,qr,c64,f,256,4096,,1,colmat,1,104.921436,104921.436000,ok,api-inclusive,"[103.985643, 104.921436, 103.542874, 105.291331, 105.18842000000001]",1,1,zen5-cpu
+linalg-wide,qr,c64,f,256,4096,,1,colmat,1,102.380524,102380.524000,ok,,"[102.396443, 102.06570099999999, 102.45448999999999, 102.375113, 102.380524]",1,1,zen5-cpu
+linalg-wide,qr,c64,f,256,4096,,1,faer,1,102.681461,102681.461000,ok,api-inclusive,"[102.571918, 102.681461, 103.048972, 102.644453, 103.03855300000001]",1,1,zen5-cpu
+linalg-wide,qr,c64,f,256,4096,,1,faer,1,102.379133,102379.133000,ok,,"[102.383962, 102.628525, 102.379133, 101.272334, 101.598819]",1,1,zen5-cpu
+linalg-wide,svd_values,c64,c,64,1024,,1,lapack-aocl,1,,,skipped,"svd_values in c order has no vendor route that leaves the clock free of allocation and layout conversion: LAPACKE's row-major path allocates a transposed copy and transposes in and out of it inside the call. The vendor row is measured in f order, where both arms run column-major",,1,1,zen5-cpu
+linalg-wide,svd_values,c64,c,64,1024,,1,colmat,1,2.342105,2342.105000,ok,api-inclusive,"[2.3366860000000003, 2.344991, 2.3438679999999996, 2.342105, 2.3409839999999997]",1,1,zen5-cpu
+linalg-wide,svd_values,c64,c,64,1024,,1,colmat,1,2.337377,2337.377000,ok,,"[2.3370859999999998, 2.337377, 2.336445, 2.339832, 2.342186]",1,1,zen5-cpu
+linalg-wide,svd_values,c64,c,64,1024,,1,faer,1,2.926017,2926.017000,ok,api-inclusive,"[2.915697, 2.9262569999999997, 2.92198, 2.929583, 2.926017]",1,1,zen5-cpu
+linalg-wide,svd_values,c64,c,64,1024,,1,faer,1,2.933802,2933.802000,ok,,"[2.920406, 2.941656, 2.933802, 2.935203, 2.917561]",1,1,zen5-cpu
+linalg-wide,svd_values,c64,f,64,1024,,1,lapack-aocl,1,4.107634,4107.634000,ok,,"[4.121910000000001, 4.117713, 4.104318, 4.106542, 4.107634]",1,1,zen5-cpu
+linalg-wide,svd_values,c64,f,64,1024,,1,colmat,1,2.475142,2475.142000,ok,api-inclusive,"[2.475142, 2.4727870000000003, 2.473309, 2.476204, 2.4829969999999997]",1,1,zen5-cpu
+linalg-wide,svd_values,c64,f,64,1024,,1,colmat,1,2.480072,2480.072000,ok,,"[2.47928, 2.4928250000000003, 2.480072, 2.471585, 2.48492]",1,1,zen5-cpu
+linalg-wide,svd_values,c64,f,64,1024,,1,faer,1,3.049204,3049.204000,ok,api-inclusive,"[3.048804, 3.048964, 3.051398, 3.0492039999999996, 3.057881]",1,1,zen5-cpu
+linalg-wide,svd_values,c64,f,64,1024,,1,faer,1,3.066426,3066.426000,ok,,"[3.073199, 3.06307, 3.077898, 3.0664260000000003, 3.065996]",1,1,zen5-cpu
+linalg-wide,svd_values,c64,c,256,4096,,1,lapack-aocl,1,,,skipped,"svd_values in c order has no vendor route that leaves the clock free of allocation and layout conversion: LAPACKE's row-major path allocates a transposed copy and transposes in and out of it inside the call. The vendor row is measured in f order, where both arms run column-major",,1,1,zen5-cpu
+linalg-wide,svd_values,c64,c,256,4096,,1,colmat,1,100.116178,100116.178000,ok,api-inclusive,"[100.116178, 99.998721, 100.445848, 100.753037, 100.06211800000001]",1,1,zen5-cpu
+linalg-wide,svd_values,c64,c,256,4096,,1,colmat,1,100.459765,100459.765000,ok,,"[100.642282, 101.520278, 100.08886799999999, 100.231071, 100.459765]",1,1,zen5-cpu
+linalg-wide,svd_values,c64,c,256,4096,,1,faer,1,110.014303,110014.303000,ok,api-inclusive,"[109.920439, 110.023731, 109.962778, 110.014303, 110.083872]",1,1,zen5-cpu
+linalg-wide,svd_values,c64,c,256,4096,,1,faer,1,110.017701,110017.701000,ok,,"[110.073604, 110.017701, 110.03160700000001, 109.835002, 109.90162600000001]",1,1,zen5-cpu
+linalg-wide,svd_values,c64,f,256,4096,,1,lapack-aocl,1,253.107027,253107.027000,ok,,"[253.107027, 252.617991, 253.761338, 253.024154, 254.21487]",1,1,zen5-cpu
+linalg-wide,svd_values,c64,f,256,4096,,1,colmat,1,114.638347,114638.347000,ok,api-inclusive,"[114.729495, 113.880865, 114.638347, 115.397372, 114.63809699999999]",1,1,zen5-cpu
+linalg-wide,svd_values,c64,f,256,4096,,1,colmat,1,112.437904,112437.904000,ok,,"[112.531397, 112.55341800000001, 112.399002, 112.32737900000001, 112.437904]",1,1,zen5-cpu
+linalg-wide,svd_values,c64,f,256,4096,,1,faer,1,122.171093,122171.093000,ok,api-inclusive,"[122.04182399999999, 122.171093, 122.054287, 122.983207, 122.288231]",1,1,zen5-cpu
+linalg-wide,svd_values,c64,f,256,4096,,1,faer,1,124.188509,124188.509000,ok,,"[124.301438, 122.71671500000001, 124.641618, 123.66487, 124.188509]",1,1,zen5-cpu
+linalg-wide,svd_thin,c64,c,64,1024,,1,lapack-aocl,1,,,skipped,"svd_thin in c order has no vendor route that leaves the clock free of allocation and layout conversion: LAPACKE's row-major path allocates a transposed copy and transposes in and out of it inside the call. The vendor row is measured in f order, where both arms run column-major",,1,1,zen5-cpu
+linalg-wide,svd_thin,c64,c,64,1024,,1,colmat,1,5.328635,5328.635000,ok,api-inclusive,"[5.327473, 5.316031, 5.328844999999999, 5.3319209999999995, 5.328635]",1,1,zen5-cpu
+linalg-wide,svd_thin,c64,c,64,1024,,1,colmat,1,5.288430,5288.430000,ok,,"[5.28843, 5.296866, 5.282129, 5.302306, 5.287058]",1,1,zen5-cpu
+linalg-wide,svd_thin,c64,c,64,1024,,1,faer,1,5.737542,5737.542000,ok,api-inclusive,"[5.7388650000000005, 5.738414, 5.737542, 5.736739999999999, 5.728595]",1,1,zen5-cpu
+linalg-wide,svd_thin,c64,c,64,1024,,1,faer,1,5.702927,5702.927000,ok,,"[5.702927, 5.7190080000000005, 5.704561, 5.683812, 5.69327]",1,1,zen5-cpu
+linalg-wide,svd_thin,c64,f,64,1024,,1,lapack-aocl,1,9.735844,9735.844000,ok,,"[9.749920000000001, 9.746523999999999, 9.730995, 9.735844, 9.722299]",1,1,zen5-cpu
+linalg-wide,svd_thin,c64,f,64,1024,,1,colmat,1,5.435202,5435.202000,ok,api-inclusive,"[5.4311050000000005, 5.430323, 5.43934, 5.435202, 5.451252]",1,1,zen5-cpu
+linalg-wide,svd_thin,c64,f,64,1024,,1,colmat,1,5.436335,5436.335000,ok,,"[5.429622, 5.436996000000001, 5.436335, 5.421577, 5.453987000000001]",1,1,zen5-cpu
+linalg-wide,svd_thin,c64,f,64,1024,,1,faer,1,5.819784,5819.784000,ok,api-inclusive,"[5.831917, 5.819783999999999, 5.817149, 5.81179, 5.865669]",1,1,zen5-cpu
+linalg-wide,svd_thin,c64,f,64,1024,,1,faer,1,5.815366,5815.366000,ok,,"[5.829483, 5.815366, 5.811999, 5.824453, 5.806058999999999]",1,1,zen5-cpu
+linalg-wide,svd_thin,c64,c,256,4096,,1,lapack-aocl,1,,,skipped,"svd_thin in c order has no vendor route that leaves the clock free of allocation and layout conversion: LAPACKE's row-major path allocates a transposed copy and transposes in and out of it inside the call. The vendor row is measured in f order, where both arms run column-major",,1,1,zen5-cpu
+linalg-wide,svd_thin,c64,c,256,4096,,1,colmat,1,261.503211,261503.211000,ok,api-inclusive,"[261.164352, 261.503211, 261.863157, 262.56149, 260.716926]",1,1,zen5-cpu
+linalg-wide,svd_thin,c64,c,256,4096,,1,colmat,1,261.005054,261005.054000,ok,,"[261.883118, 260.973885, 260.882306, 261.00505400000003, 261.82428000000004]",1,1,zen5-cpu
+linalg-wide,svd_thin,c64,c,256,4096,,1,faer,1,269.612343,269612.343000,ok,api-inclusive,"[269.45916800000003, 269.734509, 269.61234299999995, 269.72367, 269.310795]",1,1,zen5-cpu
+linalg-wide,svd_thin,c64,c,256,4096,,1,faer,1,267.665523,267665.523000,ok,,"[268.845628, 267.665523, 268.127029, 266.83554799999996, 267.481133]",1,1,zen5-cpu
+linalg-wide,svd_thin,c64,f,256,4096,,1,lapack-aocl,1,572.240018,572240.018000,ok,,"[573.8321870000001, 572.176425, 573.6544220000001, 571.8979429999999, 572.240018]",1,1,zen5-cpu
+linalg-wide,svd_thin,c64,f,256,4096,,1,colmat,1,273.773907,273773.907000,ok,api-inclusive,"[274.09678199999996, 273.650035, 273.568765, 274.416625, 273.773907]",1,1,zen5-cpu
+linalg-wide,svd_thin,c64,f,256,4096,,1,colmat,1,274.014746,274014.746000,ok,,"[274.015306, 273.279824, 274.014746, 273.49179699999996, 274.31409]",1,1,zen5-cpu
+linalg-wide,svd_thin,c64,f,256,4096,,1,faer,1,281.609934,281609.934000,ok,api-inclusive,"[281.682356, 281.55670399999997, 281.609934, 281.31682, 282.565413]",1,1,zen5-cpu
+linalg-wide,svd_thin,c64,f,256,4096,,1,faer,1,280.910904,280910.904000,ok,,"[281.540147, 281.92762500000003, 280.397714, 280.646495, 280.910904]",1,1,zen5-cpu
+linalg-wide,eigh,c64,c,64,1024,,1,lapack-aocl,1,,,skipped,"eigh in c order has no vendor route that leaves the clock free of allocation and layout conversion: LAPACKE's row-major path allocates a transposed copy and transposes in and out of it inside the call. The vendor row is measured in f order, where both arms run column-major",,1,1,zen5-cpu
+linalg-wide,eigh,c64,c,64,1024,,1,colmat,1,,,skipped,eigh needs a square matrix; 64x1024 is not,,1,1,zen5-cpu
+linalg-wide,eigh,c64,c,64,1024,,1,faer,1,,,skipped,eigh needs a square matrix; 64x1024 is not,,1,1,zen5-cpu
+linalg-wide,eigh,c64,f,64,1024,,1,lapack-aocl,1,,,skipped,eigh needs a square matrix; 64x1024 is not,,1,1,zen5-cpu
+linalg-wide,eigh,c64,f,64,1024,,1,colmat,1,,,skipped,eigh needs a square matrix; 64x1024 is not,,1,1,zen5-cpu
+linalg-wide,eigh,c64,f,64,1024,,1,faer,1,,,skipped,eigh needs a square matrix; 64x1024 is not,,1,1,zen5-cpu
+linalg-wide,eigh,c64,c,256,4096,,1,lapack-aocl,1,,,skipped,"eigh in c order has no vendor route that leaves the clock free of allocation and layout conversion: LAPACKE's row-major path allocates a transposed copy and transposes in and out of it inside the call. The vendor row is measured in f order, where both arms run column-major",,1,1,zen5-cpu
+linalg-wide,eigh,c64,c,256,4096,,1,colmat,1,,,skipped,eigh needs a square matrix; 256x4096 is not,,1,1,zen5-cpu
+linalg-wide,eigh,c64,c,256,4096,,1,faer,1,,,skipped,eigh needs a square matrix; 256x4096 is not,,1,1,zen5-cpu
+linalg-wide,eigh,c64,f,256,4096,,1,lapack-aocl,1,,,skipped,eigh needs a square matrix; 256x4096 is not,,1,1,zen5-cpu
+linalg-wide,eigh,c64,f,256,4096,,1,colmat,1,,,skipped,eigh needs a square matrix; 256x4096 is not,,1,1,zen5-cpu
+linalg-wide,eigh,c64,f,256,4096,,1,faer,1,,,skipped,eigh needs a square matrix; 256x4096 is not,,1,1,zen5-cpu
