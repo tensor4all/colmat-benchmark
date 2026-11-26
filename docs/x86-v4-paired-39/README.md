@@ -33,6 +33,10 @@ governor and EPP `performance`. **A re-run with boost on is not comparable with 
 
 ## Runs (`data/results/zen5-cpu/colmat-kernels/`)
 
+Pair 1 is recorded in this pull request (colmat-benchmark#141); pair 2 is recorded in
+colmat-benchmark#142, because one pull request carrying all four runs exceeds GitHub's 300-file diff
+limit. The per-cell tables here cover both pairs.
+
 | pair | vendor arm (in-run control) | families | default arm | `x86-v4` arm | order |
 |---|---|---|---|---|---|
 | 1 | OpenBLAS 0.3.32 | cholesky, lu, solve (the arm's `vendor_families`) | `20261126T030635Z-x86v4-39-default` | `20261126T035822Z-x86v4-39-v4` | default first |
