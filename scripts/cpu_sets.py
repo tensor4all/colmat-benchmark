@@ -7,7 +7,9 @@ four L3 domains, which a reader of "16T" would not guess. This reads
 fills whole L3 domains in CPU order for each requested thread count, and reports for every row the
 domains it spans and whether it is L3-local (one domain). `check` (contiguous rows only; interleaved profiles such as ohtaka-fat exit 2) compares a profile's
 `thread_rows` and every suite's `cpu_sets` for that profile with the derived sets and exits 1 on a
-difference, so a hand-edited list cannot drift from the node.
+difference, so a hand-edited list cannot drift from the node in size or in the number of L3 domains it spans (a row
+shifted to another aligned block, or a stale observer list, is not detected: each row is judged from its
+own first CPU).
 
     cpu_sets.py derive --threads 1,16,32,64,128 [--sysfs-root /]
     cpu_sets.py check ohtaka-cpu [--sysfs-root /]

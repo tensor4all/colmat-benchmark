@@ -63,6 +63,12 @@ if [[ -z $evidence && -n ${SLURM_JOB_ID:-} ]]; then
     evidence=${SLURM_SUBMIT_DIR:-$PWD}/failed-evidence/$SLURM_JOB_ID
 fi
 tmp=
+made_dirs=()
+if [[ -n $evidence ]]; then
+    # Remember which directories this run creates, so a valid run leaves none of them behind.
+    d=$evidence
+    while [[ -n $d && $d != / && $d != . && ! -d $d ]]; do made_dirs+=("$d"); d=$(dirname -- "$d"); done
+fi
 if [[ -n $evidence ]] && mkdir -p -- "$evidence" 2>/dev/null \
         && tmp=$(mktemp "$evidence/pinned-stdout.XXXXXX" 2>/dev/null) \
         && guard=$(mktemp "$evidence/pinned-guard.XXXXXX" 2>/dev/null); then
@@ -81,6 +87,7 @@ cleanup() {
         echo "pinned.sh: evidence retained at $tmp and $guard" >&2
     else
         rm -f "$tmp" "$guard"
+        for d in ${made_dirs[@]+"${made_dirs[@]}"}; do rmdir -- "$d" 2>/dev/null || true; done
     fi
 }
 trap cleanup EXIT

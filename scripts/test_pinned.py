@@ -155,7 +155,7 @@ class PinnedTest(unittest.TestCase):
         where = Path(shared.name)/'ok'
         root, local, result = self._run_evidence(0, PINNED_EVIDENCE_DIR=str(where))
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(list(where.iterdir()), [])
+        self.assertFalse(where.exists(), 'a valid run must not leave its evidence directory behind')
 
     def test_rejected_attempt_is_archived_on_the_shared_dir(self):
         shared = tempfile.TemporaryDirectory(prefix='shared fs ')
