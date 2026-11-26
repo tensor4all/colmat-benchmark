@@ -79,6 +79,7 @@ FAMILY_ORDER = ('gemm', 'lu', 'cholesky', 'solve', 'qr_factor', 'qr', 'eigh', 's
 # model string the manifests record. A CPU missing here is printed by its model string alone.
 ARCHITECTURES = (
     (r'Ryzen AI 9 HX 470', 'AMD Zen 5', 'AVX-512'),
+    (r'Ryzen AI MAX\+ 395', 'AMD Zen 5', 'AVX-512'),   # evo2 (Strix Halo), 16 full Zen 5 cores
     (r'EPYC 7702', 'AMD Zen 2', 'AVX2'),
     (r'Xeon Platinum 8280', 'Intel Cascade Lake', 'AVX-512'),
 )
