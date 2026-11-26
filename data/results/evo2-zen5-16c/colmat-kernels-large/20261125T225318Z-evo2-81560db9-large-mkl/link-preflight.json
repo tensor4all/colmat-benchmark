@@ -1,0 +1,55 @@
+{
+  "schema": "link-preflight/1",
+  "time": "2026-11-25T22:53:13Z",
+  "host": "EVO-X2",
+  "profile": null,
+  "config": {
+    "path": "/home/shinaoka/work/cb-evo2-12fam/benchmarks/link-preflight.yaml",
+    "sha256": "377f5f896d7673c4b03c357a83293ab228a440453461a89cd6af201a6ddfadf9"
+  },
+  "rustc": "rustc 1.100.0 (0ef1bc386 2026-11-09)\nbinary: rustc\ncommit-hash: 0ef1bc386059596dada8fb65b50425aab2ea637a\ncommit-date: 2026-11-09\nhost: x86_64-unknown-linux-gnu\nrelease: 1.100.0\nLLVM version: 23.1.5",
+  "rustflags": [],
+  "arms": [
+    {
+      "arm": "mkl",
+      "source": "fbench/build.rs (feature link-mkl); MKLROOT and MKL_THREADING_LIB as scripts/build_for_faer_rev.sh resolves them",
+      "libs": [
+        "mkl_intel_lp64",
+        "mkl_intel_thread",
+        "mkl_core",
+        "iomp5"
+      ],
+      "env": {
+        "MKLROOT": "/opt/intel/oneapi/mkl/2026.2",
+        "MKL_THREADING_LIB": "/opt/intel/oneapi/compiler/2026.2/lib/libiomp5.so"
+      },
+      "env_notes": [
+        "MKL_THREADING_LIB unset; resolved to /opt/intel/oneapi/compiler/2026.2/lib/libiomp5.so from /opt/intel/oneapi/compiler/*/lib/libiomp5.so"
+      ],
+      "search": [
+        {
+          "entry": "$MKLROOT/lib",
+          "path": "/opt/intel/oneapi/mkl/2026.2/lib",
+          "status": "searched"
+        },
+        {
+          "entry": "dirname:$MKL_THREADING_LIB",
+          "path": "/opt/intel/oneapi/compiler/2026.2/lib",
+          "status": "searched"
+        }
+      ],
+      "library_path": "/opt/intel/oneapi/tcm/1.6/lib:/opt/intel/oneapi/umf/1.2/lib:/opt/intel/oneapi/tcm/1.6/env/../lib:/opt/intel/oneapi/tbb/2023.2/env/../lib/intel64/gcc4.8:/opt/intel/oneapi/mkl/2026.2/lib:/opt/intel/oneapi/compiler/2026.2/lib",
+      "rpath": true,
+      "loader_paths": [],
+      "ld_library_path": "/opt/intel/oneapi/tcm/1.6/lib:/opt/intel/oneapi/umf/1.2/lib:/opt/intel/oneapi/tcm/1.6/env/../lib:/opt/intel/oneapi/tbb/2023.2/env/../lib/intel64/gcc4.8:/opt/intel/oneapi/mkl/2026.2/lib:/opt/intel/oneapi/compiler/2026.2/opt/compiler/lib:/opt/intel/oneapi/compiler/2026.2/lib",
+      "missing": [],
+      "ok": true,
+      "stage": null,
+      "command": "rustc --edition 2021 -C opt-level=0 -C debuginfo=0 -L native=/opt/intel/oneapi/mkl/2026.2/lib -L native=/opt/intel/oneapi/compiler/2026.2/lib -C link-arg=-Wl,--push-state,--no-as-needed -C link-arg=-lmkl_intel_lp64 -C link-arg=-lmkl_intel_thread -C link-arg=-lmkl_core -C link-arg=-liomp5 -C link-arg=-Wl,--pop-state -C link-arg=-Wl,-rpath,/opt/intel/oneapi/mkl/2026.2/lib -C link-arg=-Wl,-rpath,/opt/intel/oneapi/compiler/2026.2/lib /tmp/link-preflight-dzccpar9/mkl.rs -o /tmp/link-preflight-dzccpar9/probe-mkl",
+      "stderr": null,
+      "seconds": 0.07
+    }
+  ],
+  "ok": true,
+  "text": "link preflight on EVO-X2: /home/shinaoka/work/cb-evo2-12fam/benchmarks/link-preflight.yaml\n  OK   mkl  [fbench/build.rs (feature link-mkl); MKLROOT and MKL_THREADING_LIB as scripts/build_for_faer_rev.sh resolves them]  (0.07 s)\n       note:     MKL_THREADING_LIB unset; resolved to /opt/intel/oneapi/compiler/2026.2/lib/libiomp5.so from /opt/intel/oneapi/compiler/*/lib/libiomp5.so\nLINK PREFLIGHT OK"
+}

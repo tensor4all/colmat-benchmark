@@ -6,13 +6,32 @@ this file is what the generator produces.
 Every page not selected for the index's Cells table, newest first and grouped by the
 revisions it measured. The current pages are in [INDEX.md](INDEX.md).
 
-- Reference fork revision (`pins/colmat.rev`): `93da62172a96260ae3d5ed7481690f440f58d904`
+- Reference fork revision (`pins/colmat.rev`): `81560db94498478e8dd65153739e208391e434b6`
 - Reference upstream revision (`pins/upstream-faer.rev`): `faer-v0.24.4`
-- Newest recorded run: `2026-11-22T16:04:54.266672Z`
+- Newest recorded run: `2026-11-26T06:14:58.173559Z`
 - Every page below is one `(suite, hardware profile, fork revision, upstream revision,
   vendor arm)` and carries its commits, its hardware and the vendor library it linked.
 
 ## Older pages
+
+### `93da62172a96/0539947ffb75`: version 0.34.0, upstream faer-v0.24.4
+
+| suite | profile | vendor | fork/upstream | version | date | coverage | status | page |
+|---|---|---|---|---|---|---|---|---|
+| `colmat-kernels` | `zen5-cpu` | `aocl` | `93da62172a96/0539947ffb75` | 0.34.0 | 2026-11-21 | partial | stale | [result/zen5-cpu/faer-kernels/93da62172a96-0539947ffb75-aocl-timing-v2.md](zen5-cpu/faer-kernels/93da62172a96-0539947ffb75-aocl-timing-v2.md) |
+| `colmat-kernels` | `zen5-cpu` | `mkl` | `93da62172a96/0539947ffb75` | 0.34.0 | 2026-11-20 | full | stale | [result/zen5-cpu/faer-kernels/93da62172a96-0539947ffb75-mkl-timing-v2.md](zen5-cpu/faer-kernels/93da62172a96-0539947ffb75-mkl-timing-v2.md) |
+| `colmat-kernels` | `zen5-cpu` | `openblas` | `93da62172a96/0539947ffb75` | 0.34.0 | 2026-11-20 | declaration-changed | stale | [result/zen5-cpu/faer-kernels/93da62172a96-0539947ffb75-openblas-timing-v2.md](zen5-cpu/faer-kernels/93da62172a96-0539947ffb75-openblas-timing-v2.md) |
+| `colmat-kernels-keyaki` | `keyaki-64` | `mkl` | `93da62172a96/0539947ffb75` | 0.34.0 | 2026-11-22 | full | stale | [result/keyaki-64/faer-kernels-keyaki/93da62172a96-0539947ffb75-mkl-timing-v2.md](keyaki-64/faer-kernels-keyaki/93da62172a96-0539947ffb75-mkl-timing-v2.md) |
+| `colmat-kernels-keyaki-os-shared` | `keyaki-64-os-shared` | `mkl` | `93da62172a96/0539947ffb75` | 0.34.0 | 2026-11-22 | full | stale | [result/keyaki-64-os-shared/faer-kernels-keyaki-os-shared/93da62172a96-0539947ffb75-mkl-timing-v2.md](keyaki-64-os-shared/faer-kernels-keyaki-os-shared/93da62172a96-0539947ffb75-mkl-timing-v2.md) |
+| `colmat-kernels-large` | `zen5-cpu` | `aocl` | `93da62172a96/0539947ffb75` | 0.34.0 | 2026-11-21 | partial | stale | [result/zen5-cpu/faer-kernels-large/93da62172a96-0539947ffb75-aocl-timing-v2.md](zen5-cpu/faer-kernels-large/93da62172a96-0539947ffb75-aocl-timing-v2.md) |
+| `colmat-kernels-large` | `zen5-cpu` | `mkl` | `93da62172a96/0539947ffb75` | 0.34.0 | 2026-11-20 | partial | stale | [result/zen5-cpu/faer-kernels-large/93da62172a96-0539947ffb75-mkl-timing-v2.md](zen5-cpu/faer-kernels-large/93da62172a96-0539947ffb75-mkl-timing-v2.md) |
+| `colmat-kernels-large` | `zen5-cpu` | `openblas` | `93da62172a96/0539947ffb75` | 0.34.0 | 2026-11-21 | declaration-changed | stale | [result/zen5-cpu/faer-kernels-large/93da62172a96-0539947ffb75-openblas-timing-v2.md](zen5-cpu/faer-kernels-large/93da62172a96-0539947ffb75-openblas-timing-v2.md) |
+| `faer-kernels-ohtaka-c64` | `ohtaka-cpu` | `openblas` | `93da62172a96/0539947ffb75` | 0.34.0 | 2026-11-20 | full | stale; **not comparable with the timing baseline** (priming 100 ms < 250 ms; 3 reps < 5) | [result/ohtaka-cpu/faer-kernels-ohtaka-c64/93da62172a96-0539947ffb75-openblas-timing-v2.md](ohtaka-cpu/faer-kernels-ohtaka-c64/93da62172a96-0539947ffb75-openblas-timing-v2.md) |
+| `faer-kernels-ohtaka-fat-factor` | `ohtaka-fat` | `mkl` | `93da62172a96/0539947ffb75` | 0.34.0 | 2026-11-22 | full | stale; **not comparable with the timing baseline** (priming 100 ms < 250 ms; 3 reps < 5) | [result/ohtaka-fat/faer-kernels-ohtaka-fat-factor/93da62172a96-0539947ffb75-mkl-timing-v2.md](ohtaka-fat/faer-kernels-ohtaka-fat-factor/93da62172a96-0539947ffb75-mkl-timing-v2.md) |
+| `faer-kernels-ohtaka-fat-gemm` | `ohtaka-fat` | `mkl` | `93da62172a96/0539947ffb75` | 0.34.0 | 2026-11-22 | full | stale; **not comparable with the timing baseline** (priming 100 ms < 250 ms; 3 reps < 5) | [result/ohtaka-fat/faer-kernels-ohtaka-fat-gemm/93da62172a96-0539947ffb75-mkl-timing-v2.md](ohtaka-fat/faer-kernels-ohtaka-fat-gemm/93da62172a96-0539947ffb75-mkl-timing-v2.md) |
+| `faer-kernels-ohtaka-fat-qr` | `ohtaka-fat` | `mkl` | `93da62172a96/0539947ffb75` | 0.34.0 | 2026-11-22 | full | stale; **not comparable with the timing baseline** (priming 100 ms < 250 ms; 3 reps < 5) | [result/ohtaka-fat/faer-kernels-ohtaka-fat-qr/93da62172a96-0539947ffb75-mkl-timing-v2.md](ohtaka-fat/faer-kernels-ohtaka-fat-qr/93da62172a96-0539947ffb75-mkl-timing-v2.md) |
+| `faer-kernels-ohtaka-large` | `ohtaka-cpu` | `mkl` | `93da62172a96/0539947ffb75` | 0.34.0 | 2026-11-22 | partial | stale; **not comparable with the timing baseline** (priming 100 ms < 250 ms; 3 reps < 5) | [result/ohtaka-cpu/faer-kernels-ohtaka-large/93da62172a96-0539947ffb75-mkl-timing-v2.md](ohtaka-cpu/faer-kernels-ohtaka-large/93da62172a96-0539947ffb75-mkl-timing-v2.md) |
+| `faer-kernels-ohtaka-small` | `ohtaka-cpu` | `openblas` | `93da62172a96/0539947ffb75` | 0.34.0 | 2026-11-20 | partial | stale; **not comparable with the timing baseline** (priming 100 ms < 250 ms; 3 reps < 5) | [result/ohtaka-cpu/faer-kernels-ohtaka-small/93da62172a96-0539947ffb75-openblas-timing-v2.md](ohtaka-cpu/faer-kernels-ohtaka-small/93da62172a96-0539947ffb75-openblas-timing-v2.md) |
 
 ### `325e482b6532/0539947ffb75`: version 0.28.0, upstream faer-v0.24.4
 
@@ -97,3 +116,8 @@ revisions it measured. The current pages are in [INDEX.md](INDEX.md).
 | `colmat-kernels` | `zen5-cpu` | `openblas` | `bfe4041cd991/0539947ffb75` | 0.24.4 | 2026-10-14 | declaration-changed | stale | [result/zen5-cpu/faer-kernels/bfe4041cd991-0539947ffb75-openblas.md](zen5-cpu/faer-kernels/bfe4041cd991-0539947ffb75-openblas.md) |
 | `colmat-kernels-large` | `zen5-cpu` | `mkl` | `bfe4041cd991/0539947ffb75` | 0.24.4 | 2026-10-16 | partial | stale | [result/zen5-cpu/faer-kernels-large/bfe4041cd991-0539947ffb75-mkl-timing-v2.md](zen5-cpu/faer-kernels-large/bfe4041cd991-0539947ffb75-mkl-timing-v2.md) |
 | `colmat-kernels-large` | `zen5-cpu` | `openblas` | `bfe4041cd991/0539947ffb75` | 0.24.4 | 2026-10-16 | declaration-changed | stale | [result/zen5-cpu/faer-kernels-large/bfe4041cd991-0539947ffb75-openblas-timing-v2.md](zen5-cpu/faer-kernels-large/bfe4041cd991-0539947ffb75-openblas-timing-v2.md) |
+
+A `status` marked **not comparable with the timing baseline** is a page recorded with less
+priming or fewer repetitions than the campaign's frozen 250 ms /
+5 reps (docs/protocol-v2-baseline.md): too little priming reads a few percent fast, so its
+cells are compared only with runs recorded the same way, never with the other pages here.

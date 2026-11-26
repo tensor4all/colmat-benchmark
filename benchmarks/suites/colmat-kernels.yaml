@@ -126,9 +126,13 @@ engines_doc:
       every adapter is written per arm, and shared transitive dependencies can unify
       Cargo features, so both arms declare equivalent feature sets and the resolved
       lock is recorded.
-      measured at 93da6217, colmat-rs main at the 2026-11-17 head: no tag names that
-      revision, and the published crates.io colmat 0.34.0 was cut from e1c83482.
-      The 2026-11-17 zen5-cpu recordings were taken at this revision.
+      The twelve-family campaign measures 81560db9, colmat-rs main at the merge of #296
+      (t4a-private-gemm-x86 0.1.30); no tag names it. The zen5-cpu, ohtaka and keyaki
+      recordings were taken at 93da6217, the 2026-11-17 head, which lacks the 46 colmat-rs
+      merges in between (the LU look-ahead #239 among them).
+      The gemm-crate bump itself is expected to be numerically inert here: colmat-rs#296 found
+      all 112 result fingerprints bit-identical between 0.1.28 and 0.1.30, and its one new path
+      (the packed AVX2 driver) does not engage on AMD Zen5 or on AVX-512 hosts.
   faer:
     provider: faer
     summary: >-

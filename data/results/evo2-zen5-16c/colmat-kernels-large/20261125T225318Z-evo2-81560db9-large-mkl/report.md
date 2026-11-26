@@ -1,0 +1,1092 @@
+# `colmat-kernels-large` on `evo2-zen5-16c`
+
+- colmat (fork, measured) commit: `81560db94498478e8dd65153739e208391e434b6`
+- colmat version: `0.34.0`
+- upstream faer commit: `0539947ffb757a739d7e703a7d2fa0c792a909c1`
+- upstream faer ref/version: `faer-v0.24.4` / `0.24.4`
+- features: `std, rayon`
+- colmat / faer rows: `colmat` (the provider in the measured revision; see library and upstream above); `faer` (the provider in the measured revision; see library and upstream above)
+- harness commit: `5ee382265b3ed6081be88d113019fdd3797cac5b`
+- toolkit commit: `b1302a25e837d7ab9070005fcb9afdc5e18afd37`
+- measured binary SHA-256: `9b750afe9b03059051b1c732573a4fa3e0088632bb501f8a1eb21d57b26986fe`
+- hardware profile: `evo2-zen5-16c`
+- host role: `measurement` — published dataset host
+- timestamp: `2026-11-26T00:26:50.314315Z`
+- timing policy: v2, median of 5 reps, priming 250 ms (time-based, identical on every row)
+- guards: idle window 3 s, max busy 5.0% including SMT siblings, 3 attempts
+- command: `scripts/record_run.py evo2-zen5-16c colmat-kernels-large --vendor mkl --engines colmat,faer,lapack-mkl --threads 4,8 --regimes linalg-large,gemm-large,linalg-boundary --shapes 1024,1536,1024x1024x1024,1536x1536x1536,255,257,511,513 --reps 5 --aa 3 --prime-ms 250 --label evo2-81560db9-large-mkl`
+- harness environment: `FBENCH_ORDER` unset, `FBENCH_PROFILE=evo2-zen5-16c`
+- raw data: `data/results/evo2-zen5-16c/colmat-kernels-large/20261125T225318Z-evo2-81560db9-large-mkl/`
+
+## What was measured
+
+- **Workload** — Direct calls into one colmat revision and its upstream faer baseline: square and rectangular dense matrices, C (row-major) and F (column-major) order, `f64` and `c64`. A shape is `N` for square, `MxN` for rectangular, or `MxKxN` for `gemm`, which is a three-index operation and cannot be written as two. Sizes are the matrix dimensions, not a memory budget, so a case name says exactly what was factored. `gemm` measures `linalg::matmul::matmul` into a caller-prepared destination with `Accum::Replace`; there is no operator path, so one shape is one work.
+  Source: The fork's own public API (`faer/src/linalg`): `matmul`, the QR factor and composite, `upgrade_householder_factor`, the block/sequence Householder apply, LU and full-pivot LU, Cholesky, triangular solve, solve, thin SVD, singular values and the symmetric/nonsymmetric eigensolvers. Inputs are seeded from the case, so `verify` and `run` measure the same matrices and a rerun is reproducible.
+  Known blind spot: Only the colmat and faer entry points are measured. tlinalg's packing, batch loop and lane policy, tenferro's tensor construction and dtype dispatch, and the small-`m` decode-projection shapes are other repositories' rows (tlinalg-benchmark, tenferro-benchmark).
+  Known blind spot: Vendor C-order cells use CBLAS/LAPACKE row-major entry points. Workspace allocation or layout conversion internal to those APIs remains timed; these are not prepared-column-major or transpose measurements.
+  Known blind spot: `gemm` covers the tall class's two Householder legs (a 16-wide basis and a 240-column target over 4096 rows: the reduction and the write-back) beside a vendor `?gemm` on the same leg. A single leg beside a vendor gemm is a diagnostic reference, not the equivalent implementation of the whole update, and the row is labelled accordingly.
+  Known blind spot: `householder_apply` measures block apply and the one-block sequence form as two distinct rows, labelled with basis width min(m,n) and target width n. QR fixture preparation is outside timing. Independently varied basis/target widths and multi-panel sequences are not covered.
+  Known blind spot: Allocation performed inside the measured call stays inside the clock. The fork's two row splits allocate their partial buffers inside the public call, and the public scratch function does not expose them; the campaign reports that as it is instead of changing colmat's API to make the boundary look cleaner.
+  Known blind spot: `cholesky`, `eigh`, `solve` and `triangular_solve` are measured on square shapes only: the matrix they factor or solve with is square by definition (self-adjoint for the first two, a triangular factor for the last). `lu` and `full_piv_lu` are not gated that way -- they take the declared rectangular shapes too, with `min(m, n)` pivots and a trapezoidal `L` or `U`, which is what `dgetrf` does as well -- so a rectangular LU cell is measured in both orders beside its square one.
+  Known blind spot: BLIS, sparse, iterative and GPU arms are later declarations, not machinery built now.
+  Known blind spot: A vendor arm records the library it linked. OpenBLAS and AOCL report the kernel their runtime dispatched to (AOCL for BLIS and libflame separately); MKL names no kernel and no processor count, so its manifest leaves both empty rather than inferring them.
+  Known blind spot: Known limitation: Coverage is the declared grid: f64/c64/f32/c32 at 1/4/8T for the small suite, f64/c64 at 4/8T for the large suite's 1024/1536 + boundary tier; the adoption-only 2048/3072/4096 tiers are not measured.
+- **Rows** — one row per engine in every table below:
+  - `colmat` — The measured library: the tensor4all fork (`colmat`, `[lib] name = "colmat"`) at the checkout the harness linked by path. This is the row the campaign exists for; the fork's three perf experiments and the two correctness changes land here.
+    Identity: the fork revision in this run's manifest (`library.commit`), pinned by `pins/colmat.rev`
+    Caveat: The fork crate is `colmat` (`[lib] name = "colmat"`); the upstream baseline is `faer` (`faer_upstream = { package = "faer" }`). They are distinct Rust crate identities, but their `Mat`, `Par` and trait types are not interchangeable: every adapter is written per arm, and shared transitive dependencies can unify Cargo features, so both arms declare equivalent feature sets and the resolved lock is recorded. The twelve-family campaign measures 81560db9, colmat-rs main at the merge of #296 (t4a-private-gemm-x86 0.1.30); no tag names it. The zen5-cpu, ohtaka and keyaki recordings were taken at 93da6217, the 2026-11-17 head, which lacks the 46 colmat-rs merges in between (the LU look-ahead #239 among them). The gemm-crate bump itself is expected to be numerically inert here: colmat-rs#296 found all 112 result fingerprints bit-identical between 0.1.28 and 0.1.30, and its one new path (the packed AVX2 driver) does not engage on AMD Zen5 or on AVX-512 hosts.
+    As measured: `colmat` (the provider in the measured revision; see library and upstream above)
+  - `faer` — Upstream `faer` at the tag the fork is based on, in the same binary as the fork row. The baseline that says whether a fork change moved the number.
+    Identity: the upstream revision in this run's manifest (`upstream.commit`), pinned by `pins/upstream-faer.rev`
+    Caveat: Same crate-name and feature-unification caveat as `colmat`. A change to upstream at a fixed fork revision produces a different page rather than overwriting one.
+    As measured: `faer` (the provider in the measured revision; see library and upstream above)
+  - `lapack-mkl` — The same calls against Intel oneAPI MKL, linked from the installation `MKLROOT` names. One binary links one vendor library, so this row is measured by its own build of the harness and recorded as its own run; no page carries two vendor arms. The LP64 interface layer and the threading layer are pinned by the harness before the first MKL call, because MKL otherwise lets the environment choose them and the interface layer is an ABI.
+    Identity: the MKL build recorded in this run's manifest (`providers[mkl]`)
+    Caveat: MKL reports no dispatched-kernel name and no processor count, so its manifest records neither rather than inferring them. Its threading is vendor-owned, as for OpenBLAS.
+    As measured: linked shared; mkl 2026.2; kernel not reported by the vendor
+
+## Hardware
+
+- CPU: `AMD Ryzen AI MAX+ 395`
+- logical CPUs: `32`
+- L3: `64 MiB (2 instances)`
+- L3 domains: `0-7,16-23: 32 MiB shared; 8-15,24-31: 32 MiB shared`
+- OS / arch: `Linux 7.0.0-42-generic` / `x86_64`
+- hostname: `EVO-X2`
+- CPU sets: 4T -> `0-3`, 8T -> `0-7`
+
+Every timed cell matches a successful verification census, including operation variants.
+Each cell is median of process medians ± sample SD of those medians; W is the median
+within-process sample SD. All values are milliseconds. These are descriptive spreads,
+not confidence intervals. The between-process spread includes the rotating-order schedule.
+Each process retains 5 chronological calls; 3 complete process sets are recorded.
+Spread guide (computed from this run's own rows): per-engine between-start range median 0.79%, worst 400.42% among cells of 1 us or more (a sub-microsecond row is timer and scheduler jitter, not kernel time); 145 of 2040 engine cells exceed 5% and carry `!`; median within-process relative SD 0.30%. A cell whose `±`, `!` or `p` is as large as the difference you are reading is not evidence of a regression.
+The `vs colmat` column is the rotation-averaged ratio
+exp(mean over starts of log(engine median / colmat median)),
+with the per-start ratios beside it: `R > 1`
+means the engine was slower than that first-declared row in that start. It removes a
+row-position
+effect only under one position effect shared by the engines and stable across starts,
+and only where every declared engine has a measured row (`*` marks a cell where one has
+no row, so no ratio there is position-balanced). `!` marks a cell where some engine's own
+per-start median range exceeds 5% of its median, and `p` a balanced cell whose estimated
+position-effect ratio exceeds 1.05. Flagged cells are retained, not discarded; the
+between-start variation can exceed the difference being compared.
+The `vs` columns mark only differences larger than the spread this run recorded for those
+two rows (combined between-start SD, floored at 5%), larger than the sum of the two rows' `±`
+and larger than each row's `W`, always with the measured library as the subject:
+`🔵 <row> X faster than <row>` / `🔴 <row> X slower than <row>` (the subject is the first column of the table, the compared row is named in
+the cell, not only in the column header), `·` inside the band or within the rows' `±`, `?` a row's
+`W` is as large as the difference (not evidence either way; rerun the cell), `(marginal: …)` a
+verdict whose largest spread is at least 60% of its difference, `-` that row is not
+measured in this arm. `notes` carries the cell warnings (`*` a declared row has no measurement,
+`!` between-start range over 5%, `p` position effect over 5%, dispatch-dominated means the
+row is under 20 us so 4T/8T pay thread-region start-up). Per-start ratios and every
+chronological sample are in the run directory named at the top of this page (`run*.csv`).
+These describe the recorded revisions; they are not a regression claim.
+
+## linalg-large, f64, c order, 4T (CPU 0-3)
+
+| case | colmat (ms) | faer (ms) | lapack-mkl (ms) | vs `faer` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `cholesky/n1024/b1` | 2.59877 ± 0.0391358 (W 0.00270442) | 4.13451 ± 0.0728009 (W 0.136312) | - | 🔵 colmat 1.59× faster than `faer` | - | `*` one row has no measurement here |
+| `cholesky/n1024/b1 [api-inclusive]` | 2.4383 ± 0.0208198 (W 0.00843079) | 6.44746 ± 0.010473 (W 0.0499466) | - | 🔵 colmat 2.64× faster than `faer` | - | `*` one row has no measurement here |
+| `cholesky/n1536/b1` | 6.67187 ± 0.00797866 (W 0.012737) | 9.18594 ± 0.12797 (W 0.19639) | - | 🔵 colmat 1.38× faster than `faer` | - | `*` one row has no measurement here |
+| `cholesky/n1536/b1 [api-inclusive]` | 7.52039 ± 0.00696219 (W 0.0223218) | 16.1798 ± 0.0979653 (W 0.0504451) | - | 🔵 colmat 2.15× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n1024/b1` | 46.9009 ± 0.075883 (W 0.0394219) | 68.9961 ± 0.596951 (W 0.0572737) | - | 🔵 colmat 1.47× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n1024/b1 [api-inclusive]` | 51.7431 ± 0.264145 (W 0.214589) | 69.5168 ± 0.491307 (W 1.73911) | - | 🔵 colmat 1.34× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n1536/b1` | 130.751 ± 0.124522 (W 0.0831258) | 183.609 ± 1.21436 (W 0.276037) | - | 🔵 colmat 1.40× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n1536/b1 [api-inclusive]` | 141.796 ± 0.581107 (W 0.518106) | 190.124 ± 2.01877 (W 0.412667) | - | 🔵 colmat 1.34× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n1024/b1` | 20.4449 ± 0.228537 (W 0.0746689) | 51.3384 ± 0.384451 (W 0.0609344) | - | 🔵 colmat 2.51× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n1024/b1 [api-inclusive]` | 25.0294 ± 0.0748413 (W 0.0365016) | 54.3275 ± 2.22571 (W 1.47011) | - | 🔵 colmat 2.17× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `full_piv_lu/n1536/b1` | 65.4696 ± 0.35175 (W 0.116465) | 136.184 ± 0.172923 (W 0.148143) | - | 🔵 colmat 2.08× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n1536/b1 [api-inclusive]` | 79.0246 ± 0.174619 (W 0.206168) | 128.185 ± 0.645707 (W 0.335402) | - | 🔵 colmat 1.62× faster than `faer` | - | `*` one row has no measurement here |
+| `lu/n1024/b1` | 4.26711 ± 0.0121095 (W 0.00841625) | 39.3127 ± 0.696313 (W 1.67576) | - | 🔵 colmat 9.21× faster than `faer` | - | `*` one row has no measurement here |
+| `lu/n1024/b1 [api-inclusive]` | 9.30836 ± 0.0524429 (W 0.0253441) | 15.6956 ± 0.43029 (W 0.131193) | - | 🔵 colmat 1.69× faster than `faer` | - | `*` one row has no measurement here |
+| `lu/n1536/b1` | 13.605 ± 0.0280819 (W 0.0815105) | 96.0913 ± 0.512375 (W 2.12146) | - | 🔵 colmat 7.06× faster than `faer` | - | `*` one row has no measurement here |
+| `lu/n1536/b1 [api-inclusive]` | 26.9355 ± 0.303213 (W 0.083672) | 38.1942 ± 0.166849 (W 0.228299) | - | 🔵 colmat 1.42× faster than `faer` | - | `*` one row has no measurement here |
+| `qr/n1024/b1` | 16.8451 ± 0.0631897 (W 0.0275839) | 62.054 ± 1.33095 (W 0.492013) | - | 🔵 colmat 3.68× faster than `faer` | - | `*` one row has no measurement here |
+| `qr/n1024/b1 [api-inclusive]` | 22.9882 ± 0.016099 (W 0.0415657) | 30.3683 ± 1.00858 (W 1.44865) | - | 🔵 colmat 1.32× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr/n1536/b1` | 59.4516 ± 0.258654 (W 0.30899) | 161.009 ± 0.549589 (W 0.594454) | - | 🔵 colmat 2.71× faster than `faer` | - | `*` one row has no measurement here |
+| `qr/n1536/b1 [api-inclusive]` | 68.4308 ± 0.306368 (W 0.106878) | 84.4215 ± 2.37799 (W 0.971696) | - | 🔵 colmat 1.23× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr_factor/n1024/b1` | 8.18958 ± 0.0192125 (W 0.0179899) | 53.2387 ± 1.13796 (W 0.325793) | - | 🔵 colmat 6.50× faster than `faer` | - | `*` one row has no measurement here |
+| `qr_factor/n1536/b1` | 24.8958 ± 0.208341 (W 0.0644342) | 125.718 ± 1.14296 (W 0.434714) | - | 🔵 colmat 5.05× faster than `faer` | - | `*` one row has no measurement here |
+| `solve/n1024/b1` | 4.09651 ± 0.0267049 (W 0.015877) | 28.8651 ± 0.739316 (W 0.544294) | - | 🔵 colmat 7.05× faster than `faer` | - | `*` one row has no measurement here |
+| `solve/n1024/b1 [api-inclusive]` | 9.27539 ± 0.016032 (W 0.0267858) | 15.0516 ± 0.0444396 (W 0.106254) | - | 🔵 colmat 1.62× faster than `faer` | - | `*` one row has no measurement here |
+| `solve/n1536/b1` | 13.06 ± 0.0873783 (W 0.0620536) | 69.7139 ± 0.176276 (W 1.27482) | - | 🔵 colmat 5.34× faster than `faer` | - | `*` one row has no measurement here |
+| `solve/n1536/b1 [api-inclusive]` | 16.6433 ± 0.14123 (W 0.0775479) | 37.2353 ± 0.0583979 (W 0.151199) | - | 🔵 colmat 2.24× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_thin/n1024/b1` | 116.843 ± 0.189447 (W 0.136847) | 173.565 ± 1.39038 (W 0.17869) | - | 🔵 colmat 1.49× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_thin/n1024/b1 [api-inclusive]` | 131.604 ± 0.628452 (W 0.354236) | 189.651 ± 1.25233 (W 1.87849) | - | 🔵 colmat 1.44× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_thin/n1536/b1` | 328.144 ± 0.778153 (W 0.190504) | 458.519 ± 2.26841 (W 0.470666) | - | 🔵 colmat 1.40× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_thin/n1536/b1 [api-inclusive]` | 359.753 ± 0.905034 (W 0.677692) | 486.268 ± 3.48723 (W 3.71871) | - | 🔵 colmat 1.35× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n1024/b1` | 72.5276 ± 1.43097 (W 0.0858677) | 139.234 ± 3.65842 (W 0.254848) | - | 🔵 colmat 1.92× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_values/n1024/b1 [api-inclusive]` | 73.7901 ± 2.53743 (W 0.0615578) | 137.175 ± 0.750492 (W 0.992805) | - | 🔵 colmat 1.86× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_values/n1536/b1` | 199.853 ± 0.255239 (W 0.128527) | 347.809 ± 0.538971 (W 0.335514) | - | 🔵 colmat 1.74× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n1536/b1 [api-inclusive]` | 204.189 ± 0.226021 (W 0.282541) | 355.885 ± 1.2922 (W 0.933514) | - | 🔵 colmat 1.74× faster than `faer` | - | `*` one row has no measurement here |
+| `triangular_solve/n1024/b1` | 0.063139 ± 0.00250892 (W 0.000827635) | 0.064548 ± 0.00111542 (W 0.00169269) | 0.090748 ± 0.00814859 (W 0.00174419) | · | 🔵 colmat 1.44× faster than `lapack-mkl` | `!` between-start range over 5%; `p` position effect over 5% |
+| `triangular_solve/n1536/b1` | 0.108097 ± 0.00419657 (W 0.00159695) | 0.127377 ± 0.00323544 (W 0.00126834) | 0.188876 ± 0.00685322 (W 0.0017935) | 🔵 colmat 1.18× faster than `faer` | 🔵 colmat 1.75× faster than `lapack-mkl` | `!` between-start range over 5% |
+
+## linalg-large, f64, c order, 8T (CPU 0-7)
+
+| case | colmat (ms) | faer (ms) | lapack-mkl (ms) | vs `faer` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `cholesky/n1024/b1` | 1.61291 ± 0.0119627 (W 0.00400589) | 3.33893 ± 0.028996 (W 0.116163) | - | 🔵 colmat 2.07× faster than `faer` | - | `*` one row has no measurement here |
+| `cholesky/n1024/b1 [api-inclusive]` | 1.86038 ± 0.0118855 (W 0.00441271) | 5.87557 ± 0.0199483 (W 0.046527) | - | 🔵 colmat 3.16× faster than `faer` | - | `*` one row has no measurement here |
+| `cholesky/n1536/b1` | 3.85118 ± 0.00504799 (W 0.00466526) | 6.48693 ± 0.0395189 (W 0.0870473) | - | 🔵 colmat 1.68× faster than `faer` | - | `*` one row has no measurement here |
+| `cholesky/n1536/b1 [api-inclusive]` | 5.82358 ± 0.0782367 (W 0.00720708) | 13.9264 ± 0.100578 (W 0.0937214) | - | 🔵 colmat 2.39× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n1024/b1` | 29.4026 ± 0.189993 (W 0.0847246) | 60.8449 ± 0.262605 (W 0.130827) | - | 🔵 colmat 2.07× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n1024/b1 [api-inclusive]` | 34.3125 ± 0.185608 (W 0.280899) | 59.8916 ± 0.133599 (W 0.275665) | - | 🔵 colmat 1.75× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n1536/b1` | 78.2328 ± 0.0689736 (W 0.0652153) | 147.403 ± 9.19993 (W 0.485209) | - | 🔵 colmat 1.88× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `eigh/n1536/b1 [api-inclusive]` | 88.9993 ± 0.358619 (W 0.310036) | 157.13 ± 3.29259 (W 0.94164) | - | 🔵 colmat 1.77× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n1024/b1` | 11.3981 ± 0.024416 (W 0.0363172) | 42.0342 ± 0.0203419 (W 0.0660132) | - | 🔵 colmat 3.69× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n1024/b1 [api-inclusive]` | 16.3355 ± 0.0775487 (W 0.0671785) | 42.0272 ± 1.15769 (W 0.0955888) | - | 🔵 colmat 2.57× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `full_piv_lu/n1536/b1` | 35.0799 ± 0.152379 (W 0.106838) | 102.677 ± 0.2329 (W 0.18169) | - | 🔵 colmat 2.93× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n1536/b1 [api-inclusive]` | 50.0201 ± 0.0935313 (W 0.204113) | 101.172 ± 0.322977 (W 0.226762) | - | 🔵 colmat 2.02× faster than `faer` | - | `*` one row has no measurement here |
+| `lu/n1024/b1` | 2.81135 ± 0.0136435 (W 0.0104886) | 31.86 ± 0.409602 (W 2.25002) | - | 🔵 colmat 11.33× faster than `faer` | - | `*` one row has no measurement here |
+| `lu/n1024/b1 [api-inclusive]` | 8.19899 ± 0.0256122 (W 0.0249804) | 14.7539 ± 0.0786816 (W 2.93878) | - | 🔵 colmat 1.80× faster than `faer` | - | `*` one row has no measurement here |
+| `lu/n1536/b1` | 8.2128 ± 0.0462397 (W 0.0777993) | 75.0795 ± 0.655362 (W 2.54619) | - | 🔵 colmat 9.14× faster than `faer` | - | `*` one row has no measurement here |
+| `lu/n1536/b1 [api-inclusive]` | 22.2185 ± 0.0878048 (W 0.0435761) | 34.5186 ± 0.0410654 (W 0.137395) | - | 🔵 colmat 1.55× faster than `faer` | - | `*` one row has no measurement here |
+| `qr/n1024/b1` | 10.2153 ± 0.0984996 (W 0.0182418) | 58.2146 ± 0.187916 (W 5.67455) | - | 🔵 colmat 5.70× faster than `faer` | - | `*` one row has no measurement here |
+| `qr/n1024/b1 [api-inclusive]` | 16.5589 ± 0.0991816 (W 0.0620873) | 30.6772 ± 6.17925 (W 6.53198) | - | 🔵 colmat 1.85× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr/n1536/b1` | 34.6552 ± 0.940452 (W 0.144015) | 145.202 ± 1.04874 (W 0.885428) | - | 🔵 colmat 4.19× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr/n1536/b1 [api-inclusive]` | 47.4196 ± 0.626403 (W 0.166881) | 77.5138 ± 7.0303 (W 9.09962) | - | 🔵 colmat 1.63× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr_factor/n1024/b1` | 4.36987 ± 0.00735658 (W 0.00981526) | 51.3903 ± 0.360591 (W 0.176521) | - | 🔵 colmat 11.76× faster than `faer` | - | `*` one row has no measurement here |
+| `qr_factor/n1536/b1` | 12.808 ± 0.0212051 (W 0.0414671) | 120 ± 0.283523 (W 0.510335) | - | 🔵 colmat 9.37× faster than `faer` | - | `*` one row has no measurement here |
+| `solve/n1024/b1` | 2.82229 ± 0.0152269 (W 0.010199) | 25.2305 ± 0.110102 (W 0.316708) | - | 🔵 colmat 8.94× faster than `faer` | - | `*` one row has no measurement here |
+| `solve/n1024/b1 [api-inclusive]` | 4.31404 ± 0.0242074 (W 0.0134113) | 14.3168 ± 0.0940288 (W 0.0571904) | - | 🔵 colmat 3.32× faster than `faer` | - | `*` one row has no measurement here |
+| `solve/n1536/b1` | 8.16847 ± 0.136617 (W 0.119937) | 58.8911 ± 0.118415 (W 0.541048) | - | 🔵 colmat 7.21× faster than `faer` | - | `*` one row has no measurement here |
+| `solve/n1536/b1 [api-inclusive]` | 12.76 ± 0.0897326 (W 0.0363952) | 33.5951 ± 0.109191 (W 0.140699) | - | 🔵 colmat 2.63× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_thin/n1024/b1` | 88.6106 ± 0.197176 (W 0.120242) | 150.755 ± 0.805483 (W 0.309879) | - | 🔵 colmat 1.70× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_thin/n1024/b1 [api-inclusive]` | 102.965 ± 0.233569 (W 0.285785) | 167.565 ± 2.01004 (W 2.69022) | - | 🔵 colmat 1.63× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_thin/n1536/b1` | 231.613 ± 0.166735 (W 0.26704) | 377.847 ± 0.80549 (W 0.646569) | - | 🔵 colmat 1.63× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_thin/n1536/b1 [api-inclusive]` | 261.648 ± 0.410934 (W 0.541073) | 405.163 ± 2.33662 (W 5.23183) | - | 🔵 colmat 1.55× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n1024/b1` | 54.7978 ± 0.119408 (W 0.247875) | 118.403 ± 1.25445 (W 0.143089) | - | 🔵 colmat 2.16× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n1024/b1 [api-inclusive]` | 54.8071 ± 1.47603 (W 0.107718) | 116.084 ± 2.05806 (W 1.99805) | - | 🔵 colmat 2.12× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n1536/b1` | 143.368 ± 0.464144 (W 0.17821) | 288.773 ± 3.06717 (W 0.252052) | - | 🔵 colmat 2.01× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n1536/b1 [api-inclusive]` | 148.283 ± 0.367182 (W 0.136425) | 296.624 ± 0.543501 (W 0.517618) | - | 🔵 colmat 2.00× faster than `faer` | - | `*` one row has no measurement here |
+| `triangular_solve/n1024/b1` | 0.049869 ± 0.0021884 (W 0.000284046) | 0.051465 ± 0.00418255 (W 0.000783416) | 0.088791 ± 0.00344166 (W 0.00169699) | · | 🔵 colmat 1.78× faster than `lapack-mkl` | `!` between-start range over 5% |
+| `triangular_solve/n1536/b1` | 0.093788 ± 0.00286371 (W 0.00702654) | 0.08885 ± 0.000771908 (W 0.00049849) | 0.198534 ± 0.00179821 (W 0.00179213) | `?` not evidence vs `faer`: a row's `W` is as large as the difference (rerun) | 🔵 colmat 2.12× faster than `lapack-mkl` | `!` between-start range over 5% |
+
+## linalg-large, f64, f order, 4T (CPU 0-3)
+
+| case | colmat (ms) | faer (ms) | lapack-mkl (ms) | vs `faer` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `cholesky/n1024/b1` | 1.88165 ± 0.00619255 (W 0.00295517) | 2.27475 ± 0.0346792 (W 0.0473999) | 4.13009 ± 0.0364413 (W 0.0146407) | 🔵 colmat 1.21× faster than `faer` | 🔵 colmat 2.19× faster than `lapack-mkl` |  |
+| `cholesky/n1024/b1 [api-inclusive]` | 2.11037 ± 0.018313 (W 0.00421272) | 2.57065 ± 0.0479476 (W 0.0509192) | - | 🔵 colmat 1.22× faster than `faer` | - | `*` one row has no measurement here |
+| `cholesky/n1536/b1` | 5.57434 ± 0.010769 (W 0.00811546) | 6.14345 ± 0.0889129 (W 0.0827069) | 10.7446 ± 0.0420056 (W 0.0187054) | 🔵 colmat 1.10× faster than `faer` | 🔵 colmat 1.93× faster than `lapack-mkl` |  |
+| `cholesky/n1536/b1 [api-inclusive]` | 6.41904 ± 0.00980577 (W 0.0126003) | 7.25517 ± 0.0386635 (W 0.051539) | - | 🔵 colmat 1.13× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n1024/b1` | 46.5574 ± 0.075333 (W 0.0447291) | 65.2895 ± 0.508406 (W 0.0486851) | 76.1244 ± 0.55282 (W 0.180025) | 🔵 colmat 1.40× faster than `faer` | 🔵 colmat 1.64× faster than `lapack-mkl` |  |
+| `eigh/n1024/b1 [api-inclusive]` | 51.2527 ± 0.138333 (W 0.254729) | 65.8385 ± 0.13282 (W 1.56779) | - | 🔵 colmat 1.28× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n1536/b1` | 129.441 ± 0.318428 (W 0.143713) | 171.447 ± 0.221925 (W 0.233379) | 216.583 ± 1.61653 (W 1.68208) | 🔵 colmat 1.32× faster than `faer` | 🔵 colmat 1.67× faster than `lapack-mkl` |  |
+| `eigh/n1536/b1 [api-inclusive]` | 140.653 ± 0.50852 (W 1.35864) | 181.235 ± 0.442079 (W 0.405764) | - | 🔵 colmat 1.29× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n1024/b1` | 22.3622 ± 0.0974687 (W 0.0211816) | 43.6176 ± 0.17355 (W 0.0672302) | 545.741 ± 0.992131 (W 0.256261) | 🔵 colmat 1.95× faster than `faer` | 🔵 colmat 24.40× faster than `lapack-mkl` |  |
+| `full_piv_lu/n1024/b1 [api-inclusive]` | 23.5213 ± 0.118294 (W 0.0113361) | 40.7021 ± 0.29882 (W 0.0609632) | - | 🔵 colmat 1.73× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n1536/b1` | 72.9309 ± 0.279945 (W 0.0875932) | 118.576 ± 0.270172 (W 0.154683) | 1822.97 ± 3.34209 (W 1.58885) | 🔵 colmat 1.63× faster than `faer` | 🔵 colmat 25.00× faster than `lapack-mkl` |  |
+| `full_piv_lu/n1536/b1 [api-inclusive]` | 73.54 ± 0.142626 (W 0.336897) | 109.997 ± 0.744063 (W 0.401962) | - | 🔵 colmat 1.50× faster than `faer` | - | `*` one row has no measurement here |
+| `lu/n1024/b1` | 3.73389 ± 0.00142976 (W 0.00944601) | 6.94023 ± 0.0487819 (W 0.132191) | 5.76967 ± 0.00645119 (W 0.00698267) | 🔵 colmat 1.86× faster than `faer` | 🔵 colmat 1.55× faster than `lapack-mkl` |  |
+| `lu/n1024/b1 [api-inclusive]` | 7.57374 ± 0.0211104 (W 0.0149929) | 7.25598 ± 0.042098 (W 0.0769527) | - | · | - | `*` one row has no measurement here |
+| `lu/n1536/b1` | 10.4251 ± 0.0354401 (W 0.0174246) | 16.7272 ± 0.127883 (W 0.138476) | 17.5975 ± 0.0204428 (W 0.010025) | 🔵 colmat 1.60× faster than `faer` | 🔵 colmat 1.69× faster than `lapack-mkl` |  |
+| `lu/n1536/b1 [api-inclusive]` | 21.5712 ± 0.32536 (W 0.152885) | 18.5561 ± 0.00619806 (W 0.0964919) | - | 🔴 colmat 1.16× slower than `faer` | - | `*` one row has no measurement here |
+| `qr/n1024/b1` | 15.4108 ± 0.0244073 (W 0.0194854) | 17.5044 ± 0.046942 (W 0.0350737) | 34.8436 ± 1.95303 (W 0.038367) | 🔵 colmat 1.14× faster than `faer` | 🔵 colmat 2.26× faster than `lapack-mkl` | `!` between-start range over 5% |
+| `qr/n1024/b1 [api-inclusive]` | 21.1301 ± 0.100651 (W 0.0336597) | 23.2844 ± 0.724989 (W 0.0337706) | - | 🔵 colmat 1.10× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr/n1536/b1` | 47.3243 ± 0.707581 (W 0.0498358) | 53.0844 ± 0.352003 (W 0.0614458) | 104.783 ± 0.197735 (W 0.179835) | 🔵 colmat 1.12× faster than `faer` | 🔵 colmat 2.21× faster than `lapack-mkl` |  |
+| `qr/n1536/b1 [api-inclusive]` | 63.5726 ± 0.625331 (W 0.17559) | 64.8656 ± 3.16328 (W 3.69666) | - | · | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr_factor/n1024/b1` | 7.55168 ± 0.00909247 (W 0.00877374) | 9.86276 ± 0.0545155 (W 0.00911274) | 12.0803 ± 0.0160969 (W 0.0133766) | 🔵 colmat 1.31× faster than `faer` | 🔵 colmat 1.60× faster than `lapack-mkl` |  |
+| `qr_factor/n1536/b1` | 21.7449 ± 0.11222 (W 0.0135185) | 27.6999 ± 0.12568 (W 0.0289325) | 38.9156 ± 0.212971 (W 0.182525) | 🔵 colmat 1.27× faster than `faer` | 🔵 colmat 1.79× faster than `lapack-mkl` |  |
+| `solve/n1024/b1` | 3.58527 ± 0.00436723 (W 0.00679898) | 5.91845 ± 0.121348 (W 0.10627) | 5.72458 ± 0.00130912 (W 0.00788806) | 🔵 colmat 1.65× faster than `faer` | 🔵 colmat 1.60× faster than `lapack-mkl` |  |
+| `solve/n1024/b1 [api-inclusive]` | 7.50112 ± 0.049022 (W 0.0164801) | 6.71109 ± 0.0267794 (W 0.103276) | - | 🔴 colmat 1.12× slower than `faer` | - | `*` one row has no measurement here |
+| `solve/n1536/b1` | 10.1675 ± 0.0773157 (W 0.016557) | 14.8704 ± 0.0797288 (W 0.0896304) | 17.6681 ± 0.0131254 (W 0.0124576) | 🔵 colmat 1.46× faster than `faer` | 🔵 colmat 1.74× faster than `lapack-mkl` |  |
+| `solve/n1536/b1 [api-inclusive]` | 12.4807 ± 0.0290395 (W 0.0393798) | 17.7161 ± 0.0660046 (W 0.1297) | - | 🔵 colmat 1.42× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_thin/n1024/b1` | 108.32 ± 0.118359 (W 0.12466) | 166.228 ± 0.814303 (W 0.19196) | 210.489 ± 1.35641 (W 0.424888) | 🔵 colmat 1.53× faster than `faer` | 🔵 colmat 1.94× faster than `lapack-mkl` |  |
+| `svd_thin/n1024/b1 [api-inclusive]` | 123.566 ± 0.193797 (W 0.272473) | 181.461 ± 0.107343 (W 2.92633) | - | 🔵 colmat 1.47× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_thin/n1536/b1` | 309.669 ± 1.38858 (W 0.398511) | 441.838 ± 1.23374 (W 0.61653) | 551.784 ± 2.31655 (W 0.477627) | 🔵 colmat 1.43× faster than `faer` | 🔵 colmat 1.78× faster than `lapack-mkl` |  |
+| `svd_thin/n1536/b1 [api-inclusive]` | 342.109 ± 0.355263 (W 0.8122) | 472.111 ± 1.1043 (W 4.75858) | - | 🔵 colmat 1.38× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n1024/b1` | 59.8324 ± 0.0987493 (W 0.0730187) | 128.911 ± 0.95527 (W 0.146095) | 84.1338 ± 0.415628 (W 0.0802487) | 🔵 colmat 2.15× faster than `faer` | 🔵 colmat 1.41× faster than `lapack-mkl` |  |
+| `svd_values/n1024/b1 [api-inclusive]` | 59.8401 ± 0.106042 (W 0.0339548) | 126.948 ± 0.376133 (W 0.22268) | - | 🔵 colmat 2.12× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n1536/b1` | 177.978 ± 0.529552 (W 0.127868) | 328.558 ± 0.386257 (W 0.299203) | 224.362 ± 2.06259 (W 0.196937) | 🔵 colmat 1.85× faster than `faer` | 🔵 colmat 1.26× faster than `lapack-mkl` |  |
+| `svd_values/n1536/b1 [api-inclusive]` | 182.541 ± 0.487115 (W 0.117821) | 336.606 ± 0.493653 (W 0.877775) | - | 🔵 colmat 1.84× faster than `faer` | - | `*` one row has no measurement here |
+| `triangular_solve/n1024/b1` | 0.070828 ± 0.00107828 (W 0.00116594) | 0.072438 ± 0.0011277 (W 0.00113369) | 0.089278 ± 0.00242094 (W 0.0015103) | · | 🔵 colmat 1.26× faster than `lapack-mkl` | `!` between-start range over 5% |
+| `triangular_solve/n1536/b1` | 0.126826 ± 0.000764596 (W 0.000621006) | 0.130247 ± 0.00494031 (W 0.000606876) | 0.194294 ± 0.0194336 (W 0.00210159) | · | 🔵 colmat 1.53× faster than `lapack-mkl` | `!` between-start range over 5%; `p` position effect over 5% |
+
+## linalg-large, f64, f order, 8T (CPU 0-7)
+
+| case | colmat (ms) | faer (ms) | lapack-mkl (ms) | vs `faer` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `cholesky/n1024/b1` | 1.20204 ± 0.00338647 (W 0.00491036) | 1.68426 ± 0.0190413 (W 0.0120845) | 2.28716 ± 0.0286433 (W 0.0282656) | 🔵 colmat 1.40× faster than `faer` | 🔵 colmat 1.90× faster than `lapack-mkl` |  |
+| `cholesky/n1024/b1 [api-inclusive]` | 1.51332 ± 0.0138289 (W 0.00328187) | 1.95586 ± 0.0186042 (W 0.0202541) | - | 🔵 colmat 1.29× faster than `faer` | - | `*` one row has no measurement here |
+| `cholesky/n1536/b1` | 3.22998 ± 0.0158184 (W 0.00729742) | 3.95949 ± 0.186636 (W 0.0614396) | 5.71759 ± 0.0100116 (W 0.0401028) | 🔵 colmat 1.23× faster than `faer` | 🔵 colmat 1.77× faster than `lapack-mkl` | `!` between-start range over 5% |
+| `cholesky/n1536/b1 [api-inclusive]` | 4.33801 ± 0.01827 (W 0.0108682) | 5.05134 ± 0.0159478 (W 0.0391001) | - | 🔵 colmat 1.16× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n1024/b1` | 28.9559 ± 0.0747071 (W 0.0701719) | 56.7541 ± 12.4335 (W 0.139287) | 50.1728 ± 0.352994 (W 0.213592) | 🔵 colmat 1.96× faster than `faer` | 🔵 colmat 1.73× faster than `lapack-mkl` | `!` between-start range over 5%; `p` position effect over 5% |
+| `eigh/n1024/b1 [api-inclusive]` | 33.6867 ± 0.0774549 (W 0.214459) | 56.1001 ± 0.188107 (W 0.404654) | - | 🔵 colmat 1.67× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n1536/b1` | 77.2513 ± 1.51307 (W 0.0593374) | 138.592 ± 1.10612 (W 0.407536) | 132.47 ± 1.11959 (W 0.881269) | 🔵 colmat 1.79× faster than `faer` | 🔵 colmat 1.71× faster than `lapack-mkl` |  |
+| `eigh/n1536/b1 [api-inclusive]` | 87.5372 ± 0.2377 (W 0.436796) | 148.35 ± 0.676824 (W 0.503055) | - | 🔵 colmat 1.69× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n1024/b1` | 12.3377 ± 0.043714 (W 0.0522018) | 34.8627 ± 0.387849 (W 0.104611) | 545.841 ± 0.687326 (W 0.344264) | 🔵 colmat 2.83× faster than `faer` | 🔵 colmat 44.24× faster than `lapack-mkl` |  |
+| `full_piv_lu/n1024/b1 [api-inclusive]` | 14.8277 ± 0.0864515 (W 0.0337575) | 33.2607 ± 0.331205 (W 0.0880763) | - | 🔵 colmat 2.24× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n1536/b1` | 38.3499 ± 0.064557 (W 0.11927) | 84.3713 ± 0.326312 (W 0.253563) | 1820.75 ± 1.8268 (W 1.104) | 🔵 colmat 2.20× faster than `faer` | 🔵 colmat 47.48× faster than `lapack-mkl` |  |
+| `full_piv_lu/n1536/b1 [api-inclusive]` | 44.1263 ± 0.423117 (W 0.193344) | 81.4263 ± 0.125032 (W 0.169822) | - | 🔵 colmat 1.85× faster than `faer` | - | `*` one row has no measurement here |
+| `lu/n1024/b1` | 2.59632 ± 0.0051315 (W 0.00625359) | 5.94676 ± 0.0166958 (W 0.0520255) | 3.49521 ± 0.0573684 (W 0.0127815) | 🔵 colmat 2.29× faster than `faer` | 🔵 colmat 1.35× faster than `lapack-mkl` |  |
+| `lu/n1024/b1 [api-inclusive]` | 6.51578 ± 0.0258534 (W 0.0159332) | 6.37065 ± 0.0182979 (W 0.122386) | - | · | - | `*` one row has no measurement here |
+| `lu/n1536/b1` | 6.63811 ± 0.00275996 (W 0.0109872) | 13.2048 ± 0.0933244 (W 0.143383) | 10.2679 ± 0.118492 (W 0.0218313) | 🔵 colmat 1.99× faster than `faer` | 🔵 colmat 1.55× faster than `lapack-mkl` |  |
+| `lu/n1536/b1 [api-inclusive]` | 17.7983 ± 0.0842683 (W 0.0580538) | 15.0926 ± 0.157285 (W 0.121616) | - | 🔴 colmat 1.18× slower than `faer` | - | `*` one row has no measurement here |
+| `qr/n1024/b1` | 8.60855 ± 0.0743517 (W 0.0214792) | 16.6875 ± 0.0466363 (W 0.142865) | 21.257 ± 0.82975 (W 0.237673) | 🔵 colmat 1.94× faster than `faer` | 🔵 colmat 2.47× faster than `lapack-mkl` | `!` between-start range over 5% |
+| `qr/n1024/b1 [api-inclusive]` | 14.5334 ± 0.0110814 (W 0.0516668) | 19.2479 ± 2.70393 (W 0.676291) | - | 🔵 colmat 1.32× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr/n1536/b1` | 25.2582 ± 0.153479 (W 0.0560138) | 45.0606 ± 0.767981 (W 0.70141) | 53.5222 ± 0.153703 (W 0.208916) | 🔵 colmat 1.78× faster than `faer` | 🔵 colmat 2.12× faster than `lapack-mkl` |  |
+| `qr/n1536/b1 [api-inclusive]` | 41.9217 ± 0.250041 (W 0.161324) | 56.4572 ± 2.11828 (W 1.4468) | - | 🔵 colmat 1.35× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr_factor/n1024/b1` | 4.19404 ± 0.0034415 (W 0.00805345) | 9.94458 ± 0.0290812 (W 0.0557287) | 7.88222 ± 0.0268374 (W 0.0111278) | 🔵 colmat 2.37× faster than `faer` | 🔵 colmat 1.88× faster than `lapack-mkl` |  |
+| `qr_factor/n1536/b1` | 11.7087 ± 0.173314 (W 0.0173311) | 26.5178 ± 0.192961 (W 0.286454) | 21.1339 ± 0.202874 (W 0.192711) | 🔵 colmat 2.26× faster than `faer` | 🔵 colmat 1.80× faster than `lapack-mkl` |  |
+| `solve/n1024/b1` | 2.48679 ± 0.0104425 (W 0.00689821) | 5.13385 ± 0.00887115 (W 0.0523403) | 3.48138 ± 0.0152006 (W 0.00640632) | 🔵 colmat 2.06× faster than `faer` | 🔵 colmat 1.40× faster than `lapack-mkl` |  |
+| `solve/n1024/b1 [api-inclusive]` | 3.06528 ± 0.00653276 (W 0.00702889) | 5.91673 ± 0.0115954 (W 0.0526006) | - | 🔵 colmat 1.93× faster than `faer` | - | `*` one row has no measurement here |
+| `solve/n1536/b1` | 6.45899 ± 0.0328659 (W 0.0282871) | 11.6769 ± 0.0719187 (W 0.164549) | 10.352 ± 0.0285697 (W 0.018946) | 🔵 colmat 1.81× faster than `faer` | 🔵 colmat 1.60× faster than `lapack-mkl` |  |
+| `solve/n1536/b1 [api-inclusive]` | 8.75629 ± 0.034198 (W 0.0219189) | 14.2279 ± 0.030899 (W 0.0818266) | - | 🔵 colmat 1.62× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_thin/n1024/b1` | 80.6095 ± 0.157022 (W 0.135164) | 142.748 ± 3.03506 (W 0.15581) | 165.834 ± 3.91496 (W 1.68289) | 🔵 colmat 1.77× faster than `faer` | 🔵 colmat 2.06× faster than `lapack-mkl` |  |
+| `svd_thin/n1024/b1 [api-inclusive]` | 94.6726 ± 0.150944 (W 0.218076) | 158.262 ± 1.52942 (W 4.42443) | - | 🔵 colmat 1.67× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_thin/n1536/b1` | 213.165 ± 0.0784833 (W 0.237486) | 359.565 ± 1.7363 (W 1.66159) | 402.06 ± 3.01947 (W 1.24736) | 🔵 colmat 1.69× faster than `faer` | 🔵 colmat 1.89× faster than `lapack-mkl` |  |
+| `svd_thin/n1536/b1 [api-inclusive]` | 243.89 ± 0.535801 (W 0.431028) | 385.638 ± 1.39338 (W 5.2391) | - | 🔵 colmat 1.58× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n1024/b1` | 44.4002 ± 0.0591046 (W 0.0338961) | 110.239 ± 1.12466 (W 0.187366) | 66.6597 ± 1.88817 (W 0.387178) | 🔵 colmat 2.48× faster than `faer` | 🔵 colmat 1.50× faster than `lapack-mkl` | `!` between-start range over 5% |
+| `svd_values/n1024/b1 [api-inclusive]` | 44.2929 ± 0.0652429 (W 0.0287481) | 107.331 ± 0.0994684 (W 0.140382) | - | 🔵 colmat 2.42× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n1536/b1` | 120.686 ± 0.33374 (W 0.113666) | 270.503 ± 0.712264 (W 0.351661) | 164.991 ± 4.44437 (W 0.491756) | 🔵 colmat 2.24× faster than `faer` | 🔵 colmat 1.37× faster than `lapack-mkl` |  |
+| `svd_values/n1536/b1 [api-inclusive]` | 125.795 ± 0.104168 (W 0.156137) | 278.794 ± 0.305438 (W 0.58) | - | 🔵 colmat 2.22× faster than `faer` | - | `*` one row has no measurement here |
+| `triangular_solve/n1024/b1` | 0.061889 ± 0.000847305 (W 0.000496441) | 0.062123 ± 0.00224846 (W 0.000328985) | 0.090108 ± 0.00203945 (W 0.000551174) | · | 🔵 colmat 1.46× faster than `lapack-mkl` | `!` between-start range over 5% |
+| `triangular_solve/n1536/b1` | 0.103838 ± 0.000252026 (W 0.000642696) | 0.114877 ± 0.00415241 (W 0.00166971) | 0.196018 ± 0.00189948 (W 0.00149154) | 🔵 colmat 1.11× faster than `faer` | 🔵 colmat 1.89× faster than `lapack-mkl` | `!` between-start range over 5% |
+
+## linalg-large, c64, c order, 4T (CPU 0-3)
+
+| case | colmat (ms) | faer (ms) | lapack-mkl (ms) | vs `faer` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `cholesky/n1024/b1` | 5.80402 ± 0.0377456 (W 0.0100554) | 9.61265 ± 0.15235 (W 0.151872) | - | 🔵 colmat 1.66× faster than `faer` | - | `*` one row has no measurement here |
+| `cholesky/n1024/b1 [api-inclusive]` | 7.01148 ± 0.0211745 (W 0.0106054) | 11.0848 ± 1.2982 (W 0.13437) | - | 🔵 colmat 1.58× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `cholesky/n1536/b1` | 17.7738 ± 0.0230271 (W 0.0123623) | 23.7532 ± 0.146531 (W 0.282863) | - | 🔵 colmat 1.34× faster than `faer` | - | `*` one row has no measurement here |
+| `cholesky/n1536/b1 [api-inclusive]` | 32.4884 ± 0.0893137 (W 0.0488261) | 40.6785 ± 0.392756 (W 0.277288) | - | 🔵 colmat 1.25× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n1024/b1` | 101.96 ± 0.0792788 (W 0.144138) | 129.633 ± 5.64957 (W 0.11755) | - | 🔵 colmat 1.27× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `eigh/n1024/b1 [api-inclusive]` | 109.967 ± 0.545642 (W 0.171055) | 137.61 ± 1.67846 (W 0.398993) | - | 🔵 colmat 1.25× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n1536/b1` | 317.441 ± 0.0758906 (W 0.388017) | 371.386 ± 0.566397 (W 0.181927) | - | 🔵 colmat 1.17× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n1536/b1 [api-inclusive]` | 343.055 ± 0.373028 (W 0.662728) | 399.515 ± 0.539604 (W 0.631239) | - | 🔵 colmat 1.16× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n1024/b1` | 47.9428 ± 0.754561 (W 0.0682908) | 81.7333 ± 8.93355 (W 0.394755) | - | 🔵 colmat 1.70× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `full_piv_lu/n1024/b1 [api-inclusive]` | 59.0475 ± 0.740891 (W 0.21342) | 82.0389 ± 1.58969 (W 1.01065) | - | 🔵 colmat 1.39× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n1536/b1` | 239.251 ± 0.398481 (W 2.08964) | 295.153 ± 0.887987 (W 0.968756) | - | 🔵 colmat 1.23× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n1536/b1 [api-inclusive]` | 242.023 ± 0.691824 (W 1.49498) | 308.334 ± 1.98916 (W 2.66474) | - | 🔵 colmat 1.27× faster than `faer` | - | `*` one row has no measurement here |
+| `lu/n1024/b1` | 13.123 ± 0.0383364 (W 0.0601439) | 51.3975 ± 1.06119 (W 1.35785) | - | 🔵 colmat 3.92× faster than `faer` | - | `*` one row has no measurement here |
+| `lu/n1024/b1 [api-inclusive]` | 24.7062 ± 0.349771 (W 0.036061) | 25.0443 ± 0.437657 (W 0.336184) | - | · | - | `*` one row has no measurement here |
+| `lu/n1536/b1` | 46.2037 ± 0.0967335 (W 0.187076) | 115.407 ± 2.25705 (W 4.65425) | - | 🔵 colmat 2.50× faster than `faer` | - | `*` one row has no measurement here |
+| `lu/n1536/b1 [api-inclusive]` | 68.03 ± 0.728061 (W 0.650404) | 86.9716 ± 2.59575 (W 0.961092) | - | 🔵 colmat 1.28× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr/n1024/b1` | 53.1897 ± 0.0579758 (W 0.0623508) | 92.4737 ± 0.362633 (W 0.57746) | - | 🔵 colmat 1.74× faster than `faer` | - | `*` one row has no measurement here |
+| `qr/n1024/b1 [api-inclusive]` | 68.6581 ± 0.251989 (W 0.228888) | 77.7028 ± 0.144663 (W 0.181347) | - | 🔵 colmat 1.13× faster than `faer` | - | `*` one row has no measurement here |
+| `qr/n1536/b1` | 178.983 ± 2.36459 (W 0.630833) | 257.61 ± 0.52284 (W 0.54192) | - | 🔵 colmat 1.44× faster than `faer` | - | `*` one row has no measurement here |
+| `qr/n1536/b1 [api-inclusive]` | 210.228 ± 1.30455 (W 0.537208) | 229.803 ± 2.4311 (W 0.300308) | - | 🔵 colmat 1.09× faster than `faer` | - | `*` one row has no measurement here |
+| `qr_factor/n1024/b1` | 24.7094 ± 0.210343 (W 0.0920567) | 64.8353 ± 0.456382 (W 1.13551) | - | 🔵 colmat 2.62× faster than `faer` | - | `*` one row has no measurement here |
+| `qr_factor/n1536/b1` | 82.2295 ± 0.100093 (W 0.364604) | 161.168 ± 0.377841 (W 0.263123) | - | 🔵 colmat 1.96× faster than `faer` | - | `*` one row has no measurement here |
+| `solve/n1024/b1` | 13.0543 ± 0.0135623 (W 0.0402122) | 37.981 ± 0.466926 (W 0.73775) | - | 🔵 colmat 2.91× faster than `faer` | - | `*` one row has no measurement here |
+| `solve/n1024/b1 [api-inclusive]` | 15.9155 ± 4.93426 (W 0.0428961) | 28.1051 ± 1.78773 (W 0.527202) | - | 🔵 colmat 1.77× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `solve/n1536/b1` | 45.8181 ± 0.168945 (W 0.25737) | 96.6136 ± 2.20607 (W 1.43659) | - | 🔵 colmat 2.11× faster than `faer` | - | `*` one row has no measurement here |
+| `solve/n1536/b1 [api-inclusive]` | 67.7189 ± 0.139648 (W 0.334791) | 93.0015 ± 4.94688 (W 0.638777) | - | 🔵 colmat 1.37× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_thin/n1024/b1` | 226.084 ± 0.454695 (W 0.25104) | 292.046 ± 2.52724 (W 1.76158) | - | 🔵 colmat 1.29× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_thin/n1024/b1 [api-inclusive]` | 256.205 ± 0.676177 (W 0.784144) | 324.844 ± 2.11474 (W 2.61173) | - | 🔵 colmat 1.27× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_thin/n1536/b1` | 810.131 ± 7.03797 (W 1.13124) | 957.14 ± 4.15443 (W 1.34282) | - | 🔵 colmat 1.18× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_thin/n1536/b1 [api-inclusive]` | 873.682 ± 2.50928 (W 3.80676) | 1034.24 ± 6.23334 (W 6.39925) | - | 🔵 colmat 1.18× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n1024/b1` | 136.681 ± 2.4849 (W 1.34116) | 212.281 ± 7.76028 (W 0.177029) | - | 🔵 colmat 1.55× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_values/n1024/b1 [api-inclusive]` | 137.706 ± 0.517109 (W 0.337864) | 210.774 ± 2.85308 (W 1.93977) | - | 🔵 colmat 1.53× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n1536/b1` | 536.12 ± 1.30465 (W 4.23423) | 700.852 ± 4.54173 (W 4.517) | - | 🔵 colmat 1.31× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n1536/b1 [api-inclusive]` | 547.212 ± 3.30265 (W 3.57221) | 723.167 ± 0.98491 (W 6.10149) | - | 🔵 colmat 1.32× faster than `faer` | - | `*` one row has no measurement here |
+| `triangular_solve/n1024/b1` | 0.107417 ± 0.00148953 (W 0.000382453) | 0.116437 ± 0.00168185 (W 0.00147532) | 0.244024 ± 0.00071043 (W 0.00126291) | 🔵 colmat 1.08× faster than `faer` | 🔵 colmat 2.27× faster than `lapack-mkl` |  |
+| `triangular_solve/n1536/b1` | 0.215865 ± 0.00221755 (W 0.00209361) | 0.270273 ± 0.0119799 (W 0.00343964) | 0.589924 ± 0.0178234 (W 0.00519064) | 🔵 colmat 1.25× faster than `faer` | 🔵 colmat 2.73× faster than `lapack-mkl` | `!` between-start range over 5% |
+
+## linalg-large, c64, c order, 8T (CPU 0-7)
+
+| case | colmat (ms) | faer (ms) | lapack-mkl (ms) | vs `faer` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `cholesky/n1024/b1` | 3.37279 ± 0.0133284 (W 0.00669551) | 6.3824 ± 0.176473 (W 0.203339) | - | 🔵 colmat 1.89× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `cholesky/n1024/b1 [api-inclusive]` | 4.74561 ± 0.0972804 (W 0.0163758) | 9.10702 ± 0.194517 (W 0.0739476) | - | 🔵 colmat 1.92× faster than `faer` | - | `*` one row has no measurement here |
+| `cholesky/n1536/b1` | 9.60893 ± 0.00472438 (W 0.012692) | 14.2258 ± 0.0819367 (W 0.382779) | - | 🔵 colmat 1.48× faster than `faer` | - | `*` one row has no measurement here |
+| `cholesky/n1536/b1 [api-inclusive]` | 24.4902 ± 0.0750195 (W 0.0571639) | 34.7924 ± 2.42015 (W 0.102345) | - | 🔵 colmat 1.42× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `eigh/n1024/b1` | 59.813 ± 0.0713188 (W 0.101162) | 99.1256 ± 0.576635 (W 1.48428) | - | 🔵 colmat 1.66× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n1024/b1 [api-inclusive]` | 67.0796 ± 0.201233 (W 0.206298) | 105.986 ± 0.321429 (W 1.03311) | - | 🔵 colmat 1.58× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n1536/b1` | 180.149 ± 0.369055 (W 0.132928) | 259.924 ± 0.78132 (W 2.54615) | - | 🔵 colmat 1.44× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n1536/b1 [api-inclusive]` | 204.306 ± 0.450161 (W 0.484398) | 285.172 ± 2.57133 (W 2.50146) | - | 🔵 colmat 1.40× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n1024/b1` | 25.9136 ± 0.17754 (W 0.0889743) | 59.645 ± 1.82815 (W 0.298772) | - | 🔵 colmat 2.30× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `full_piv_lu/n1024/b1 [api-inclusive]` | 38.0708 ± 0.155615 (W 0.115422) | 62.6761 ± 0.507744 (W 0.637057) | - | 🔵 colmat 1.65× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n1536/b1` | 119.808 ± 0.532538 (W 0.981948) | 178.184 ± 5.50155 (W 0.566071) | - | 🔵 colmat 1.49× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `full_piv_lu/n1536/b1 [api-inclusive]` | 136.334 ± 0.336446 (W 1.00495) | 200.496 ± 0.708345 (W 2.47722) | - | 🔵 colmat 1.47× faster than `faer` | - | `*` one row has no measurement here |
+| `lu/n1024/b1` | 8.14863 ± 0.0375596 (W 0.0222022) | 38.3652 ± 0.125424 (W 0.777979) | - | 🔵 colmat 4.71× faster than `faer` | - | `*` one row has no measurement here |
+| `lu/n1024/b1 [api-inclusive]` | 20.8173 ± 0.202003 (W 0.0784303) | 20.4223 ± 0.112599 (W 0.128839) | - | · | - | `*` one row has no measurement here |
+| `lu/n1536/b1` | 29.372 ± 0.218376 (W 0.25283) | 87.0215 ± 0.362006 (W 0.591798) | - | 🔵 colmat 2.96× faster than `faer` | - | `*` one row has no measurement here |
+| `lu/n1536/b1 [api-inclusive]` | 53.9963 ± 0.265867 (W 0.354252) | 72.8831 ± 1.85381 (W 1.43523) | - | 🔵 colmat 1.35× faster than `faer` | - | `*` one row has no measurement here |
+| `qr/n1024/b1` | 29.5045 ± 0.164879 (W 0.150188) | 79.4907 ± 0.295993 (W 0.670857) | - | 🔵 colmat 2.69× faster than `faer` | - | `*` one row has no measurement here |
+| `qr/n1024/b1 [api-inclusive]` | 45.1144 ± 0.796162 (W 0.354192) | 67.6333 ± 20.1999 (W 6.99916) | - | 🔵 colmat 1.50× faster than `faer` (marginal: spread 0.93 of the difference) | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr/n1536/b1` | 97.3921 ± 4.26876 (W 0.290277) | 218.054 ± 14.7327 (W 11.352) | - | 🔵 colmat 2.24× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr/n1536/b1 [api-inclusive]` | 130.836 ± 0.247176 (W 0.303371) | 194.646 ± 25.6639 (W 10.9807) | - | 🔵 colmat 1.49× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr_factor/n1024/b1` | 13.4871 ± 0.0351338 (W 0.0341145) | 58.8162 ± 0.785208 (W 0.427218) | - | 🔵 colmat 4.36× faster than `faer` | - | `*` one row has no measurement here |
+| `qr_factor/n1536/b1` | 46.9658 ± 0.36801 (W 0.268419) | 141.465 ± 6.75823 (W 1.35121) | - | 🔵 colmat 3.01× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `solve/n1024/b1` | 8.22944 ± 0.0624188 (W 0.0503929) | 31.4198 ± 0.715211 (W 0.302862) | - | 🔵 colmat 3.82× faster than `faer` | - | `*` one row has no measurement here |
+| `solve/n1024/b1 [api-inclusive]` | 11.7628 ± 0.112267 (W 0.0363467) | 21.5326 ± 0.756055 (W 0.140234) | - | 🔵 colmat 1.83× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `solve/n1536/b1` | 30.1105 ± 0.225719 (W 0.124461) | 74.7474 ± 0.338029 (W 0.786241) | - | 🔵 colmat 2.48× faster than `faer` | - | `*` one row has no measurement here |
+| `solve/n1536/b1 [api-inclusive]` | 53.9716 ± 0.662218 (W 0.389033) | 75.3805 ± 2.78961 (W 0.711886) | - | 🔵 colmat 1.40× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_thin/n1024/b1` | 151.258 ± 0.16801 (W 0.26504) | 233.179 ± 7.67352 (W 3.745) | - | 🔵 colmat 1.54× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_thin/n1024/b1 [api-inclusive]` | 180.873 ± 0.946832 (W 0.311217) | 258.696 ± 4.4824 (W 10.3549) | - | 🔵 colmat 1.43× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_thin/n1536/b1` | 514.976 ± 9.58693 (W 0.853013) | 656.817 ± 4.88288 (W 2.14259) | - | 🔵 colmat 1.28× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_thin/n1536/b1 [api-inclusive]` | 565.391 ± 2.54008 (W 2.45227) | 721.945 ± 6.1584 (W 6.36112) | - | 🔵 colmat 1.28× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n1024/b1` | 94.9555 ± 15.0932 (W 0.739538) | 157.203 ± 6.25177 (W 0.280093) | - | 🔵 colmat 1.66× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_values/n1024/b1 [api-inclusive]` | 93.9353 ± 0.920526 (W 1.60962) | 156.932 ± 2.41042 (W 0.282638) | - | 🔵 colmat 1.67× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n1536/b1` | 332.746 ± 2.53567 (W 0.909412) | 468.793 ± 7.51782 (W 1.91171) | - | 🔵 colmat 1.41× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n1536/b1 [api-inclusive]` | 342.62 ± 2.96156 (W 4.82119) | 482.458 ± 4.90356 (W 4.4341) | - | 🔵 colmat 1.41× faster than `faer` | - | `*` one row has no measurement here |
+| `triangular_solve/n1024/b1` | 0.087582 ± 0.00183891 (W 0.00114048) | 0.10121 ± 0.00303895 (W 0.00175577) | 0.245163 ± 0.00111877 (W 0.00151869) | 🔵 colmat 1.16× faster than `faer` | 🔵 colmat 2.80× faster than `lapack-mkl` | `!` between-start range over 5% |
+| `triangular_solve/n1536/b1` | 0.161005 ± 0.000640656 (W 0.00157353) | 0.217 ± 0.00832507 (W 0.00254141) | 0.597163 ± 0.00871629 (W 0.00297521) | 🔵 colmat 1.35× faster than `faer` | 🔵 colmat 3.71× faster than `lapack-mkl` | `!` between-start range over 5% |
+
+## linalg-large, c64, f order, 4T (CPU 0-3)
+
+| case | colmat (ms) | faer (ms) | lapack-mkl (ms) | vs `faer` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `cholesky/n1024/b1` | 5.70041 ± 0.0262057 (W 0.00892907) | 6.36027 ± 0.150808 (W 0.0664634) | 13.8645 ± 0.338116 (W 0.0432277) | 🔵 colmat 1.12× faster than `faer` | 🔵 colmat 2.43× faster than `lapack-mkl` |  |
+| `cholesky/n1024/b1 [api-inclusive]` | 6.44439 ± 0.0276224 (W 0.0104621) | 7.03732 ± 0.0560409 (W 0.191428) | - | 🔵 colmat 1.09× faster than `faer` | - | `*` one row has no measurement here |
+| `cholesky/n1536/b1` | 17.7968 ± 0.106886 (W 0.0172426) | 18.875 ± 0.169846 (W 0.256291) | 42.6447 ± 0.292482 (W 0.062795) | 🔵 colmat 1.06× faster than `faer` | 🔵 colmat 2.40× faster than `lapack-mkl` |  |
+| `cholesky/n1536/b1 [api-inclusive]` | 29.898 ± 0.185597 (W 0.0934492) | 31.16 ± 0.300782 (W 0.299158) | - | · | - | `*` one row has no measurement here |
+| `eigh/n1024/b1` | 101.215 ± 0.0721901 (W 0.103749) | 126.193 ± 0.055347 (W 0.135149) | 203.6 ± 0.164097 (W 0.385321) | 🔵 colmat 1.25× faster than `faer` | 🔵 colmat 2.01× faster than `lapack-mkl` |  |
+| `eigh/n1024/b1 [api-inclusive]` | 108.998 ± 0.349852 (W 0.233208) | 133.294 ± 0.284517 (W 0.226307) | - | 🔵 colmat 1.22× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n1536/b1` | 314.328 ± 0.299093 (W 0.266673) | 363.436 ± 1.69322 (W 0.268349) | 636.475 ± 0.489931 (W 1.08752) | 🔵 colmat 1.16× faster than `faer` | 🔵 colmat 2.02× faster than `lapack-mkl` |  |
+| `eigh/n1536/b1 [api-inclusive]` | 340.593 ± 0.124272 (W 0.565729) | 390.563 ± 0.48259 (W 0.648418) | - | 🔵 colmat 1.15× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n1024/b1` | 50.7143 ± 0.0494752 (W 0.0358866) | 74.6666 ± 0.148799 (W 0.124454) | 372.3 ± 1.31385 (W 0.418391) | 🔵 colmat 1.47× faster than `faer` | 🔵 colmat 7.34× faster than `lapack-mkl` |  |
+| `full_piv_lu/n1024/b1 [api-inclusive]` | 55.5402 ± 0.117838 (W 0.216482) | 71.3163 ± 0.113307 (W 0.101687) | - | 🔵 colmat 1.28× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n1536/b1` | 228.343 ± 2.34366 (W 1.04997) | 277.291 ± 2.64686 (W 0.844079) | 1727.59 ± 16.3966 (W 10.1516) | 🔵 colmat 1.21× faster than `faer` | 🔵 colmat 7.57× faster than `lapack-mkl` |  |
+| `full_piv_lu/n1536/b1 [api-inclusive]` | 230.98 ± 0.81441 (W 1.39692) | 286.232 ± 4.12151 (W 1.79566) | - | 🔵 colmat 1.24× faster than `faer` | - | `*` one row has no measurement here |
+| `lu/n1024/b1` | 11.0945 ± 0.0201064 (W 0.0288708) | 14.7219 ± 0.158199 (W 0.184671) | 24.6708 ± 0.0283355 (W 0.0349512) | 🔵 colmat 1.33× faster than `faer` | 🔵 colmat 2.22× faster than `lapack-mkl` |  |
+| `lu/n1024/b1 [api-inclusive]` | 21.361 ± 0.123202 (W 0.0539638) | 16.249 ± 0.258335 (W 0.230945) | - | 🔴 colmat 1.31× slower than `faer` | - | `*` one row has no measurement here |
+| `lu/n1536/b1` | 34.6959 ± 0.0856516 (W 0.0754231) | 42.7246 ± 0.285928 (W 0.554332) | 77.1839 ± 0.274431 (W 0.0571025) | 🔵 colmat 1.23× faster than `faer` | 🔵 colmat 2.22× faster than `lapack-mkl` |  |
+| `lu/n1536/b1 [api-inclusive]` | 59.273 ± 0.0491291 (W 0.187693) | 66.2611 ± 0.351409 (W 0.814303) | - | 🔵 colmat 1.12× faster than `faer` | - | `*` one row has no measurement here |
+| `qr/n1024/b1` | 51.0403 ± 0.124329 (W 0.042342) | 54.1464 ± 0.0823197 (W 0.0322903) | 117.166 ± 1.07155 (W 0.0842706) | 🔵 colmat 1.06× faster than `faer` | 🔵 colmat 2.30× faster than `lapack-mkl` |  |
+| `qr/n1024/b1 [api-inclusive]` | 65.1036 ± 0.387646 (W 0.0818818) | 68.955 ± 2.1024 (W 0.163463) | - | 🔵 colmat 1.06× faster than `faer` (marginal: spread 0.65 of the difference) | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr/n1536/b1` | 164.653 ± 0.885221 (W 0.180341) | 172.189 ± 1.09343 (W 0.19178) | 377.113 ± 0.217351 (W 0.194287) | · | 🔵 colmat 2.29× faster than `lapack-mkl` |  |
+| `qr/n1536/b1 [api-inclusive]` | 200.467 ± 0.398065 (W 0.177255) | 208.867 ± 0.564852 (W 0.737106) | - | · | - | `*` one row has no measurement here |
+| `qr_factor/n1024/b1` | 22.7219 ± 0.0695494 (W 0.020855) | 26.2191 ± 0.0301679 (W 0.0280344) | 45.926 ± 0.0807526 (W 0.0173165) | 🔵 colmat 1.15× faster than `faer` | 🔵 colmat 2.02× faster than `lapack-mkl` |  |
+| `qr_factor/n1536/b1` | 70.8746 ± 0.296496 (W 0.0666462) | 79.6283 ± 0.112088 (W 0.161546) | 151.822 ± 0.171178 (W 0.673266) | 🔵 colmat 1.12× faster than `faer` | 🔵 colmat 2.14× faster than `lapack-mkl` |  |
+| `solve/n1024/b1` | 10.9741 ± 0.0139067 (W 0.0137043) | 14.6161 ± 0.115377 (W 0.140031) | 23.6278 ± 0.290736 (W 0.0284026) | 🔵 colmat 1.33× faster than `faer` | 🔵 colmat 2.15× faster than `lapack-mkl` |  |
+| `solve/n1024/b1 [api-inclusive]` | 12.9252 ± 0.0550702 (W 0.0158248) | 16.2867 ± 0.058558 (W 0.167319) | - | 🔵 colmat 1.26× faster than `faer` | - | `*` one row has no measurement here |
+| `solve/n1536/b1` | 34.7154 ± 0.0284198 (W 0.0303619) | 42.2233 ± 0.411604 (W 0.407887) | 75.7378 ± 1.17502 (W 0.0501854) | 🔵 colmat 1.22× faster than `faer` | 🔵 colmat 2.18× faster than `lapack-mkl` |  |
+| `solve/n1536/b1 [api-inclusive]` | 59.3081 ± 0.105911 (W 0.0915529) | 65.291 ± 0.358601 (W 0.477615) | - | 🔵 colmat 1.10× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_thin/n1024/b1` | 217.665 ± 0.562805 (W 0.281356) | 285.376 ± 1.52387 (W 0.334333) | 520.788 ± 1.43331 (W 0.343027) | 🔵 colmat 1.31× faster than `faer` | 🔵 colmat 2.39× faster than `lapack-mkl` |  |
+| `svd_thin/n1024/b1 [api-inclusive]` | 247.697 ± 0.135473 (W 0.408494) | 316.246 ± 0.454453 (W 0.742646) | - | 🔵 colmat 1.28× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_thin/n1536/b1` | 786.426 ± 2.57907 (W 4.73379) | 937.052 ± 37.6256 (W 1.24212) | 1592.04 ± 19.8258 (W 4.74645) | 🔵 colmat 1.19× faster than `faer` | 🔵 colmat 2.02× faster than `lapack-mkl` | `!` between-start range over 5% |
+| `svd_thin/n1536/b1 [api-inclusive]` | 854.548 ± 1.95854 (W 3.98242) | 1014.45 ± 3.05334 (W 3.55098) | - | 🔵 colmat 1.19× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n1024/b1` | 125.524 ± 0.297112 (W 0.156195) | 201.103 ± 1.07203 (W 0.152737) | 275.907 ± 0.555811 (W 0.259111) | 🔵 colmat 1.60× faster than `faer` | 🔵 colmat 2.20× faster than `lapack-mkl` |  |
+| `svd_values/n1024/b1 [api-inclusive]` | 125.783 ± 0.459353 (W 0.213021) | 200.266 ± 2.4211 (W 0.20289) | - | 🔵 colmat 1.59× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n1536/b1` | 513.735 ± 1.95662 (W 0.765053) | 680.242 ± 1.9351 (W 1.89702) | 878.733 ± 1.55851 (W 0.921747) | 🔵 colmat 1.32× faster than `faer` | 🔵 colmat 1.71× faster than `lapack-mkl` |  |
+| `svd_values/n1536/b1 [api-inclusive]` | 527.515 ± 3.16516 (W 1.05814) | 700.229 ± 2.68831 (W 2.25914) | - | 🔵 colmat 1.33× faster than `faer` | - | `*` one row has no measurement here |
+| `triangular_solve/n1024/b1` | 0.107317 ± 0.000828674 (W 0.00137005) | 0.125127 ± 0.00221136 (W 0.00172787) | 0.252103 ± 0.00128061 (W 0.00167165) | 🔵 colmat 1.17× faster than `faer` | 🔵 colmat 2.35× faster than `lapack-mkl` |  |
+| `triangular_solve/n1536/b1` | 0.235895 ± 0.00526633 (W 0.0027275) | 0.296532 ± 0.00464209 (W 0.00306629) | 0.628554 ± 0.00225192 (W 0.00388417) | 🔵 colmat 1.26× faster than `faer` | 🔵 colmat 2.66× faster than `lapack-mkl` |  |
+
+## linalg-large, c64, f order, 8T (CPU 0-7)
+
+| case | colmat (ms) | faer (ms) | lapack-mkl (ms) | vs `faer` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `cholesky/n1024/b1` | 3.40626 ± 0.0385177 (W 0.0104695) | 3.97608 ± 0.0317098 (W 0.0644496) | 7.38275 ± 0.0707273 (W 0.0263892) | 🔵 colmat 1.17× faster than `faer` | 🔵 colmat 2.17× faster than `lapack-mkl` |  |
+| `cholesky/n1024/b1 [api-inclusive]` | 4.24562 ± 0.057818 (W 0.00772998) | 4.71011 ± 0.0251576 (W 0.0599731) | - | 🔵 colmat 1.11× faster than `faer` | - | `*` one row has no measurement here |
+| `cholesky/n1536/b1` | 9.70879 ± 0.0364389 (W 0.00721335) | 10.6275 ± 0.0187546 (W 0.0994208) | 22.3685 ± 0.404453 (W 0.0318708) | 🔵 colmat 1.09× faster than `faer` | 🔵 colmat 2.30× faster than `lapack-mkl` |  |
+| `cholesky/n1536/b1 [api-inclusive]` | 22.2223 ± 0.107269 (W 0.0441509) | 23.6551 ± 0.26588 (W 0.107337) | - | 🔵 colmat 1.06× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n1024/b1` | 58.9364 ± 0.103932 (W 0.067226) | 96.4937 ± 1.0171 (W 0.686742) | 125.005 ± 0.890069 (W 0.271128) | 🔵 colmat 1.64× faster than `faer` | 🔵 colmat 2.12× faster than `lapack-mkl` |  |
+| `eigh/n1024/b1 [api-inclusive]` | 66.346 ± 0.300008 (W 0.209115) | 102.404 ± 0.492236 (W 0.485608) | - | 🔵 colmat 1.54× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n1536/b1` | 177.255 ± 0.447638 (W 0.13573) | 251.52 ± 2.09776 (W 1.13415) | 373.004 ± 1.49024 (W 0.424016) | 🔵 colmat 1.42× faster than `faer` | 🔵 colmat 2.10× faster than `lapack-mkl` |  |
+| `eigh/n1536/b1 [api-inclusive]` | 202.798 ± 0.157502 (W 0.373333) | 278.283 ± 1.81468 (W 2.0237) | - | 🔵 colmat 1.37× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n1024/b1` | 27.0559 ± 0.0762487 (W 0.0572768) | 54.1967 ± 1.28695 (W 0.175098) | 372.589 ± 1.57252 (W 0.388818) | 🔵 colmat 2.00× faster than `faer` | 🔵 colmat 13.77× faster than `lapack-mkl` |  |
+| `full_piv_lu/n1024/b1 [api-inclusive]` | 34.2704 ± 0.123581 (W 0.0976915) | 51.7494 ± 0.780989 (W 0.250738) | - | 🔵 colmat 1.51× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n1536/b1` | 110.944 ± 2.48563 (W 0.614006) | 161.598 ± 3.49936 (W 0.518547) | 1677.83 ± 43.7589 (W 4.29958) | 🔵 colmat 1.46× faster than `faer` | 🔵 colmat 15.12× faster than `lapack-mkl` | `!` between-start range over 5% |
+| `full_piv_lu/n1536/b1 [api-inclusive]` | 127.036 ± 0.827324 (W 0.800477) | 177.79 ± 1.21377 (W 0.866848) | - | 🔵 colmat 1.40× faster than `faer` | - | `*` one row has no measurement here |
+| `lu/n1024/b1` | 7.00505 ± 0.0165493 (W 0.0102158) | 10.2368 ± 0.049495 (W 0.106563) | 13.4453 ± 0.301173 (W 0.0160444) | 🔵 colmat 1.46× faster than `faer` | 🔵 colmat 1.92× faster than `lapack-mkl` |  |
+| `lu/n1024/b1 [api-inclusive]` | 17.1442 ± 0.0840169 (W 0.0575808) | 11.604 ± 0.0769966 (W 0.104576) | - | 🔴 colmat 1.48× slower than `faer` | - | `*` one row has no measurement here |
+| `lu/n1536/b1` | 20.9765 ± 0.0765741 (W 0.0646408) | 26.9977 ± 0.302596 (W 0.356323) | 42.3565 ± 1.40005 (W 0.0844344) | 🔵 colmat 1.29× faster than `faer` | 🔵 colmat 2.02× faster than `lapack-mkl` | `!` between-start range over 5% |
+| `lu/n1536/b1 [api-inclusive]` | 45.1671 ± 0.239865 (W 0.30446) | 51.2919 ± 0.516969 (W 0.428656) | - | 🔵 colmat 1.14× faster than `faer` | - | `*` one row has no measurement here |
+| `qr/n1024/b1` | 27.1068 ± 0.289071 (W 0.0367119) | 43.2942 ± 0.0637707 (W 0.643977) | 60.9197 ± 0.341681 (W 0.0462598) | 🔵 colmat 1.60× faster than `faer` | 🔵 colmat 2.25× faster than `lapack-mkl` |  |
+| `qr/n1024/b1 [api-inclusive]` | 41.2613 ± 0.270812 (W 0.0521156) | 67.4165 ± 20.5916 (W 15.5542) | - | 🔵 colmat 1.63× faster than `faer` (marginal: spread 0.80 of the difference) | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr/n1536/b1` | 86.8911 ± 0.263104 (W 0.173062) | 129.5 ± 29.7114 (W 4.53699) | 198.797 ± 0.510896 (W 0.528249) | 🔵 colmat 1.49× faster than `faer` (marginal: spread 0.70 of the difference) | 🔵 colmat 2.29× faster than `lapack-mkl` | `!` between-start range over 5%; `p` position effect over 5% |
+| `qr/n1536/b1 [api-inclusive]` | 122.795 ± 0.874118 (W 0.400517) | 162.999 ± 14.029 (W 6.74702) | - | 🔵 colmat 1.33× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr_factor/n1024/b1` | 12.2262 ± 0.106686 (W 0.0175786) | 22.5873 ± 0.220066 (W 0.264653) | 25.3001 ± 0.0274873 (W 0.0281488) | 🔵 colmat 1.85× faster than `faer` | 🔵 colmat 2.07× faster than `lapack-mkl` |  |
+| `qr_factor/n1536/b1` | 37.7232 ± 0.294488 (W 0.0393178) | 70.1607 ± 6.77461 (W 4.37794) | 80.7983 ± 0.26977 (W 0.476355) | 🔵 colmat 1.86× faster than `faer` | 🔵 colmat 2.14× faster than `lapack-mkl` | `!` between-start range over 5%; `p` position effect over 5% |
+| `solve/n1024/b1` | 7.0122 ± 0.0010086 (W 0.0101187) | 9.92925 ± 0.0230209 (W 0.0892155) | 13.0687 ± 0.476432 (W 0.012721) | 🔵 colmat 1.42× faster than `faer` | 🔵 colmat 1.86× faster than `lapack-mkl` | `!` between-start range over 5% |
+| `solve/n1024/b1 [api-inclusive]` | 8.88375 ± 0.00770482 (W 0.0201997) | 11.4996 ± 0.0533513 (W 0.0810212) | - | 🔵 colmat 1.29× faster than `faer` | - | `*` one row has no measurement here |
+| `solve/n1536/b1` | 21.202 ± 0.0107152 (W 0.0315514) | 26.6435 ± 0.0980585 (W 0.152424) | 41.824 ± 1.04917 (W 0.14493) | 🔵 colmat 1.26× faster than `faer` | 🔵 colmat 1.97× faster than `lapack-mkl` |  |
+| `solve/n1536/b1 [api-inclusive]` | 46.027 ± 0.552977 (W 0.0571885) | 50.8031 ± 0.101623 (W 0.294724) | - | 🔵 colmat 1.10× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_thin/n1024/b1` | 143.281 ± 0.389923 (W 0.162429) | 220.971 ± 6.35597 (W 3.07688) | 338.33 ± 27.5789 (W 3.32442) | 🔵 colmat 1.54× faster than `faer` | 🔵 colmat 2.36× faster than `lapack-mkl` | `!` between-start range over 5%; `p` position effect over 5% |
+| `svd_thin/n1024/b1 [api-inclusive]` | 173.071 ± 0.221251 (W 0.40741) | 249.674 ± 7.09552 (W 5.9051) | - | 🔵 colmat 1.44× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_thin/n1536/b1` | 480.411 ± 2.06431 (W 0.731342) | 638.192 ± 8.60725 (W 1.56046) | 957.308 ± 6.13294 (W 2.58249) | 🔵 colmat 1.33× faster than `faer` | 🔵 colmat 1.99× faster than `lapack-mkl` |  |
+| `svd_thin/n1536/b1 [api-inclusive]` | 543.418 ± 1.55442 (W 7.82836) | 707.569 ± 1.46697 (W 5.57861) | - | 🔵 colmat 1.30× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n1024/b1` | 83.4309 ± 0.102249 (W 0.0789211) | 149.521 ± 0.150741 (W 0.451186) | 170.112 ± 1.14458 (W 0.31203) | 🔵 colmat 1.79× faster than `faer` | 🔵 colmat 2.04× faster than `lapack-mkl` |  |
+| `svd_values/n1024/b1 [api-inclusive]` | 83.811 ± 0.16506 (W 0.156031) | 149.557 ± 0.974668 (W 0.507729) | - | 🔵 colmat 1.78× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n1536/b1` | 307.761 ± 0.922198 (W 0.811547) | 448.627 ± 3.35561 (W 1.28667) | 499.846 ± 0.681625 (W 0.517446) | 🔵 colmat 1.46× faster than `faer` | 🔵 colmat 1.62× faster than `lapack-mkl` |  |
+| `svd_values/n1536/b1 [api-inclusive]` | 314.351 ± 1.52108 (W 1.20044) | 464.073 ± 5.25793 (W 1.53822) | - | 🔵 colmat 1.48× faster than `faer` | - | `*` one row has no measurement here |
+| `triangular_solve/n1024/b1` | 0.096981 ± 0.00185514 (W 0.000469146) | 0.109697 ± 0.00136106 (W 0.00155379) | 0.252723 ± 0.0013865 (W 0.00147708) | 🔵 colmat 1.13× faster than `faer` | 🔵 colmat 2.61× faster than `lapack-mkl` |  |
+| `triangular_solve/n1536/b1` | 0.190085 ± 0.00206074 (W 0.0024707) | 0.231538 ± 0.00290295 (W 0.00281587) | 0.620484 ± 0.0111903 (W 0.00492056) | 🔵 colmat 1.22× faster than `faer` | 🔵 colmat 3.26× faster than `lapack-mkl` |  |
+
+Not applicable to this population's shapes and reported as skipped: `cholesky/1024`, `cholesky/1536`, `eigh/1024`, `eigh/1536`, `full_piv_lu/1024`, `full_piv_lu/1536`, `lu/1024`, `lu/1536`, `qr/1024`, `qr/1536`, `qr_factor/1024`, `qr_factor/1536`, `solve/1024`, `solve/1536`, `svd_thin/1024`, `svd_thin/1536`, `svd_values/1024`, `svd_values/1536`.
+
+## gemm-large, f64, c order, 4T (CPU 0-3)
+
+| case | colmat (ms) | faer (ms) | lapack-mkl (ms) | vs `faer` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `gemm/1024x1024x1024/b1` | 6.11757 ± 0.0400584 (W 0.00978608) | 6.12671 ± 0.0153677 (W 0.00490448) | 13.8256 ± 0.0188212 (W 0.0218117) | · | 🔵 colmat 2.26× faster than `lapack-mkl` |  |
+| `gemm/1536x1536x1536/b1` | 21.8941 ± 0.162007 (W 0.0424979) | 21.7929 ± 0.349389 (W 0.0276939) | 41.7981 ± 0.141861 (W 0.0316675) | · | 🔵 colmat 1.91× faster than `lapack-mkl` |  |
+
+## gemm-large, f64, c order, 8T (CPU 0-7)
+
+| case | colmat (ms) | faer (ms) | lapack-mkl (ms) | vs `faer` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `gemm/1024x1024x1024/b1` | 3.13594 ± 0.00234817 (W 0.00584074) | 3.12931 ± 0.00368837 (W 0.00608202) | 7.37477 ± 0.150748 (W 0.0407438) | · | 🔵 colmat 2.35× faster than `lapack-mkl` |  |
+| `gemm/1536x1536x1536/b1` | 11.2805 ± 0.00754133 (W 0.0130425) | 11.2572 ± 0.0168999 (W 0.0189414) | 21.7802 ± 0.0343039 (W 0.0140609) | · | 🔵 colmat 1.93× faster than `lapack-mkl` |  |
+
+## gemm-large, f64, f order, 4T (CPU 0-3)
+
+| case | colmat (ms) | faer (ms) | lapack-mkl (ms) | vs `faer` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `gemm/1024x1024x1024/b1` | 6.13869 ± 0.0798979 (W 0.00641638) | 6.10578 ± 0.0897331 (W 0.00847616) | 13.7724 ± 0.0396592 (W 0.0190296) | · | 🔵 colmat 2.24× faster than `lapack-mkl` |  |
+| `gemm/1536x1536x1536/b1` | 21.585 ± 0.126618 (W 0.0262648) | 21.4641 ± 0.304425 (W 0.0236453) | 41.5676 ± 0.31117 (W 0.0229007) | · | 🔵 colmat 1.93× faster than `lapack-mkl` |  |
+
+## gemm-large, f64, f order, 8T (CPU 0-7)
+
+| case | colmat (ms) | faer (ms) | lapack-mkl (ms) | vs `faer` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `gemm/1024x1024x1024/b1` | 3.14408 ± 0.00537628 (W 0.00345603) | 3.13416 ± 0.00503335 (W 0.00446856) | 7.09417 ± 0.0204471 (W 0.0138825) | · | 🔵 colmat 2.26× faster than `lapack-mkl` |  |
+| `gemm/1536x1536x1536/b1` | 11.2444 ± 0.0350243 (W 0.0308098) | 11.2343 ± 0.0281648 (W 0.0193149) | 21.795 ± 0.0787423 (W 0.0235628) | · | 🔵 colmat 1.94× faster than `lapack-mkl` |  |
+
+## gemm-large, c64, c order, 4T (CPU 0-3)
+
+| case | colmat (ms) | faer (ms) | lapack-mkl (ms) | vs `faer` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `gemm/1024x1024x1024/b1` | 23.6431 ± 0.0693775 (W 0.0154776) | 23.6417 ± 0.0330191 (W 0.0141679) | 72.4709 ± 0.0112579 (W 0.0415244) | · | 🔵 colmat 3.07× faster than `lapack-mkl` |  |
+| `gemm/1536x1536x1536/b1` | 79.6587 ± 0.0153278 (W 0.0443784) | 79.7718 ± 0.0332179 (W 0.0266133) | 244.564 ± 0.32504 (W 0.184709) | · | 🔵 colmat 3.07× faster than `lapack-mkl` |  |
+
+## gemm-large, c64, c order, 8T (CPU 0-7)
+
+| case | colmat (ms) | faer (ms) | lapack-mkl (ms) | vs `faer` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `gemm/1024x1024x1024/b1` | 11.9859 ± 0.0237276 (W 0.0122176) | 11.9579 ± 0.022549 (W 0.00647077) | 28.2448 ± 0.0988905 (W 0.0573208) | · | 🔵 colmat 2.36× faster than `lapack-mkl` |  |
+| `gemm/1536x1536x1536/b1` | 40.3962 ± 0.0465866 (W 0.0129318) | 40.5403 ± 0.0466421 (W 0.0211648) | 94.0982 ± 0.229039 (W 0.15914) | · | 🔵 colmat 2.33× faster than `lapack-mkl` |  |
+
+## gemm-large, c64, f order, 4T (CPU 0-3)
+
+| case | colmat (ms) | faer (ms) | lapack-mkl (ms) | vs `faer` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `gemm/1024x1024x1024/b1` | 23.5291 ± 0.0638824 (W 0.0219156) | 23.6156 ± 0.0595238 (W 0.0257555) | 72.5636 ± 0.0420055 (W 0.0694329) | · | 🔵 colmat 3.08× faster than `lapack-mkl` |  |
+| `gemm/1536x1536x1536/b1` | 79.7411 ± 0.128258 (W 0.032726) | 79.8069 ± 0.244301 (W 0.0347696) | 244.163 ± 0.465029 (W 1.90363) | · | 🔵 colmat 3.06× faster than `lapack-mkl` |  |
+
+## gemm-large, c64, f order, 8T (CPU 0-7)
+
+| case | colmat (ms) | faer (ms) | lapack-mkl (ms) | vs `faer` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `gemm/1024x1024x1024/b1` | 11.9593 ± 0.0150579 (W 0.00881701) | 11.9717 ± 0.0127727 (W 0.0112607) | 28.1527 ± 0.0571469 (W 0.0639498) | · | 🔵 colmat 2.35× faster than `lapack-mkl` |  |
+| `gemm/1536x1536x1536/b1` | 40.4511 ± 0.0696068 (W 0.0218589) | 40.5388 ± 0.0787288 (W 0.0133041) | 94.2181 ± 0.399981 (W 0.15721) | · | 🔵 colmat 2.33× faster than `lapack-mkl` |  |
+
+## linalg-boundary, f64, c order, 4T (CPU 0-3)
+
+| case | colmat (ms) | faer (ms) | lapack-mkl (ms) | vs `faer` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `cholesky/n255/b1` | 0.090488 ± 0.00029848 (W 0.000307108) | 0.38687 ± 0.0311237 (W 0.0438213) | - | 🔵 colmat 4.28× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `cholesky/n255/b1 [api-inclusive]` | 0.110762 ± 0.000542778 (W 0.000576472) | 0.200835 ± 0.00115812 (W 0.00713692) | - | 🔵 colmat 1.81× faster than `faer` | - | `*` one row has no measurement here |
+| `cholesky/n257/b1` | 0.083897 ± 0.000830064 (W 0.000353641) | 0.35716 ± 0.0248064 (W 0.0349164) | - | 🔵 colmat 4.26× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `cholesky/n257/b1 [api-inclusive]` | 0.106608 ± 0.00193332 (W 0.00032669) | 0.183385 ± 0.00264573 (W 0.00384101) | - | 🔵 colmat 1.72× faster than `faer` | - | `*` one row has no measurement here |
+| `cholesky/n511/b1` | 0.341595 ± 0.000897534 (W 0.00176735) | 1.03183 ± 0.0290109 (W 0.0365223) | - | 🔵 colmat 3.02× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `cholesky/n511/b1 [api-inclusive]` | 0.454138 ± 0.00138248 (W 0.00141664) | 0.655002 ± 0.0240142 (W 0.0227873) | - | 🔵 colmat 1.44× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `cholesky/n513/b1` | 0.334256 ± 0.00132265 (W 0.00191598) | 0.984618 ± 0.00723506 (W 0.0351597) | - | 🔵 colmat 2.95× faster than `faer` | - | `*` one row has no measurement here |
+| `cholesky/n513/b1 [api-inclusive]` | 0.500684 ± 0.00149279 (W 0.00315754) | 0.598684 ± 0.00853908 (W 0.012991) | - | 🔵 colmat 1.20× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n255/b1` | 2.20586 ± 0.00243425 (W 0.00409903) | 4.6763 ± 0.0107939 (W 0.0115262) | - | 🔵 colmat 2.12× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n255/b1 [api-inclusive]` | 2.21986 ± 0.00200348 (W 0.00235651) | 4.68607 ± 0.00339852 (W 0.00852854) | - | 🔵 colmat 2.11× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n257/b1` | 2.22152 ± 0.00825021 (W 0.00531185) | 4.61806 ± 0.0096448 (W 0.00533998) | - | 🔵 colmat 2.08× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n257/b1 [api-inclusive]` | 2.23762 ± 0.00984283 (W 0.00286578) | 4.67763 ± 0.0265694 (W 0.0100668) | - | 🔵 colmat 2.09× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n511/b1` | 9.39612 ± 0.00916868 (W 0.00954474) | 15.6807 ± 0.0256007 (W 0.01629) | - | 🔵 colmat 1.67× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n511/b1 [api-inclusive]` | 9.42709 ± 0.033617 (W 0.0115591) | 15.6921 ± 0.118994 (W 0.0301601) | - | 🔵 colmat 1.66× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n513/b1` | 9.50777 ± 0.0137775 (W 0.0087312) | 15.6532 ± 0.0214446 (W 0.0187254) | - | 🔵 colmat 1.65× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n513/b1 [api-inclusive]` | 9.56623 ± 0.0137363 (W 0.00735034) | 15.7043 ± 0.0537489 (W 0.0203671) | - | 🔵 colmat 1.64× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n255/b1` | 0.698682 ± 0.00299928 (W 0.00293428) | 1.28098 ± 0.0040498 (W 0.00122367) | - | 🔵 colmat 1.83× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n255/b1 [api-inclusive]` | 0.874195 ± 0.00450303 (W 0.00233719) | 1.74979 ± 0.00432702 (W 0.00440556) | - | 🔵 colmat 2.00× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n257/b1` | 0.72831 ± 0.00517067 (W 0.00288556) | 1.32041 ± 0.000648072 (W 0.00380288) | - | 🔵 colmat 1.81× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n257/b1 [api-inclusive]` | 0.928291 ± 0.00310549 (W 0.00408661) | 1.25909 ± 0.00982954 (W 0.00235093) | - | 🔵 colmat 1.36× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n511/b1` | 3.36801 ± 0.0151067 (W 0.00875252) | 6.03765 ± 0.0740437 (W 0.011036) | - | 🔵 colmat 1.79× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n511/b1 [api-inclusive]` | 4.18005 ± 0.00854361 (W 0.00909073) | 9.83528 ± 0.0630568 (W 0.0181614) | - | 🔵 colmat 2.35× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n513/b1` | 3.48693 ± 0.0244979 (W 0.0104285) | 6.15484 ± 0.0462289 (W 0.0188735) | - | 🔵 colmat 1.77× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n513/b1 [api-inclusive]` | 4.23353 ± 0.0137393 (W 0.00750103) | 5.61484 ± 0.0440151 (W 0.00931064) | - | 🔵 colmat 1.33× faster than `faer` | - | `*` one row has no measurement here |
+| `lu/n255/b1` | 0.248624 ± 0.00227197 (W 0.00131601) | 0.512511 ± 0.0111358 (W 0.0143305) | - | 🔵 colmat 2.06× faster than `faer` | - | `*` one row has no measurement here |
+| `lu/n255/b1 [api-inclusive]` | 0.426968 ± 0.00221315 (W 0.00255269) | 0.406189 ± 0.00136354 (W 0.0101666) | - | · | - | `*` one row has no measurement here |
+| `lu/n257/b1` | 0.231963 ± 0.000748403 (W 0.00185284) | 0.525696 ± 0.00948781 (W 0.0168445) | - | 🔵 colmat 2.27× faster than `faer` | - | `*` one row has no measurement here |
+| `lu/n257/b1 [api-inclusive]` | 0.455148 ± 0.00541365 (W 0.00208826) | 0.36598 ± 0.00492717 (W 0.00940532) | - | 🔴 colmat 1.24× slower than `faer` | - | `*` one row has no measurement here |
+| `lu/n511/b1` | 0.886496 ± 0.00556405 (W 0.00229962) | 2.0848 ± 0.027931 (W 0.0356597) | - | 🔵 colmat 2.35× faster than `faer` | - | `*` one row has no measurement here |
+| `lu/n511/b1 [api-inclusive]` | 1.97398 ± 0.00395919 (W 0.00271451) | 1.92706 ± 0.0409631 (W 0.0453095) | - | · | - | `*` one row has no measurement here |
+| `lu/n513/b1` | 0.955413 ± 0.00158859 (W 0.00297653) | 2.11849 ± 0.017298 (W 0.022469) | - | 🔵 colmat 2.22× faster than `faer` | - | `*` one row has no measurement here |
+| `lu/n513/b1 [api-inclusive]` | 1.93575 ± 0.00758145 (W 0.00391402) | 1.4245 ± 0.0161233 (W 0.0203895) | - | 🔴 colmat 1.36× slower than `faer` | - | `*` one row has no measurement here |
+| `qr/n255/b1` | 0.590738 ± 0.0028827 (W 0.00239924) | 1.65871 ± 0.00977976 (W 0.00997834) | - | 🔵 colmat 2.81× faster than `faer` | - | `*` one row has no measurement here |
+| `qr/n255/b1 [api-inclusive]` | 0.929144 ± 0.00613349 (W 0.00349622) | 1.33903 ± 0.00212789 (W 0.0033234) | - | 🔵 colmat 1.44× faster than `faer` | - | `*` one row has no measurement here |
+| `qr/n257/b1` | 0.626113 ± 0.00285646 (W 0.00257372) | 1.74249 ± 0.00786832 (W 0.00544036) | - | 🔵 colmat 2.78× faster than `faer` | - | `*` one row has no measurement here |
+| `qr/n257/b1 [api-inclusive]` | 0.972244 ± 0.00301995 (W 0.00354654) | 1.39516 ± 0.0104905 (W 0.00455878) | - | 🔵 colmat 1.43× faster than `faer` | - | `*` one row has no measurement here |
+| `qr/n511/b1` | 2.84738 ± 0.012765 (W 0.00410005) | 7.13207 ± 0.0338428 (W 0.0366265) | - | 🔵 colmat 2.50× faster than `faer` | - | `*` one row has no measurement here |
+| `qr/n511/b1 [api-inclusive]` | 4.27023 ± 0.0261051 (W 0.00866663) | 5.08759 ± 0.0394879 (W 0.0101335) | - | 🔵 colmat 1.19× faster than `faer` | - | `*` one row has no measurement here |
+| `qr/n513/b1` | 2.76526 ± 0.00518715 (W 0.00573928) | 6.83794 ± 0.0019336 (W 0.0316932) | - | 🔵 colmat 2.47× faster than `faer` | - | `*` one row has no measurement here |
+| `qr/n513/b1 [api-inclusive]` | 4.19469 ± 0.00923532 (W 0.0022001) | 4.50971 ± 0.210164 (W 0.00790736) | - | 🔵 colmat 1.08× faster than `faer` (marginal: spread 0.70 of the difference) | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr_factor/n255/b1` | 0.409139 ± 0.00103303 (W 0.00174158) | 1.47672 ± 0.00802453 (W 0.012948) | - | 🔵 colmat 3.61× faster than `faer` | - | `*` one row has no measurement here |
+| `qr_factor/n257/b1` | 0.428498 ± 0.00106509 (W 0.00147212) | 1.54199 ± 0.00289095 (W 0.00794906) | - | 🔵 colmat 3.60× faster than `faer` | - | `*` one row has no measurement here |
+| `qr_factor/n511/b1` | 1.69172 ± 0.00228459 (W 0.00374054) | 6.02673 ± 0.0297444 (W 0.0400246) | - | 🔵 colmat 3.56× faster than `faer` | - | `*` one row has no measurement here |
+| `qr_factor/n513/b1` | 1.63374 ± 0.00452525 (W 0.00326223) | 5.73611 ± 0.0321605 (W 0.0337937) | - | 🔵 colmat 3.51× faster than `faer` | - | `*` one row has no measurement here |
+| `solve/n255/b1` | 0.192025 ± 0.00101868 (W 0.00135761) | 0.507866 ± 0.00353723 (W 0.00901957) | - | 🔵 colmat 2.64× faster than `faer` | - | `*` one row has no measurement here |
+| `solve/n255/b1 [api-inclusive]` | 0.431309 ± 0.0038138 (W 0.00327788) | 0.365443 ± 0.00430805 (W 0.00437077) | - | 🔴 colmat 1.18× slower than `faer` | - | `*` one row has no measurement here |
+| `solve/n257/b1` | 0.227003 ± 0.00293762 (W 0.00125255) | 0.512976 ± 0.00803091 (W 0.00726414) | - | 🔵 colmat 2.26× faster than `faer` | - | `*` one row has no measurement here |
+| `solve/n257/b1 [api-inclusive]` | 0.457127 ± 0.0010807 (W 0.000968106) | 0.346221 ± 0.00472609 (W 0.00516293) | - | 🔴 colmat 1.32× slower than `faer` | - | `*` one row has no measurement here |
+| `solve/n511/b1` | 0.863187 ± 0.00102866 (W 0.00173472) | 2.05593 ± 0.0093274 (W 0.0243987) | - | 🔵 colmat 2.38× faster than `faer` | - | `*` one row has no measurement here |
+| `solve/n511/b1 [api-inclusive]` | 1.92162 ± 0.000405888 (W 0.00418324) | 1.67507 ± 0.0128097 (W 0.0429654) | - | 🔴 colmat 1.15× slower than `faer` | - | `*` one row has no measurement here |
+| `solve/n513/b1` | 0.913305 ± 0.00396955 (W 0.00281452) | 2.08891 ± 0.0256972 (W 0.0225976) | - | 🔵 colmat 2.29× faster than `faer` | - | `*` one row has no measurement here |
+| `solve/n513/b1 [api-inclusive]` | 1.91153 ± 0.00763632 (W 0.00387622) | 1.33901 ± 0.0142836 (W 0.0182036) | - | 🔴 colmat 1.43× slower than `faer` | - | `*` one row has no measurement here |
+| `svd_thin/n255/b1` | 4.8327 ± 0.00305743 (W 0.00559998) | 8.60577 ± 0.0149423 (W 0.00942804) | - | 🔵 colmat 1.78× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_thin/n255/b1 [api-inclusive]` | 4.84538 ± 0.00440642 (W 0.00459087) | 8.61346 ± 0.0196637 (W 0.0102342) | - | 🔵 colmat 1.78× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_thin/n257/b1` | 4.92954 ± 0.0167586 (W 0.0094607) | 6.31526 ± 0.0170712 (W 0.0129044) | - | 🔵 colmat 1.28× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_thin/n257/b1 [api-inclusive]` | 4.95354 ± 0.00560929 (W 0.00614559) | 6.33302 ± 0.00982235 (W 0.0129265) | - | 🔵 colmat 1.28× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_thin/n511/b1` | 20.6108 ± 0.0720482 (W 0.0136927) | 34.698 ± 0.482261 (W 0.0395926) | - | 🔵 colmat 1.68× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_thin/n511/b1 [api-inclusive]` | 20.6744 ± 0.019031 (W 0.0125935) | 34.926 ± 0.115557 (W 0.0656106) | - | 🔵 colmat 1.69× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_thin/n513/b1` | 20.8134 ± 0.0241692 (W 0.0298981) | 24.7174 ± 0.0230796 (W 0.0151916) | - | 🔵 colmat 1.19× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_thin/n513/b1 [api-inclusive]` | 20.8981 ± 0.0412328 (W 0.0269542) | 24.9136 ± 0.0385466 (W 0.16319) | - | 🔵 colmat 1.19× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n255/b1` | 2.60897 ± 0.00618852 (W 0.00665836) | 7.057 ± 0.0343924 (W 0.005558) | - | 🔵 colmat 2.70× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n255/b1 [api-inclusive]` | 2.61469 ± 0.0125082 (W 0.00411832) | 7.03867 ± 0.0109789 (W 0.00577333) | - | 🔵 colmat 2.69× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n257/b1` | 2.66391 ± 0.00513716 (W 0.00491371) | 5.33536 ± 0.0183388 (W 0.00595984) | - | 🔵 colmat 2.00× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n257/b1 [api-inclusive]` | 2.66377 ± 0.0115179 (W 0.00352125) | 5.37324 ± 0.0144204 (W 0.00569674) | - | 🔵 colmat 2.02× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n511/b1` | 11.2744 ± 0.0149947 (W 0.0129451) | 28.2523 ± 0.0190843 (W 0.0354118) | - | 🔵 colmat 2.51× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n511/b1 [api-inclusive]` | 11.2521 ± 0.0261429 (W 0.00949921) | 28.2589 ± 0.0176676 (W 0.022589) | - | 🔵 colmat 2.51× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n513/b1` | 11.2896 ± 0.0251841 (W 0.00742755) | 19.4196 ± 0.0132677 (W 0.0119342) | - | 🔵 colmat 1.72× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n513/b1 [api-inclusive]` | 11.3222 ± 0.011245 (W 0.0112435) | 19.4349 ± 0.0354209 (W 0.0228097) | - | 🔵 colmat 1.72× faster than `faer` | - | `*` one row has no measurement here |
+| `triangular_solve/n255/b1` | 0.00814 ± 1.73205e-05 (W 5.95172e-05) | 0.00752 ± 2.70247e-05 (W 5.23087e-05) | 0.005629 ± 2.5632e-05 (W 3.04828e-05) | 🔴 colmat 1.08× slower than `faer` | 🔴 colmat 1.45× slower than `lapack-mkl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n257/b1` | 0.008149 ± 0.000156781 (W 6.40648e-05) | 0.00762 ± 4.3589e-05 (W 3.95879e-05) | 0.0058 ± 1.0504e-05 (W 3.26542e-05) | 🔴 colmat 1.07× slower than `faer` | 🔴 colmat 1.40× slower than `lapack-mkl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n511/b1` | 0.020889 ± 0.000132035 (W 0.000275571) | 0.026258 ± 0.00301513 (W 0.00017888) | 0.021409 ± 0.00135779 (W 5.48844e-05) | 🔵 colmat 1.26× faster than `faer` | · | `!` between-start range over 5%; `p` position effect over 5% |
+| `triangular_solve/n513/b1` | 0.019389 ± 0.0001249 (W 0.000109208) | 0.019858 ± 0.000165292 (W 0.000475168) | 0.021229 ± 0.00035866 (W 0.00014077) | · | 🔵 colmat 1.09× faster than `lapack-mkl` | dispatch-dominated (row under 20 us) |
+
+## linalg-boundary, f64, c order, 8T (CPU 0-7)
+
+| case | colmat (ms) | faer (ms) | lapack-mkl (ms) | vs `faer` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `cholesky/n255/b1` | 0.087254 ± 0.00140948 (W 0.000541456) | 0.330761 ± 0.0285037 (W 0.021906) | - | 🔵 colmat 3.79× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `cholesky/n255/b1 [api-inclusive]` | 0.108477 ± 0.00119782 (W 0.000492879) | 0.195705 ± 0.00485131 (W 0.015984) | - | 🔵 colmat 1.80× faster than `faer` | - | `*` one row has no measurement here |
+| `cholesky/n257/b1` | 0.081858 ± 0.000620801 (W 0.000468357) | 0.339081 ± 0.00563452 (W 0.0199513) | - | 🔵 colmat 4.14× faster than `faer` | - | `*` one row has no measurement here |
+| `cholesky/n257/b1 [api-inclusive]` | 0.101527 ± 0.00223303 (W 0.000731601) | 0.176998 ± 0.0180128 (W 0.0147901) | - | 🔵 colmat 1.74× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `cholesky/n511/b1` | 0.272412 ± 0.00196882 (W 0.00143724) | 0.856857 ± 0.0116787 (W 0.0307701) | - | 🔵 colmat 3.15× faster than `faer` | - | `*` one row has no measurement here |
+| `cholesky/n511/b1 [api-inclusive]` | 0.393739 ± 0.0149262 (W 0.00285007) | 0.660337 ± 0.0178661 (W 0.0181853) | - | 🔵 colmat 1.68× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `cholesky/n513/b1` | 0.268543 ± 0.00155308 (W 0.00120364) | 0.898705 ± 0.0061374 (W 0.0369491) | - | 🔵 colmat 3.35× faster than `faer` | - | `*` one row has no measurement here |
+| `cholesky/n513/b1 [api-inclusive]` | 0.452711 ± 0.00300314 (W 0.00235013) | 0.567773 ± 0.0133721 (W 0.0251324) | - | 🔵 colmat 1.25× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n255/b1` | 1.61806 ± 0.00762714 (W 0.00240774) | 4.75005 ± 0.0282112 (W 0.01707) | - | 🔵 colmat 2.94× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n255/b1 [api-inclusive]` | 1.62016 ± 0.00291761 (W 0.00294025) | 4.77695 ± 0.0400642 (W 1.24567) | - | 🔵 colmat 2.95× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n257/b1` | 1.62621 ± 0.00277879 (W 0.00413713) | 4.65467 ± 0.00931763 (W 0.0193805) | - | 🔵 colmat 2.86× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n257/b1 [api-inclusive]` | 1.64095 ± 0.00850705 (W 0.0029536) | 4.67883 ± 0.0186886 (W 0.0198294) | - | 🔵 colmat 2.85× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n511/b1` | 6.31608 ± 0.0206959 (W 0.00877461) | 14.9797 ± 0.0461699 (W 0.0362629) | - | 🔵 colmat 2.37× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n511/b1 [api-inclusive]` | 6.37194 ± 0.0885982 (W 0.00376545) | 14.9678 ± 0.0427352 (W 0.137495) | - | 🔵 colmat 2.35× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n513/b1` | 6.50964 ± 0.0156394 (W 0.00820934) | 14.969 ± 0.0402226 (W 0.0175559) | - | 🔵 colmat 2.30× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n513/b1 [api-inclusive]` | 6.55127 ± 0.0271173 (W 0.0107247) | 15.0568 ± 0.0296869 (W 0.0274319) | - | 🔵 colmat 2.30× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n255/b1` | 0.61711 ± 0.00469965 (W 0.00397254) | 1.27559 ± 0.00186266 (W 0.00139087) | - | 🔵 colmat 2.07× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n255/b1 [api-inclusive]` | 0.833278 ± 0.00804378 (W 0.0036729) | 1.75576 ± 0.00943776 (W 0.00518344) | - | 🔵 colmat 2.11× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n257/b1` | 0.628919 ± 0.00431516 (W 0.00344177) | 1.31408 ± 0.00192362 (W 0.00238567) | - | 🔵 colmat 2.09× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n257/b1 [api-inclusive]` | 0.854375 ± 0.00559583 (W 0.00310407) | 1.2569 ± 0.0064265 (W 0.00160354) | - | 🔵 colmat 1.47× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n511/b1` | 2.35865 ± 0.00641468 (W 0.00783893) | 5.41703 ± 0.0506926 (W 0.0117076) | - | 🔵 colmat 2.30× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n511/b1 [api-inclusive]` | 3.37159 ± 0.0145421 (W 0.00789588) | 9.39559 ± 0.0767284 (W 0.0161482) | - | 🔵 colmat 2.79× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n513/b1` | 2.44136 ± 0.00494578 (W 0.0106356) | 5.45678 ± 0.0434361 (W 0.00840348) | - | 🔵 colmat 2.24× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n513/b1 [api-inclusive]` | 3.34939 ± 0.011368 (W 0.0145604) | 5.00752 ± 0.0252317 (W 0.011444) | - | 🔵 colmat 1.50× faster than `faer` | - | `*` one row has no measurement here |
+| `lu/n255/b1` | 0.251183 ± 0.00114426 (W 0.00224657) | 0.544375 ± 0.0148999 (W 0.0132983) | - | 🔵 colmat 2.17× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `lu/n255/b1 [api-inclusive]` | 0.414553 ± 0.00124838 (W 0.00245644) | 0.39801 ± 0.0135192 (W 0.0155981) | - | · | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `lu/n257/b1` | 0.199665 ± 0.00110818 (W 0.00236437) | 0.553604 ± 0.0252519 (W 0.018727) | - | 🔵 colmat 2.77× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `lu/n257/b1 [api-inclusive]` | 0.444878 ± 0.00467908 (W 0.00301238) | 0.388469 ± 0.0293145 (W 0.0195856) | - | 🔴 colmat 1.15× slower than `faer` (marginal: spread 0.60 of the difference) | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `lu/n511/b1` | 0.667582 ± 0.0032081 (W 0.00299226) | 2.19181 ± 0.0419534 (W 0.0468499) | - | 🔵 colmat 3.28× faster than `faer` | - | `*` one row has no measurement here |
+| `lu/n511/b1 [api-inclusive]` | 1.78454 ± 0.00771048 (W 0.00243463) | 1.90191 ± 0.0049091 (W 0.0412075) | - | 🔵 colmat 1.07× faster than `faer` | - | `*` one row has no measurement here |
+| `lu/n513/b1` | 0.707034 ± 0.00264886 (W 0.00262073) | 2.21733 ± 0.0103016 (W 0.0408531) | - | 🔵 colmat 3.14× faster than `faer` | - | `*` one row has no measurement here |
+| `lu/n513/b1 [api-inclusive]` | 1.76039 ± 0.00196158 (W 0.00614481) | 1.41106 ± 0.034576 (W 0.0504935) | - | 🔴 colmat 1.25× slower than `faer` | - | `*` one row has no measurement here |
+| `qr/n255/b1` | 0.508167 ± 0.00228028 (W 0.00158144) | 1.90231 ± 0.009679 (W 0.0107063) | - | 🔵 colmat 3.74× faster than `faer` | - | `*` one row has no measurement here |
+| `qr/n255/b1 [api-inclusive]` | 0.863276 ± 0.00104463 (W 0.00483958) | 1.34527 ± 0.00246655 (W 0.0147512) | - | 🔵 colmat 1.56× faster than `faer` | - | `*` one row has no measurement here |
+| `qr/n257/b1` | 0.538356 ± 0.00227718 (W 0.00348012) | 2.0069 ± 0.0172536 (W 0.0106705) | - | 🔵 colmat 3.73× faster than `faer` | - | `*` one row has no measurement here |
+| `qr/n257/b1 [api-inclusive]` | 0.908203 ± 0.00653561 (W 0.00299517) | 1.3849 ± 0.00570781 (W 0.0330334) | - | 🔵 colmat 1.52× faster than `faer` | - | `*` one row has no measurement here |
+| `qr/n511/b1` | 1.80696 ± 0.00599881 (W 0.00326042) | 7.34716 ± 0.0565493 (W 0.0295274) | - | 🔵 colmat 4.07× faster than `faer` | - | `*` one row has no measurement here |
+| `qr/n511/b1 [api-inclusive]` | 3.3562 ± 0.0188033 (W 0.00705258) | 4.36193 ± 0.209555 (W 0.0215954) | - | 🔵 colmat 1.30× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr/n513/b1` | 1.92782 ± 0.00652337 (W 0.00344849) | 6.91591 ± 0.0273276 (W 0.0380088) | - | 🔵 colmat 3.59× faster than `faer` | - | `*` one row has no measurement here |
+| `qr/n513/b1 [api-inclusive]` | 3.4697 ± 0.0185517 (W 0.00973682) | 4.07743 ± 0.0301141 (W 0.0174679) | - | 🔵 colmat 1.18× faster than `faer` | - | `*` one row has no measurement here |
+| `qr_factor/n255/b1` | 0.387275 ± 0.0014308 (W 0.00172159) | 1.65815 ± 0.0110179 (W 0.012664) | - | 🔵 colmat 4.28× faster than `faer` | - | `*` one row has no measurement here |
+| `qr_factor/n257/b1` | 0.406554 ± 0.000700054 (W 0.00300389) | 1.73287 ± 0.00871869 (W 0.0132569) | - | 🔵 colmat 4.26× faster than `faer` | - | `*` one row has no measurement here |
+| `qr_factor/n511/b1` | 1.15777 ± 0.00449812 (W 0.00460983) | 6.29458 ± 0.0195186 (W 0.032219) | - | 🔵 colmat 5.44× faster than `faer` | - | `*` one row has no measurement here |
+| `qr_factor/n513/b1` | 1.30036 ± 0.00505661 (W 0.00283439) | 5.82191 ± 0.0137772 (W 0.0334281) | - | 🔵 colmat 4.48× faster than `faer` | - | `*` one row has no measurement here |
+| `solve/n255/b1` | 0.197715 ± 0.000993666 (W 0.00220555) | 0.551394 ± 0.0199554 (W 0.0146324) | - | 🔵 colmat 2.79× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `solve/n255/b1 [api-inclusive]` | 0.418909 ± 0.00100535 (W 0.0017975) | 0.35163 ± 0.00260286 (W 0.0130505) | - | 🔴 colmat 1.19× slower than `faer` | - | `*` one row has no measurement here |
+| `solve/n257/b1` | 0.197935 ± 0.000624149 (W 0.00254703) | 0.549385 ± 0.0080698 (W 0.0160467) | - | 🔵 colmat 2.78× faster than `faer` | - | `*` one row has no measurement here |
+| `solve/n257/b1 [api-inclusive]` | 0.452371 ± 0.00244209 (W 0.00272078) | 0.357077 ± 0.0202364 (W 0.0209387) | - | 🔴 colmat 1.27× slower than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `solve/n511/b1` | 0.644163 ± 0.00751205 (W 0.004492) | 2.15875 ± 0.0305341 (W 0.0349496) | - | 🔵 colmat 3.35× faster than `faer` | - | `*` one row has no measurement here |
+| `solve/n511/b1 [api-inclusive]` | 1.78506 ± 0.00516122 (W 0.00459263) | 1.66501 ± 0.00756731 (W 0.04514) | - | 🔴 colmat 1.07× slower than `faer` | - | `*` one row has no measurement here |
+| `solve/n513/b1` | 0.692812 ± 0.00345034 (W 0.00259683) | 2.1689 ± 0.0187107 (W 0.0429922) | - | 🔵 colmat 3.13× faster than `faer` | - | `*` one row has no measurement here |
+| `solve/n513/b1 [api-inclusive]` | 1.75315 ± 0.00820911 (W 0.00447483) | 1.31496 ± 0.0151112 (W 0.0447176) | - | 🔴 colmat 1.33× slower than `faer` | - | `*` one row has no measurement here |
+| `svd_thin/n255/b1` | 4.50858 ± 0.0127647 (W 0.00571835) | 8.75278 ± 0.846777 (W 0.0276407) | - | 🔵 colmat 1.94× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_thin/n255/b1 [api-inclusive]` | 4.5257 ± 0.0171024 (W 0.00514244) | 8.81456 ± 0.0160993 (W 0.0267554) | - | 🔵 colmat 1.95× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_thin/n257/b1` | 4.57369 ± 0.00729258 (W 0.0048593) | 6.4302 ± 0.0669326 (W 0.0218685) | - | 🔵 colmat 1.41× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_thin/n257/b1 [api-inclusive]` | 4.57486 ± 0.00208416 (W 0.00812058) | 6.50982 ± 0.298673 (W 0.0119863) | - | 🔵 colmat 1.42× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_thin/n511/b1` | 17.5338 ± 0.0614509 (W 0.014934) | 33.5657 ± 4.12227 (W 0.0562796) | - | 🔵 colmat 1.91× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_thin/n511/b1 [api-inclusive]` | 17.6099 ± 0.0114737 (W 0.0148412) | 33.686 ± 10.8419 (W 0.0750402) | - | 🔵 colmat 1.91× faster than `faer` (marginal: spread 0.68 of the difference) | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_thin/n513/b1` | 17.6865 ± 0.0448262 (W 0.0115106) | 23.3393 ± 0.09705 (W 0.056345) | - | 🔵 colmat 1.32× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_thin/n513/b1 [api-inclusive]` | 17.7765 ± 0.031793 (W 0.0208652) | 23.5356 ± 0.0556077 (W 0.075115) | - | 🔵 colmat 1.32× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n255/b1` | 2.54293 ± 0.00417568 (W 0.00699475) | 7.12632 ± 0.0191496 (W 0.00907804) | - | 🔵 colmat 2.80× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n255/b1 [api-inclusive]` | 2.54575 ± 0.00485045 (W 0.00247436) | 7.11495 ± 0.0134346 (W 0.00784029) | - | 🔵 colmat 2.79× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n257/b1` | 2.57533 ± 0.00470789 (W 0.00568815) | 5.44795 ± 0.00531549 (W 0.00602324) | - | 🔵 colmat 2.12× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n257/b1 [api-inclusive]` | 2.57288 ± 0.00240578 (W 0.00649443) | 5.45746 ± 0.00220271 (W 0.00828994) | - | 🔵 colmat 2.12× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n511/b1` | 9.9606 ± 0.0164419 (W 0.00988686) | 27.199 ± 0.0858521 (W 0.0378109) | - | 🔵 colmat 2.73× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n511/b1 [api-inclusive]` | 9.96368 ± 0.0261143 (W 0.0129254) | 27.183 ± 0.0166925 (W 0.0341181) | - | 🔵 colmat 2.73× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n513/b1` | 10.0603 ± 0.0316497 (W 0.00885459) | 18.2088 ± 0.0439001 (W 0.0168911) | - | 🔵 colmat 1.81× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n513/b1 [api-inclusive]` | 10.0457 ± 0.0223757 (W 0.0389684) | 18.2473 ± 0.0443042 (W 0.0159716) | - | 🔵 colmat 1.82× faster than `faer` | - | `*` one row has no measurement here |
+| `triangular_solve/n255/b1` | 0.00824 ± 6.61085e-05 (W 8.20628e-05) | 0.00758 ± 4.16333e-05 (W 5.20884e-05) | 0.00565 ± 1e-05 (W 2.62145e-05) | 🔴 colmat 1.09× slower than `faer` | 🔴 colmat 1.46× slower than `lapack-mkl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n257/b1` | 0.00821 ± 5.25389e-05 (W 8.43516e-05) | 0.0076 ± 5.7735e-06 (W 4.44432e-05) | 0.00576 ± 5.19615e-06 (W 2.53831e-05) | 🔴 colmat 1.08× slower than `faer` | 🔴 colmat 1.43× slower than `lapack-mkl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n511/b1` | 0.02009 ± 0.000204437 (W 0.000153442) | 0.02602 ± 0.000145041 (W 0.000177342) | 0.021788 ± 0.000706162 (W 0.00169368) | 🔵 colmat 1.30× faster than `faer` | 🔵 colmat 1.08× faster than `lapack-mkl` (marginal: spread 1.00 of the difference) | `!` between-start range over 5% |
+| `triangular_solve/n513/b1` | 0.018749 ± 8.0829e-05 (W 0.000128931) | 0.019579 ± 0.000615958 (W 0.000251659) | 0.021319 ± 0.000158547 (W 0.000123981) | · | 🔵 colmat 1.14× faster than `lapack-mkl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+
+## linalg-boundary, f64, f order, 4T (CPU 0-3)
+
+| case | colmat (ms) | faer (ms) | lapack-mkl (ms) | vs `faer` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `cholesky/n255/b1` | 0.087458 ± 0.000304651 (W 0.00034557) | 0.178886 ± 0.00128754 (W 0.00277066) | 0.150819 ± 0.00362155 (W 0.00743119) | 🔵 colmat 2.05× faster than `faer` | 🔵 colmat 1.72× faster than `lapack-mkl` |  |
+| `cholesky/n255/b1 [api-inclusive]` | 0.109887 ± 0.000677846 (W 0.000594374) | 0.206195 ± 0.00139327 (W 0.0026525) | - | 🔵 colmat 1.88× faster than `faer` | - | `*` one row has no measurement here |
+| `cholesky/n257/b1` | 0.085548 ± 0.000623686 (W 0.000755534) | 0.159879 ± 0.00436414 (W 0.00921028) | 0.165095 ± 0.00248129 (W 0.00646313) | 🔵 colmat 1.87× faster than `faer` | 🔵 colmat 1.93× faster than `lapack-mkl` | `!` between-start range over 5% |
+| `cholesky/n257/b1 [api-inclusive]` | 0.106337 ± 0.00182448 (W 0.000535145) | 0.189535 ± 0.00130085 (W 0.00343643) | - | 🔵 colmat 1.78× faster than `faer` | - | `*` one row has no measurement here |
+| `cholesky/n511/b1` | 0.340581 ± 0.00375626 (W 0.00151914) | 0.530625 ± 0.00225718 (W 0.0195187) | 0.789382 ± 0.00259914 (W 0.00624128) | 🔵 colmat 1.56× faster than `faer` | 🔵 colmat 2.32× faster than `lapack-mkl` |  |
+| `cholesky/n511/b1 [api-inclusive]` | 0.446928 ± 0.00177675 (W 0.00163588) | 0.6891 ± 0.0348559 (W 0.0180304) | - | 🔵 colmat 1.54× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `cholesky/n513/b1` | 0.342901 ± 0.00047719 (W 0.00135941) | 0.539646 ± 0.00477732 (W 0.0279755) | 0.814968 ± 0.00229666 (W 0.0122044) | 🔵 colmat 1.57× faster than `faer` | 🔵 colmat 2.38× faster than `lapack-mkl` |  |
+| `cholesky/n513/b1 [api-inclusive]` | 0.414019 ± 0.000700125 (W 0.00123549) | 0.587707 ± 0.0123844 (W 0.014905) | - | 🔵 colmat 1.42× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n255/b1` | 2.20764 ± 0.00545629 (W 0.00355144) | 4.69786 ± 0.013309 (W 0.00790596) | 2.89828 ± 0.00837878 (W 0.00506651) | 🔵 colmat 2.13× faster than `faer` | 🔵 colmat 1.31× faster than `lapack-mkl` |  |
+| `eigh/n255/b1 [api-inclusive]` | 2.21855 ± 0.250872 (W 0.0032883) | 4.71621 ± 0.0270605 (W 0.0111114) | - | 🔵 colmat 2.13× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `eigh/n257/b1` | 2.2129 ± 0.00841433 (W 0.00275811) | 4.58516 ± 0.0195746 (W 0.00694409) | 2.93598 ± 0.012037 (W 0.00282391) | 🔵 colmat 2.07× faster than `faer` | 🔵 colmat 1.33× faster than `lapack-mkl` |  |
+| `eigh/n257/b1 [api-inclusive]` | 2.22755 ± 0.00637258 (W 0.00541115) | 4.63502 ± 0.0269288 (W 0.00898598) | - | 🔵 colmat 2.08× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n511/b1` | 9.35831 ± 0.0552352 (W 0.0135397) | 15.6254 ± 0.0354386 (W 0.0273964) | 11.9405 ± 0.0392737 (W 0.0175726) | 🔵 colmat 1.67× faster than `faer` | 🔵 colmat 1.28× faster than `lapack-mkl` |  |
+| `eigh/n511/b1 [api-inclusive]` | 9.42124 ± 0.0251302 (W 0.0157267) | 15.7358 ± 0.068075 (W 0.0195871) | - | 🔵 colmat 1.67× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n513/b1` | 9.39508 ± 0.0154897 (W 0.00772642) | 15.6595 ± 0.0245471 (W 0.020966) | 12.0656 ± 0.0387404 (W 0.0103237) | 🔵 colmat 1.67× faster than `faer` | 🔵 colmat 1.28× faster than `lapack-mkl` |  |
+| `eigh/n513/b1 [api-inclusive]` | 9.41757 ± 0.0186748 (W 0.00913465) | 15.7165 ± 0.0549225 (W 0.0198767) | - | 🔵 colmat 1.67× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n255/b1` | 0.648792 ± 0.00457533 (W 0.00345479) | 1.27951 ± 0.00290113 (W 0.00158446) | 8.13133 ± 0.00353898 (W 0.00897102) | 🔵 colmat 1.97× faster than `faer` | 🔵 colmat 12.53× faster than `lapack-mkl` |  |
+| `full_piv_lu/n255/b1 [api-inclusive]` | 0.814508 ± 0.00631402 (W 0.00390921) | 1.74727 ± 0.0198232 (W 0.00652353) | - | 🔵 colmat 2.15× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n257/b1` | 0.657462 ± 0.00282339 (W 0.00292974) | 1.31632 ± 0.00171022 (W 0.00309915) | 8.32522 ± 0.00128822 (W 0.00729782) | 🔵 colmat 2.00× faster than `faer` | 🔵 colmat 12.66× faster than `lapack-mkl` |  |
+| `full_piv_lu/n257/b1 [api-inclusive]` | 0.854347 ± 0.00803077 (W 0.00178647) | 1.24372 ± 0.111926 (W 0.00227153) | - | 🔵 colmat 1.46× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `full_piv_lu/n511/b1` | 3.22544 ± 0.00568456 (W 0.0063229) | 6.06979 ± 0.0208084 (W 0.00898345) | 65.9755 ± 0.0462817 (W 0.0337205) | 🔵 colmat 1.88× faster than `faer` | 🔵 colmat 20.45× faster than `lapack-mkl` |  |
+| `full_piv_lu/n511/b1 [api-inclusive]` | 3.87808 ± 0.0232534 (W 0.00796126) | 9.74744 ± 0.0356338 (W 0.0115548) | - | 🔵 colmat 2.51× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n513/b1` | 3.28985 ± 0.0102646 (W 0.00787856) | 6.1082 ± 0.0320139 (W 0.00643258) | 66.8381 ± 0.0295913 (W 0.0357479) | 🔵 colmat 1.86× faster than `faer` | 🔵 colmat 20.32× faster than `lapack-mkl` |  |
+| `full_piv_lu/n513/b1 [api-inclusive]` | 3.94236 ± 0.0158281 (W 0.0103651) | 5.58307 ± 0.0721587 (W 0.00913669) | - | 🔵 colmat 1.42× faster than `faer` | - | `*` one row has no measurement here |
+| `lu/n255/b1` | 0.164256 ± 0.001314 (W 0.00140559) | 0.317301 ± 0.00486321 (W 0.00863876) | 0.192075 ± 0.000833205 (W 0.00209266) | 🔵 colmat 1.93× faster than `faer` | 🔵 colmat 1.17× faster than `lapack-mkl` |  |
+| `lu/n255/b1 [api-inclusive]` | 0.364871 ± 0.00165521 (W 0.00272505) | 0.396029 ± 0.00830446 (W 0.00939751) | - | 🔵 colmat 1.09× faster than `faer` | - | `*` one row has no measurement here |
+| `lu/n257/b1` | 0.173316 ± 0.000977262 (W 0.00224295) | 0.320391 ± 0.0055419 (W 0.00706372) | 0.197856 ± 0.000686256 (W 0.00158849) | 🔵 colmat 1.85× faster than `faer` | 🔵 colmat 1.14× faster than `lapack-mkl` |  |
+| `lu/n257/b1 [api-inclusive]` | 0.384121 ± 0.00173702 (W 0.00231284) | 0.355204 ± 0.0027389 (W 0.0082237) | - | 🔴 colmat 1.08× slower than `faer` | - | `*` one row has no measurement here |
+| `lu/n511/b1` | 0.72572 ± 0.00172337 (W 0.00311034) | 1.26514 ± 0.0249678 (W 0.0423175) | 0.930474 ± 0.00136416 (W 0.00270678) | 🔵 colmat 1.74× faster than `faer` | 🔵 colmat 1.28× faster than `lapack-mkl` |  |
+| `lu/n511/b1 [api-inclusive]` | 1.64743 ± 0.00425691 (W 0.00278404) | 1.89923 ± 0.0142406 (W 0.0440253) | - | 🔵 colmat 1.15× faster than `faer` | - | `*` one row has no measurement here |
+| `lu/n513/b1` | 0.772379 ± 0.00279724 (W 0.00168524) | 1.2939 ± 0.00322814 (W 0.0241603) | 0.95262 ± 0.00606153 (W 0.00287545) | 🔵 colmat 1.68× faster than `faer` | 🔵 colmat 1.23× faster than `lapack-mkl` |  |
+| `lu/n513/b1 [api-inclusive]` | 1.64102 ± 0.00674266 (W 0.00270258) | 1.35637 ± 0.0116067 (W 0.0224163) | - | 🔴 colmat 1.21× slower than `faer` | - | `*` one row has no measurement here |
+| `qr/n255/b1` | 0.543226 ± 0.000850386 (W 0.00199086) | 0.995168 ± 0.00645543 (W 0.00331045) | 0.851376 ± 0.00303976 (W 0.00218084) | 🔵 colmat 1.83× faster than `faer` | 🔵 colmat 1.57× faster than `lapack-mkl` |  |
+| `qr/n255/b1 [api-inclusive]` | 0.865537 ± 0.00125285 (W 0.00238915) | 1.31291 ± 0.00419582 (W 0.0050171) | - | 🔵 colmat 1.52× faster than `faer` | - | `*` one row has no measurement here |
+| `qr/n257/b1` | 0.555835 ± 0.000797167 (W 0.00209602) | 1.0242 ± 0.0026827 (W 0.00353485) | 0.880266 ± 0.00250697 (W 0.0019419) | 🔵 colmat 1.84× faster than `faer` | 🔵 colmat 1.58× faster than `lapack-mkl` |  |
+| `qr/n257/b1 [api-inclusive]` | 0.896215 ± 0.00243101 (W 0.00314477) | 1.36101 ± 0.00291151 (W 0.00427713) | - | 🔵 colmat 1.52× faster than `faer` | - | `*` one row has no measurement here |
+| `qr/n511/b1` | 2.60864 ± 0.0123583 (W 0.00625008) | 3.56507 ± 0.00644215 (W 0.00533335) | 4.83341 ± 0.00912704 (W 0.00861512) | 🔵 colmat 1.37× faster than `faer` | 🔵 colmat 1.85× faster than `lapack-mkl` |  |
+| `qr/n511/b1 [api-inclusive]` | 3.95824 ± 0.00235188 (W 0.00752888) | 4.89872 ± 0.010362 (W 0.00918411) | - | 🔵 colmat 1.24× faster than `faer` | - | `*` one row has no measurement here |
+| `qr/n513/b1` | 2.59125 ± 0.00906017 (W 0.00174943) | 3.4474 ± 0.00826604 (W 0.00615049) | 4.9243 ± 0.0237427 (W 0.00654138) | 🔵 colmat 1.33× faster than `faer` | 🔵 colmat 1.90× faster than `lapack-mkl` |  |
+| `qr/n513/b1 [api-inclusive]` | 3.91024 ± 0.00550629 (W 0.0038822) | 4.39642 ± 0.19742 (W 0.0172196) | - | 🔵 colmat 1.12× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr_factor/n255/b1` | 0.36184 ± 0.0012157 (W 0.00113932) | 0.817938 ± 0.00272666 (W 0.00286035) | 0.389212 ± 0.000977774 (W 0.00200163) | 🔵 colmat 2.26× faster than `faer` | 🔵 colmat 1.08× faster than `lapack-mkl` |  |
+| `qr_factor/n257/b1` | 0.37141 ± 0.00194776 (W 0.00240352) | 0.838138 ± 0.00214725 (W 0.00326362) | 0.402711 ± 0.00094185 (W 0.00324278) | 🔵 colmat 2.26× faster than `faer` | 🔵 colmat 1.08× faster than `lapack-mkl` |  |
+| `qr_factor/n511/b1` | 1.52561 ± 0.00127301 (W 0.0036398) | 2.48128 ± 0.00767608 (W 0.00757711) | 2.22026 ± 0.004035 (W 0.0025851) | 🔵 colmat 1.63× faster than `faer` | 🔵 colmat 1.46× faster than `lapack-mkl` |  |
+| `qr_factor/n513/b1` | 1.45202 ± 0.00425669 (W 0.00352293) | 2.31401 ± 0.0100035 (W 0.00854164) | 2.26339 ± 0.00192955 (W 0.00676795) | 🔵 colmat 1.59× faster than `faer` | 🔵 colmat 1.56× faster than `lapack-mkl` |  |
+| `solve/n255/b1` | 0.162396 ± 0.000329215 (W 0.0021481) | 0.299568 ± 0.00048151 (W 0.00619447) | 0.187577 ± 0.000981958 (W 0.00188885) | 🔵 colmat 1.84× faster than `faer` | 🔵 colmat 1.16× faster than `lapack-mkl` |  |
+| `solve/n255/b1 [api-inclusive]` | 0.371073 ± 0.0013165 (W 0.00168281) | 0.360694 ± 0.00238086 (W 0.00617294) | - | · | - | `*` one row has no measurement here |
+| `solve/n257/b1` | 0.168728 ± 0.000399403 (W 0.000769643) | 0.291912 ± 0.00637829 (W 0.00466221) | 0.189315 ± 0.000157608 (W 0.00214654) | 🔵 colmat 1.73× faster than `faer` | 🔵 colmat 1.12× faster than `lapack-mkl` |  |
+| `solve/n257/b1 [api-inclusive]` | 0.386383 ± 0.000669817 (W 0.00305644) | 0.337981 ± 0.00357938 (W 0.00592343) | - | 🔴 colmat 1.14× slower than `faer` | - | `*` one row has no measurement here |
+| `solve/n511/b1` | 0.70715 ± 0.00207176 (W 0.00291935) | 1.15295 ± 0.0322627 (W 0.0271843) | 0.921025 ± 0.000551967 (W 0.0034683) | 🔵 colmat 1.63× faster than `faer` | 🔵 colmat 1.30× faster than `lapack-mkl` | `!` between-start range over 5% |
+| `solve/n511/b1 [api-inclusive]` | 1.62735 ± 0.016487 (W 0.00315421) | 1.64509 ± 0.0157629 (W 0.0411547) | - | · | - | `*` one row has no measurement here |
+| `solve/n513/b1` | 0.73738 ± 0.0064712 (W 0.00330743) | 1.22008 ± 0.00745826 (W 0.0298787) | 0.955303 ± 0.00185209 (W 0.0024966) | 🔵 colmat 1.65× faster than `faer` | 🔵 colmat 1.30× faster than `lapack-mkl` |  |
+| `solve/n513/b1 [api-inclusive]` | 1.61527 ± 0.00827375 (W 0.00343523) | 1.30445 ± 0.00945794 (W 0.0180489) | - | 🔴 colmat 1.24× slower than `faer` | - | `*` one row has no measurement here |
+| `svd_thin/n255/b1` | 4.83543 ± 0.00531906 (W 0.00715619) | 8.66161 ± 0.0100745 (W 0.0121686) | 6.45392 ± 0.015794 (W 0.0131964) | 🔵 colmat 1.79× faster than `faer` | 🔵 colmat 1.33× faster than `lapack-mkl` |  |
+| `svd_thin/n255/b1 [api-inclusive]` | 4.84916 ± 0.00172639 (W 0.00718022) | 8.64528 ± 0.0199705 (W 0.0103826) | - | 🔵 colmat 1.78× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_thin/n257/b1` | 4.92679 ± 0.00782985 (W 0.00684131) | 6.33325 ± 0.0107596 (W 0.00706314) | 6.62613 ± 0.0124665 (W 0.0120336) | 🔵 colmat 1.29× faster than `faer` | 🔵 colmat 1.34× faster than `lapack-mkl` |  |
+| `svd_thin/n257/b1 [api-inclusive]` | 4.93551 ± 0.00876688 (W 0.00669465) | 6.35027 ± 0.0458908 (W 0.0189157) | - | 🔵 colmat 1.29× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_thin/n511/b1` | 20.5442 ± 0.0134279 (W 0.0205256) | 34.9318 ± 0.420194 (W 0.0626021) | 25.9346 ± 0.0876578 (W 0.0188371) | 🔵 colmat 1.70× faster than `faer` | 🔵 colmat 1.26× faster than `lapack-mkl` |  |
+| `svd_thin/n511/b1 [api-inclusive]` | 20.6557 ± 0.0443967 (W 0.0361266) | 34.8299 ± 0.0202706 (W 0.0498552) | - | 🔵 colmat 1.69× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_thin/n513/b1` | 20.7458 ± 0.0651714 (W 0.0209981) | 24.6549 ± 0.0324826 (W 0.0341545) | 26.5585 ± 0.0473975 (W 0.0222804) | 🔵 colmat 1.19× faster than `faer` | 🔵 colmat 1.28× faster than `lapack-mkl` |  |
+| `svd_thin/n513/b1 [api-inclusive]` | 20.8229 ± 0.0278893 (W 0.017028) | 24.7837 ± 0.0198934 (W 0.0339937) | - | 🔵 colmat 1.19× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n255/b1` | 2.60032 ± 0.00839232 (W 0.00547347) | 7.07469 ± 0.00733399 (W 0.00924897) | 3.34021 ± 0.00667187 (W 0.00316795) | 🔵 colmat 2.72× faster than `faer` | 🔵 colmat 1.28× faster than `lapack-mkl` |  |
+| `svd_values/n255/b1 [api-inclusive]` | 2.59325 ± 0.00325001 (W 0.00484883) | 7.05713 ± 0.00848605 (W 0.00798194) | - | 🔵 colmat 2.72× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n257/b1` | 2.67795 ± 0.00627101 (W 0.00587772) | 5.32958 ± 0.0274609 (W 0.00476876) | 3.39902 ± 0.00533344 (W 0.00372891) | 🔵 colmat 1.99× faster than `faer` | 🔵 colmat 1.27× faster than `lapack-mkl` |  |
+| `svd_values/n257/b1 [api-inclusive]` | 2.67137 ± 0.00494736 (W 0.00432734) | 5.35913 ± 0.0132449 (W 0.00558549) | - | 🔵 colmat 2.01× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n511/b1` | 11.2399 ± 0.0342285 (W 0.0126291) | 29.0492 ± 0.520123 (W 0.0244364) | 12.3531 ± 0.0323045 (W 0.0135279) | 🔵 colmat 2.58× faster than `faer` | 🔵 colmat 1.10× faster than `lapack-mkl` |  |
+| `svd_values/n511/b1 [api-inclusive]` | 11.2395 ± 0.0142091 (W 0.00726526) | 28.3782 ± 0.488652 (W 0.04448) | - | 🔵 colmat 2.52× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n513/b1` | 11.2713 ± 0.0156802 (W 0.00986278) | 19.3791 ± 0.000797158 (W 0.0153384) | 12.4233 ± 0.0989305 (W 0.0157523) | 🔵 colmat 1.72× faster than `faer` | 🔵 colmat 1.10× faster than `lapack-mkl` |  |
+| `svd_values/n513/b1 [api-inclusive]` | 11.2845 ± 0.0120633 (W 0.00779497) | 19.3443 ± 0.0531849 (W 0.0181169) | - | 🔵 colmat 1.71× faster than `faer` | - | `*` one row has no measurement here |
+| `triangular_solve/n255/b1` | 0.00972 ± 8.93141e-05 (W 0.000208675) | 0.00796 ± 2.0502e-05 (W 5.65977e-05) | 0.0054 ± 1.58219e-05 (W 2.65951e-05) | 🔴 colmat 1.22× slower than `faer` | 🔴 colmat 1.80× slower than `lapack-mkl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n257/b1` | 0.009749 ± 0.000174519 (W 0.000208198) | 0.00825 ± 3.61985e-05 (W 3.24068e-05) | 0.00551 ± 1.1547e-05 (W 0.000236601) | 🔴 colmat 1.18× slower than `faer` | 🔴 colmat 1.77× slower than `lapack-mkl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n511/b1` | 0.027149 ± 0.000888257 (W 0.00051184) | 0.029479 ± 0.000208864 (W 0.000262614) | 0.02236 ± 0.000531991 (W 0.000204028) | 🔵 colmat 1.09× faster than `faer` | 🔴 colmat 1.21× slower than `lapack-mkl` | `!` between-start range over 5% |
+| `triangular_solve/n513/b1` | 0.025029 ± 0.000325434 (W 0.000350589) | 0.023089 ± 0.000191398 (W 0.000284155) | 0.021109 ± 0.000205218 (W 0.000275652) | 🔴 colmat 1.08× slower than `faer` | 🔴 colmat 1.19× slower than `lapack-mkl` |  |
+
+## linalg-boundary, f64, f order, 8T (CPU 0-7)
+
+| case | colmat (ms) | faer (ms) | lapack-mkl (ms) | vs `faer` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `cholesky/n255/b1` | 0.082498 ± 0.0011487 (W 0.000596952) | 0.192488 ± 0.00254816 (W 0.0173428) | 0.137181 ± 0.000311622 (W 0.00262229) | 🔵 colmat 2.33× faster than `faer` | 🔵 colmat 1.66× faster than `lapack-mkl` |  |
+| `cholesky/n255/b1 [api-inclusive]` | 0.106957 ± 0.000684903 (W 0.000440181) | 0.196245 ± 0.00333652 (W 0.0174269) | - | 🔵 colmat 1.83× faster than `faer` | - | `*` one row has no measurement here |
+| `cholesky/n257/b1` | 0.080278 ± 0.00114218 (W 0.000558834) | 0.15992 ± 0.00120761 (W 0.0172541) | 0.148926 ± 0.000433022 (W 0.0032054) | 🔵 colmat 1.99× faster than `faer` | 🔵 colmat 1.86× faster than `lapack-mkl` |  |
+| `cholesky/n257/b1 [api-inclusive]` | 0.101828 ± 0.0010045 (W 0.000676937) | 0.177319 ± 0.00244945 (W 0.0125236) | - | 🔵 colmat 1.74× faster than `faer` | - | `*` one row has no measurement here |
+| `cholesky/n511/b1` | 0.274793 ± 0.00304043 (W 0.00156725) | 0.503937 ± 0.00569674 (W 0.0197384) | 0.533366 ± 0.00154422 (W 0.00835138) | 🔵 colmat 1.83× faster than `faer` | 🔵 colmat 1.94× faster than `lapack-mkl` |  |
+| `cholesky/n511/b1 [api-inclusive]` | 0.384565 ± 0.0016014 (W 0.00215413) | 0.651238 ± 0.0296204 (W 0.0219596) | - | 🔵 colmat 1.69× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `cholesky/n513/b1` | 0.282193 ± 0.000880725 (W 0.00207258) | 0.519226 ± 0.0059445 (W 0.0207354) | 0.533605 ± 0.00495319 (W 0.00712951) | 🔵 colmat 1.84× faster than `faer` | 🔵 colmat 1.89× faster than `lapack-mkl` |  |
+| `cholesky/n513/b1 [api-inclusive]` | 0.365697 ± 0.0024467 (W 0.0019337) | 0.587554 ± 0.00947642 (W 0.0205641) | - | 🔵 colmat 1.61× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n255/b1` | 1.62035 ± 0.00430559 (W 0.0028426) | 4.72367 ± 0.00260978 (W 0.0168455) | 2.46616 ± 0.00440229 (W 0.00971321) | 🔵 colmat 2.92× faster than `faer` | 🔵 colmat 1.52× faster than `lapack-mkl` |  |
+| `eigh/n255/b1 [api-inclusive]` | 1.61721 ± 0.00308218 (W 0.00332143) | 4.7094 ± 0.00619469 (W 0.022479) | - | 🔵 colmat 2.91× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n257/b1` | 1.62605 ± 0.00232709 (W 0.00406101) | 4.65474 ± 0.0493641 (W 0.0183591) | 2.51957 ± 0.0109288 (W 0.00511374) | 🔵 colmat 2.86× faster than `faer` | 🔵 colmat 1.55× faster than `lapack-mkl` |  |
+| `eigh/n257/b1 [api-inclusive]` | 1.63156 ± 0.00256247 (W 0.00415067) | 4.67638 ± 0.0182236 (W 0.0132706) | - | 🔵 colmat 2.87× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n511/b1` | 6.30331 ± 0.0097678 (W 0.00554465) | 14.9324 ± 0.0317574 (W 0.0266587) | 8.38367 ± 0.0266944 (W 0.0203084) | 🔵 colmat 2.37× faster than `faer` | 🔵 colmat 1.33× faster than `lapack-mkl` |  |
+| `eigh/n511/b1 [api-inclusive]` | 6.30847 ± 0.0136782 (W 0.00869295) | 14.9707 ± 0.0190165 (W 0.0241073) | - | 🔵 colmat 2.37× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n513/b1` | 6.3687 ± 0.0186063 (W 0.00836811) | 14.9953 ± 0.0256495 (W 0.0402552) | 8.53536 ± 0.00212908 (W 0.0257613) | 🔵 colmat 2.35× faster than `faer` | 🔵 colmat 1.34× faster than `lapack-mkl` |  |
+| `eigh/n513/b1 [api-inclusive]` | 6.43534 ± 0.0236594 (W 0.017167) | 15.0448 ± 0.0179704 (W 0.0289119) | - | 🔵 colmat 2.34× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n255/b1` | 0.578364 ± 0.00325733 (W 0.00393651) | 1.27863 ± 0.00242547 (W 0.00224191) | 8.12157 ± 0.000399395 (W 0.00970199) | 🔵 colmat 2.21× faster than `faer` | 🔵 colmat 14.04× faster than `lapack-mkl` |  |
+| `full_piv_lu/n255/b1 [api-inclusive]` | 0.76693 ± 0.00416683 (W 0.00314377) | 1.74426 ± 0.00458797 (W 0.0039801) | - | 🔵 colmat 2.27× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n257/b1` | 0.578083 ± 0.00255587 (W 0.00251435) | 1.31305 ± 0.000810739 (W 0.00410239) | 8.31955 ± 0.00623369 (W 0.0112883) | 🔵 colmat 2.27× faster than `faer` | 🔵 colmat 14.39× faster than `lapack-mkl` |  |
+| `full_piv_lu/n257/b1 [api-inclusive]` | 0.790619 ± 0.00855377 (W 0.00506743) | 1.2434 ± 0.0027284 (W 0.00212419) | - | 🔵 colmat 1.57× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n511/b1` | 2.26642 ± 0.00178605 (W 0.00932769) | 5.38442 ± 0.0202023 (W 0.00688487) | 65.7881 ± 0.0135955 (W 0.031454) | 🔵 colmat 2.38× faster than `faer` | 🔵 colmat 29.03× faster than `lapack-mkl` |  |
+| `full_piv_lu/n511/b1 [api-inclusive]` | 3.03819 ± 0.0157171 (W 0.00849977) | 9.28858 ± 0.0323321 (W 0.0170182) | - | 🔵 colmat 3.06× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n513/b1` | 2.29254 ± 0.0167683 (W 0.00724506) | 5.56907 ± 0.0652891 (W 0.00956969) | 66.7269 ± 0.0194872 (W 0.0455765) | 🔵 colmat 2.43× faster than `faer` | 🔵 colmat 29.11× faster than `lapack-mkl` |  |
+| `full_piv_lu/n513/b1 [api-inclusive]` | 3.05297 ± 0.0200898 (W 0.0107894) | 4.99568 ± 0.0228092 (W 0.0120786) | - | 🔵 colmat 1.64× faster than `faer` | - | `*` one row has no measurement here |
+| `lu/n255/b1` | 0.150896 ± 0.000487181 (W 0.00185184) | 0.315382 ± 0.0161668 (W 0.0142446) | 0.185875 ± 0.177755 (W 0.00203968) | 🔵 colmat 2.09× faster than `faer` | · | `!` between-start range over 5%; `p` position effect over 5% |
+| `lu/n255/b1 [api-inclusive]` | 0.35195 ± 0.00175398 (W 0.00215679) | 0.389365 ± 0.00127344 (W 0.0149982) | - | 🔵 colmat 1.11× faster than `faer` | - | `*` one row has no measurement here |
+| `lu/n257/b1` | 0.158666 ± 0.000388397 (W 0.00186292) | 0.325861 ± 0.0175484 (W 0.0184365) | 0.190045 ± 0.000687493 (W 0.00226007) | 🔵 colmat 2.05× faster than `faer` | 🔵 colmat 1.20× faster than `lapack-mkl` | `!` between-start range over 5% |
+| `lu/n257/b1 [api-inclusive]` | 0.373396 ± 0.00235132 (W 0.00230125) | 0.35988 ± 0.0131704 (W 0.0192126) | - | · | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `lu/n511/b1` | 0.560834 ± 0.000991422 (W 0.00180051) | 1.2548 ± 0.0121679 (W 0.0418787) | 0.671602 ± 0.00363292 (W 0.00281046) | 🔵 colmat 2.24× faster than `faer` | 🔵 colmat 1.20× faster than `lapack-mkl` |  |
+| `lu/n511/b1 [api-inclusive]` | 1.49746 ± 0.00492538 (W 0.00443308) | 1.85621 ± 0.0447875 (W 0.0315654) | - | 🔵 colmat 1.24× faster than `faer` | - | `*` one row has no measurement here |
+| `lu/n513/b1` | 0.597091 ± 0.00309197 (W 0.00410052) | 1.27225 ± 0.0302909 (W 0.0436617) | 0.687451 ± 0.00324696 (W 0.00253171) | 🔵 colmat 2.13× faster than `faer` | 🔵 colmat 1.15× faster than `lapack-mkl` |  |
+| `lu/n513/b1 [api-inclusive]` | 1.46464 ± 0.00226679 (W 0.00150933) | 1.37515 ± 0.0193557 (W 0.0384111) | - | 🔴 colmat 1.07× slower than `faer` | - | `*` one row has no measurement here |
+| `qr/n255/b1` | 0.47659 ± 0.000700062 (W 0.00197759) | 1.24567 ± 0.00327381 (W 0.0028271) | 0.616723 ± 0.00340022 (W 0.00442318) | 🔵 colmat 2.61× faster than `faer` | 🔵 colmat 1.29× faster than `lapack-mkl` |  |
+| `qr/n255/b1 [api-inclusive]` | 0.802228 ± 0.00495857 (W 0.00337213) | 1.31841 ± 0.0423066 (W 0.0424519) | - | 🔵 colmat 1.64× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr/n257/b1` | 0.484807 ± 0.00217225 (W 0.00256996) | 1.29375 ± 0.00945105 (W 0.00929791) | 0.665268 ± 0.00319123 (W 0.00309082) | 🔵 colmat 2.67× faster than `faer` | 🔵 colmat 1.37× faster than `lapack-mkl` |  |
+| `qr/n257/b1 [api-inclusive]` | 0.834137 ± 0.00219744 (W 0.00521166) | 1.35423 ± 0.00831931 (W 0.0137095) | - | 🔵 colmat 1.62× faster than `faer` | - | `*` one row has no measurement here |
+| `qr/n511/b1` | 1.69156 ± 0.0041344 (W 0.00372523) | 4.00328 ± 0.0164931 (W 0.0168763) | 2.75504 ± 0.00387497 (W 0.00794651) | 🔵 colmat 2.37× faster than `faer` | 🔵 colmat 1.63× faster than `lapack-mkl` |  |
+| `qr/n511/b1 [api-inclusive]` | 3.05961 ± 0.0202007 (W 0.00721704) | 4.26996 ± 0.0612822 (W 0.137705) | - | 🔵 colmat 1.40× faster than `faer` | - | `*` one row has no measurement here |
+| `qr/n513/b1` | 1.82084 ± 0.00939178 (W 0.00328358) | 3.78933 ± 0.0109244 (W 0.0122179) | 2.84326 ± 0.000385209 (W 0.00679298) | 🔵 colmat 2.08× faster than `faer` | 🔵 colmat 1.56× faster than `lapack-mkl` |  |
+| `qr/n513/b1 [api-inclusive]` | 3.15734 ± 0.00758995 (W 0.0057691) | 3.97634 ± 0.191262 (W 0.175432) | - | 🔵 colmat 1.26× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr_factor/n255/b1` | 0.357161 ± 0.000271021 (W 0.00213464) | 1.02017 ± 0.00313098 (W 0.00382294) | 0.328931 ± 0.000319439 (W 0.00297917) | 🔵 colmat 2.86× faster than `faer` | 🔴 colmat 1.09× slower than `lapack-mkl` |  |
+| `qr_factor/n257/b1` | 0.365667 ± 0.00239718 (W 0.00201006) | 1.04974 ± 0.00134962 (W 0.00811121) | 0.3517 ± 0.0030376 (W 0.00234031) | 🔵 colmat 2.87× faster than `faer` | · |  |
+| `qr_factor/n511/b1` | 1.07005 ± 0.00232918 (W 0.00745285) | 2.84124 ± 0.0201781 (W 0.0149112) | 1.35357 ± 0.00112005 (W 0.00389308) | 🔵 colmat 2.66× faster than `faer` | 🔵 colmat 1.26× faster than `lapack-mkl` |  |
+| `qr_factor/n513/b1` | 1.18742 ± 0.0045429 (W 0.0020228) | 2.62304 ± 0.0205261 (W 0.0170245) | 1.39487 ± 0.00388192 (W 0.00461293) | 🔵 colmat 2.21× faster than `faer` | 🔵 colmat 1.17× faster than `lapack-mkl` |  |
+| `solve/n255/b1` | 0.150326 ± 0.00055795 (W 0.0016975) | 0.287553 ± 0.0147607 (W 0.0181377) | 0.180335 ± 0.00179299 (W 0.00116812) | 🔵 colmat 1.91× faster than `faer` | 🔵 colmat 1.20× faster than `lapack-mkl` | `!` between-start range over 5% |
+| `solve/n255/b1 [api-inclusive]` | 0.359677 ± 0.00290527 (W 0.00609887) | 0.345401 ± 0.0156436 (W 0.016919) | - | · | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `solve/n257/b1` | 0.157875 ± 0.00156589 (W 0.00217756) | 0.293212 ± 0.00185499 (W 0.0154509) | 0.181515 ± 0.00194223 (W 0.00259561) | 🔵 colmat 1.86× faster than `faer` | 🔵 colmat 1.15× faster than `lapack-mkl` |  |
+| `solve/n257/b1 [api-inclusive]` | 0.37901 ± 0.00153523 (W 0.00328099) | 0.357461 ± 0.0221332 (W 0.0194422) | - | · | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `solve/n511/b1` | 0.553045 ± 0.00236246 (W 0.00474335) | 1.17 ± 0.0332771 (W 0.0495488) | 0.645333 ± 0.00707923 (W 0.00259399) | 🔵 colmat 2.12× faster than `faer` | 🔵 colmat 1.17× faster than `lapack-mkl` | `!` between-start range over 5% |
+| `solve/n511/b1 [api-inclusive]` | 1.49364 ± 0.00717313 (W 0.00360928) | 1.58805 ± 0.0363601 (W 0.0207194) | - | 🔵 colmat 1.06× faster than `faer` | - | `*` one row has no measurement here |
+| `solve/n513/b1` | 0.573495 ± 0.00254365 (W 0.00340148) | 1.23949 ± 0.0207787 (W 0.0565188) | 0.667957 ± 0.00415186 (W 0.00453715) | 🔵 colmat 2.16× faster than `faer` | 🔵 colmat 1.16× faster than `lapack-mkl` |  |
+| `solve/n513/b1 [api-inclusive]` | 1.46439 ± 0.00922649 (W 0.00318193) | 1.30907 ± 0.0276234 (W 0.0381284) | - | 🔴 colmat 1.12× slower than `faer` | - | `*` one row has no measurement here |
+| `svd_thin/n255/b1` | 4.49477 ± 0.0126009 (W 0.00754001) | 8.80697 ± 0.0312987 (W 0.0162272) | 5.91496 ± 0.0110597 (W 0.0110021) | 🔵 colmat 1.96× faster than `faer` | 🔵 colmat 1.32× faster than `lapack-mkl` |  |
+| `svd_thin/n255/b1 [api-inclusive]` | 4.50224 ± 0.00649545 (W 0.0087026) | 8.83931 ± 0.00366179 (W 0.0133092) | - | 🔵 colmat 1.96× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_thin/n257/b1` | 4.57299 ± 0.00968587 (W 0.0051227) | 6.47951 ± 0.0338563 (W 0.013939) | 6.10383 ± 0.00344919 (W 0.00985414) | 🔵 colmat 1.42× faster than `faer` | 🔵 colmat 1.33× faster than `lapack-mkl` |  |
+| `svd_thin/n257/b1 [api-inclusive]` | 4.58355 ± 0.00961167 (W 0.00357352) | 6.54308 ± 0.0360954 (W 0.0306241) | - | 🔵 colmat 1.43× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_thin/n511/b1` | 17.5828 ± 0.0188937 (W 0.0158448) | 34.3707 ± 1.50092 (W 0.0644542) | 20.7754 ± 0.0553421 (W 0.0320647) | 🔵 colmat 1.95× faster than `faer` | 🔵 colmat 1.18× faster than `lapack-mkl` | `!` between-start range over 5% |
+| `svd_thin/n511/b1 [api-inclusive]` | 17.6748 ± 0.0245381 (W 0.0375711) | 33.5272 ± 8.44634 (W 0.139095) | - | 🔵 colmat 1.90× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_thin/n513/b1` | 17.6898 ± 0.0060468 (W 0.0136066) | 23.3484 ± 0.884691 (W 0.0214288) | 21.255 ± 0.0515051 (W 0.02844) | 🔵 colmat 1.32× faster than `faer` | 🔵 colmat 1.20× faster than `lapack-mkl` | `!` between-start range over 5% |
+| `svd_thin/n513/b1 [api-inclusive]` | 17.7768 ± 0.0171777 (W 0.0237109) | 23.3959 ± 2.99653 (W 0.0876243) | - | 🔵 colmat 1.32× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_values/n255/b1` | 2.53506 ± 0.00683841 (W 0.00372407) | 7.14262 ± 0.0374247 (W 0.00684824) | 3.2445 ± 0.00113068 (W 0.00550085) | 🔵 colmat 2.82× faster than `faer` | 🔵 colmat 1.28× faster than `lapack-mkl` |  |
+| `svd_values/n255/b1 [api-inclusive]` | 2.53229 ± 0.0084338 (W 0.00710961) | 7.10869 ± 0.0169931 (W 0.0102333) | - | 🔵 colmat 2.81× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n257/b1` | 2.61146 ± 0.014682 (W 0.00591122) | 5.45138 ± 0.0053948 (W 0.00762146) | 3.30896 ± 0.00847596 (W 0.00528183) | 🔵 colmat 2.09× faster than `faer` | 🔵 colmat 1.27× faster than `lapack-mkl` |  |
+| `svd_values/n257/b1 [api-inclusive]` | 2.59391 ± 0.00241073 (W 0.00357524) | 5.37136 ± 0.0572166 (W 0.0104129) | - | 🔵 colmat 2.07× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n511/b1` | 9.97775 ± 0.336967 (W 0.0292494) | 27.235 ± 0.320687 (W 0.0359236) | 10.5811 ± 0.0229876 (W 0.0204752) | 🔵 colmat 2.73× faster than `faer` | 🔵 colmat 1.06× faster than `lapack-mkl` | `!` between-start range over 5% |
+| `svd_values/n511/b1 [api-inclusive]` | 9.93439 ± 0.0352639 (W 0.0129047) | 27.202 ± 0.0594847 (W 0.0263221) | - | 🔵 colmat 2.74× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n513/b1` | 9.98824 ± 0.0212963 (W 0.0134559) | 18.2044 ± 0.0436809 (W 0.0182827) | 10.6068 ± 0.00575544 (W 0.0111771) | 🔵 colmat 1.82× faster than `faer` | 🔵 colmat 1.06× faster than `lapack-mkl` |  |
+| `svd_values/n513/b1 [api-inclusive]` | 9.96968 ± 0.0297633 (W 0.00897211) | 18.2278 ± 0.0581557 (W 0.0158684) | - | 🔵 colmat 1.83× faster than `faer` | - | `*` one row has no measurement here |
+| `triangular_solve/n255/b1` | 0.009499 ± 5.62168e-05 (W 9.99765e-05) | 0.00795 ± 5.72742e-05 (W 5.50572e-05) | 0.00539 ± 6.08276e-06 (W 2.48998e-05) | 🔴 colmat 1.19× slower than `faer` | 🔴 colmat 1.76× slower than `lapack-mkl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n257/b1` | 0.00964 ± 0.000100135 (W 0.000172175) | 0.00824 ± 2.66521e-05 (W 6.58802e-05) | 0.005499 ± 5.50757e-06 (W 2.04499e-05) | 🔴 colmat 1.17× slower than `faer` | 🔴 colmat 1.75× slower than `lapack-mkl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n511/b1` | 0.026279 ± 0.000722311 (W 0.000300518) | 0.029228 ± 0.000252528 (W 0.000221665) | 0.022258 ± 0.000469543 (W 0.000163671) | 🔵 colmat 1.11× faster than `faer` | 🔴 colmat 1.18× slower than `lapack-mkl` | `!` between-start range over 5% |
+| `triangular_solve/n513/b1` | 0.023589 ± 0.000248462 (W 0.000230784) | 0.022019 ± 0.000182237 (W 0.000190245) | 0.02065 ± 0.000165312 (W 0.000140333) | 🔴 colmat 1.07× slower than `faer` | 🔴 colmat 1.14× slower than `lapack-mkl` |  |
+
+## linalg-boundary, c64, c order, 4T (CPU 0-3)
+
+| case | colmat (ms) | faer (ms) | lapack-mkl (ms) | vs `faer` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `cholesky/n255/b1` | 0.236204 ± 0.000863269 (W 0.00114434) | 0.963343 ± 0.00425633 (W 0.00746915) | - | 🔵 colmat 4.08× faster than `faer` | - | `*` one row has no measurement here |
+| `cholesky/n255/b1 [api-inclusive]` | 0.29383 ± 0.00153212 (W 0.00105378) | 0.411712 ± 0.00441988 (W 0.00420815) | - | 🔵 colmat 1.40× faster than `faer` | - | `*` one row has no measurement here |
+| `cholesky/n257/b1` | 0.218534 ± 0.00089952 (W 0.000904085) | 0.968564 ± 0.00689579 (W 0.00981737) | - | 🔵 colmat 4.43× faster than `faer` | - | `*` one row has no measurement here |
+| `cholesky/n257/b1 [api-inclusive]` | 0.270933 ± 0.00150245 (W 0.00150724) | 0.385463 ± 0.00146923 (W 0.00427231) | - | 🔵 colmat 1.42× faster than `faer` | - | `*` one row has no measurement here |
+| `cholesky/n511/b1` | 0.965004 ± 0.00123337 (W 0.00272818) | 2.65488 ± 0.00522762 (W 0.0330813) | - | 🔵 colmat 2.75× faster than `faer` | - | `*` one row has no measurement here |
+| `cholesky/n511/b1 [api-inclusive]` | 1.24002 ± 0.00245357 (W 0.00439788) | 1.42777 ± 0.0394967 (W 0.0730376) | - | 🔵 colmat 1.15× faster than `faer` | - | `*` one row has no measurement here |
+| `cholesky/n513/b1` | 0.945354 ± 0.00186652 (W 0.00377851) | 2.68788 ± 0.0241669 (W 0.104489) | - | 🔵 colmat 2.84× faster than `faer` | - | `*` one row has no measurement here |
+| `cholesky/n513/b1 [api-inclusive]` | 1.19822 ± 0.00492019 (W 0.0039459) | 1.3363 ± 0.0644011 (W 0.0469635) | - | 🔵 colmat 1.12× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `eigh/n255/b1` | 3.25688 ± 0.00417823 (W 0.00600511) | 7.20253 ± 0.0234847 (W 0.0229358) | - | 🔵 colmat 2.21× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n255/b1 [api-inclusive]` | 3.27022 ± 0.00859149 (W 0.00806387) | 7.17688 ± 0.0478538 (W 0.0156844) | - | 🔵 colmat 2.19× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n257/b1` | 3.2707 ± 0.00570189 (W 0.00658443) | 7.09393 ± 0.0136999 (W 0.0144867) | - | 🔵 colmat 2.17× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n257/b1 [api-inclusive]` | 3.29702 ± 0.00159357 (W 0.00454739) | 7.10968 ± 0.00951194 (W 0.0132644) | - | 🔵 colmat 2.16× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n511/b1` | 16.5792 ± 0.0277764 (W 0.0193825) | 25.987 ± 0.0288592 (W 0.0211517) | - | 🔵 colmat 1.57× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n511/b1 [api-inclusive]` | 16.7104 ± 0.0269695 (W 0.018815) | 25.9845 ± 0.0876609 (W 0.019603) | - | 🔵 colmat 1.55× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n513/b1` | 16.4738 ± 0.010989 (W 0.0196212) | 25.9108 ± 0.0325609 (W 0.0162746) | - | 🔵 colmat 1.57× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n513/b1 [api-inclusive]` | 16.5552 ± 0.0303394 (W 0.0252418) | 25.9601 ± 0.0279225 (W 0.0448047) | - | 🔵 colmat 1.57× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n255/b1` | 1.16486 ± 0.00441784 (W 0.00190464) | 2.78373 ± 0.014251 (W 0.00666752) | - | 🔵 colmat 2.39× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n255/b1 [api-inclusive]` | 1.61189 ± 0.00160741 (W 0.00550488) | 3.83777 ± 0.0351975 (W 0.00751168) | - | 🔵 colmat 2.38× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n257/b1` | 1.2091 ± 0.00311271 (W 0.00397578) | 2.86916 ± 0.024948 (W 0.00179937) | - | 🔵 colmat 2.37× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n257/b1 [api-inclusive]` | 1.66914 ± 0.00723653 (W 0.00572105) | 2.87575 ± 0.0123081 (W 0.002092) | - | 🔵 colmat 1.72× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n511/b1` | 6.70013 ± 0.015036 (W 0.00990844) | 12.2453 ± 0.0185824 (W 0.00932983) | - | 🔵 colmat 1.83× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n511/b1 [api-inclusive]` | 8.62473 ± 0.0219781 (W 0.00835146) | 16.215 ± 0.0436846 (W 0.0227822) | - | 🔵 colmat 1.88× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n513/b1` | 6.86479 ± 0.0277856 (W 0.00503902) | 12.4766 ± 0.0778347 (W 0.0109059) | - | 🔵 colmat 1.82× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n513/b1 [api-inclusive]` | 8.7297 ± 0.0232464 (W 0.0199486) | 12.106 ± 0.0582608 (W 0.0169205) | - | 🔵 colmat 1.39× faster than `faer` | - | `*` one row has no measurement here |
+| `lu/n255/b1` | 0.461997 ± 0.000817123 (W 0.00141203) | 0.7168 ± 0.0102027 (W 0.00853549) | - | 🔵 colmat 1.55× faster than `faer` | - | `*` one row has no measurement here |
+| `lu/n255/b1 [api-inclusive]` | 0.951174 ± 0.00871751 (W 0.00239252) | 0.746478 ± 0.013442 (W 0.00703056) | - | 🔴 colmat 1.27× slower than `faer` | - | `*` one row has no measurement here |
+| `lu/n257/b1` | 0.482897 ± 0.000526341 (W 0.00180891) | 0.72296 ± 0.0121198 (W 0.0117358) | - | 🔵 colmat 1.50× faster than `faer` | - | `*` one row has no measurement here |
+| `lu/n257/b1 [api-inclusive]` | 0.956094 ± 0.00389504 (W 0.00319943) | 0.681722 ± 0.00809586 (W 0.0147704) | - | 🔴 colmat 1.40× slower than `faer` | - | `*` one row has no measurement here |
+| `lu/n511/b1` | 2.07728 ± 0.00950363 (W 0.00537701) | 3.09445 ± 0.037628 (W 0.0785041) | - | 🔵 colmat 1.49× faster than `faer` | - | `*` one row has no measurement here |
+| `lu/n511/b1 [api-inclusive]` | 4.17194 ± 0.0365271 (W 0.00721516) | 3.17136 ± 0.0362644 (W 0.0656448) | - | 🔴 colmat 1.32× slower than `faer` | - | `*` one row has no measurement here |
+| `lu/n513/b1` | 2.17458 ± 0.00627466 (W 0.00357364) | 3.20483 ± 0.0546324 (W 0.0551095) | - | 🔵 colmat 1.47× faster than `faer` | - | `*` one row has no measurement here |
+| `lu/n513/b1 [api-inclusive]` | 4.17265 ± 0.0213661 (W 0.00731122) | 2.99493 ± 0.00513765 (W 0.0406829) | - | 🔴 colmat 1.39× slower than `faer` | - | `*` one row has no measurement here |
+| `qr/n255/b1` | 1.44211 ± 0.00218109 (W 0.00296877) | 2.61104 ± 0.00849863 (W 0.00541344) | - | 🔵 colmat 1.81× faster than `faer` | - | `*` one row has no measurement here |
+| `qr/n255/b1 [api-inclusive]` | 2.17321 ± 0.000940805 (W 0.00555528) | 2.69317 ± 0.0194727 (W 0.00635652) | - | 🔵 colmat 1.24× faster than `faer` | - | `*` one row has no measurement here |
+| `qr/n257/b1` | 1.49591 ± 0.00179058 (W 0.00312737) | 2.67904 ± 0.00612425 (W 0.00760209) | - | 🔵 colmat 1.79× faster than `faer` | - | `*` one row has no measurement here |
+| `qr/n257/b1 [api-inclusive]` | 2.22581 ± 0.0105733 (W 0.00602633) | 2.76078 ± 0.0132929 (W 0.00403424) | - | 🔵 colmat 1.24× faster than `faer` | - | `*` one row has no measurement here |
+| `qr/n511/b1` | 7.93344 ± 0.00887504 (W 0.01031) | 12.2069 ± 0.0652705 (W 0.020909) | - | 🔵 colmat 1.54× faster than `faer` | - | `*` one row has no measurement here |
+| `qr/n511/b1 [api-inclusive]` | 10.877 ± 0.0371972 (W 0.012737) | 11.9221 ± 0.03029 (W 0.0503292) | - | 🔵 colmat 1.10× faster than `faer` | - | `*` one row has no measurement here |
+| `qr/n513/b1` | 7.94227 ± 0.011954 (W 0.0112706) | 12.7481 ± 0.0425187 (W 0.03766) | - | 🔵 colmat 1.61× faster than `faer` | - | `*` one row has no measurement here |
+| `qr/n513/b1 [api-inclusive]` | 10.777 ± 0.0146439 (W 0.0147804) | 11.8661 ± 0.481766 (W 0.0164114) | - | 🔵 colmat 1.10× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr_factor/n255/b1` | 0.848007 ± 0.00237656 (W 0.00322279) | 2.0017 ± 0.00466219 (W 0.00402936) | - | 🔵 colmat 2.36× faster than `faer` | - | `*` one row has no measurement here |
+| `qr_factor/n257/b1` | 0.882957 ± 0.00483934 (W 0.00346355) | 2.04712 ± 0.00576883 (W 0.00932712) | - | 🔵 colmat 2.32× faster than `faer` | - | `*` one row has no measurement here |
+| `qr_factor/n511/b1` | 4.05663 ± 0.0096291 (W 0.00774521) | 8.35933 ± 0.0267133 (W 0.0271938) | - | 🔵 colmat 2.06× faster than `faer` | - | `*` one row has no measurement here |
+| `qr_factor/n513/b1` | 3.94615 ± 0.0139839 (W 0.00398126) | 8.75473 ± 0.0156815 (W 0.0280707) | - | 🔵 colmat 2.22× faster than `faer` | - | `*` one row has no measurement here |
+| `solve/n255/b1` | 0.404529 ± 0.00191303 (W 0.00234452) | 0.709511 ± 0.0103496 (W 0.0120204) | - | 🔵 colmat 1.75× faster than `faer` | - | `*` one row has no measurement here |
+| `solve/n255/b1 [api-inclusive]` | 0.941636 ± 0.00755276 (W 0.00336333) | 0.677234 ± 0.00524428 (W 0.00763064) | - | 🔴 colmat 1.39× slower than `faer` | - | `*` one row has no measurement here |
+| `solve/n257/b1` | 0.477837 ± 0.00256517 (W 0.00232499) | 0.73243 ± 0.0158118 (W 0.0111252) | - | 🔵 colmat 1.53× faster than `faer` | - | `*` one row has no measurement here |
+| `solve/n257/b1 [api-inclusive]` | 0.953434 ± 0.00127026 (W 0.00422936) | 0.672412 ± 0.00925338 (W 0.00861906) | - | 🔴 colmat 1.42× slower than `faer` | - | `*` one row has no measurement here |
+| `solve/n511/b1` | 2.03525 ± 0.00888258 (W 0.00454644) | 3.14693 ± 0.004267 (W 0.066644) | - | 🔵 colmat 1.55× faster than `faer` | - | `*` one row has no measurement here |
+| `solve/n511/b1 [api-inclusive]` | 4.13791 ± 0.0321619 (W 0.00832263) | 3.0932 ± 0.0424988 (W 0.0678353) | - | 🔴 colmat 1.34× slower than `faer` | - | `*` one row has no measurement here |
+| `solve/n513/b1` | 2.11948 ± 0.00324191 (W 0.00699501) | 3.17849 ± 0.0384116 (W 0.0452642) | - | 🔵 colmat 1.50× faster than `faer` | - | `*` one row has no measurement here |
+| `solve/n513/b1 [api-inclusive]` | 4.18121 ± 0.0185391 (W 0.00765204) | 3.00911 ± 0.0373753 (W 0.0568053) | - | 🔴 colmat 1.39× slower than `faer` | - | `*` one row has no measurement here |
+| `svd_thin/n255/b1` | 7.07756 ± 0.00991675 (W 0.0181644) | 13.6811 ± 0.00911373 (W 0.0167791) | - | 🔵 colmat 1.93× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_thin/n255/b1 [api-inclusive]` | 7.09652 ± 0.0023068 (W 0.0103928) | 13.6638 ± 0.0474324 (W 0.0269543) | - | 🔵 colmat 1.93× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_thin/n257/b1` | 7.20839 ± 0.00759946 (W 0.010259) | 10.4605 ± 0.0471249 (W 0.0151138) | - | 🔵 colmat 1.45× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_thin/n257/b1 [api-inclusive]` | 7.25196 ± 0.00331989 (W 0.00967276) | 10.4991 ± 0.0184288 (W 0.0252813) | - | 🔵 colmat 1.45× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_thin/n511/b1` | 35.9104 ± 0.175862 (W 0.0626221) | 53.4397 ± 1.13514 (W 0.0834861) | - | 🔵 colmat 1.49× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_thin/n511/b1 [api-inclusive]` | 35.8891 ± 0.101294 (W 0.0860481) | 51.7813 ± 0.175888 (W 0.85258) | - | 🔵 colmat 1.44× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_thin/n513/b1` | 36.302 ± 0.154939 (W 0.0414224) | 42.2926 ± 0.0895083 (W 0.0339282) | - | 🔵 colmat 1.17× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_thin/n513/b1 [api-inclusive]` | 36.4428 ± 0.116281 (W 0.0585502) | 42.496 ± 0.0482323 (W 0.469222) | - | 🔵 colmat 1.17× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n255/b1` | 3.76627 ± 0.010108 (W 0.00675605) | 11.0798 ± 0.068015 (W 0.0156872) | - | 🔵 colmat 2.94× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n255/b1 [api-inclusive]` | 3.75378 ± 0.0136762 (W 0.00534047) | 11.1236 ± 0.066736 (W 0.0138352) | - | 🔵 colmat 2.96× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n257/b1` | 3.88955 ± 0.00190972 (W 0.0081664) | 8.79859 ± 0.129001 (W 0.0110937) | - | 🔵 colmat 2.26× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n257/b1 [api-inclusive]` | 3.88377 ± 0.0143609 (W 0.00918869) | 8.77642 ± 0.026879 (W 0.0141957) | - | 🔵 colmat 2.26× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n511/b1` | 19.5328 ± 0.022213 (W 0.0461013) | 39.1324 ± 0.222071 (W 0.0442444) | - | 🔵 colmat 2.00× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n511/b1 [api-inclusive]` | 19.5759 ± 0.113995 (W 0.025941) | 38.3487 ± 0.404024 (W 0.0374562) | - | 🔵 colmat 1.96× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n513/b1` | 19.7857 ± 0.111896 (W 0.0270171) | 30.4562 ± 0.0239567 (W 0.029099) | - | 🔵 colmat 1.54× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n513/b1 [api-inclusive]` | 19.881 ± 0.0757852 (W 0.034735) | 30.5035 ± 0.0841519 (W 0.0347228) | - | 🔵 colmat 1.53× faster than `faer` | - | `*` one row has no measurement here |
+| `triangular_solve/n255/b1` | 0.014639 ± 0.000776552 (W 0.000135388) | 0.015389 ± 0.000115659 (W 9.39681e-05) | 0.017199 ± 0.000110395 (W 0.000100515) | · | 🔵 colmat 1.17× faster than `lapack-mkl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `triangular_solve/n257/b1` | 0.01404 ± 3.82143e-05 (W 6.39476e-05) | 0.01523 ± 9.95004e-05 (W 5.6633e-05) | 0.017389 ± 0.000205264 (W 7.70669e-05) | 🔵 colmat 1.08× faster than `faer` | 🔵 colmat 1.24× faster than `lapack-mkl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n511/b1` | 0.037419 ± 0.000116052 (W 0.000219203) | 0.058978 ± 0.00149024 (W 0.000475236) | 0.063378 ± 0.00021563 (W 0.00426909) | 🔵 colmat 1.58× faster than `faer` | 🔵 colmat 1.69× faster than `lapack-mkl` |  |
+| `triangular_solve/n513/b1` | 0.036269 ± 0.000516759 (W 0.000215221) | 0.041078 ± 0.00010404 (W 0.000315468) | 0.064039 ± 0.00010062 (W 0.000146339) | 🔵 colmat 1.13× faster than `faer` | 🔵 colmat 1.77× faster than `lapack-mkl` |  |
+
+## linalg-boundary, c64, c order, 8T (CPU 0-7)
+
+| case | colmat (ms) | faer (ms) | lapack-mkl (ms) | vs `faer` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `cholesky/n255/b1` | 0.206604 ± 0.000932816 (W 0.0014413) | 0.785269 ± 0.005164 (W 0.0680668) | - | 🔵 colmat 3.80× faster than `faer` | - | `*` one row has no measurement here |
+| `cholesky/n255/b1 [api-inclusive]` | 0.268053 ± 0.00574471 (W 0.00186486) | 0.414779 ± 0.00650336 (W 0.00703837) | - | 🔵 colmat 1.55× faster than `faer` | - | `*` one row has no measurement here |
+| `cholesky/n257/b1` | 0.184969 ± 0.000780414 (W 0.0015567) | 0.636703 ± 0.101035 (W 0.090243) | - | 🔵 colmat 3.44× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `cholesky/n257/b1 [api-inclusive]` | 0.243975 ± 0.00700172 (W 0.00229805) | 0.3676 ± 0.0165264 (W 0.00827401) | - | 🔵 colmat 1.51× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `cholesky/n511/b1` | 0.692861 ± 0.00379815 (W 0.00223778) | 1.88969 ± 0.169227 (W 0.299668) | - | 🔵 colmat 2.73× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `cholesky/n511/b1 [api-inclusive]` | 0.983033 ± 0.00981296 (W 0.00292145) | 1.20119 ± 0.0102802 (W 0.0229721) | - | 🔵 colmat 1.22× faster than `faer` | - | `*` one row has no measurement here |
+| `cholesky/n513/b1` | 0.656932 ± 0.000494653 (W 0.0019722) | 1.94027 ± 0.0969676 (W 0.151018) | - | 🔵 colmat 2.95× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `cholesky/n513/b1 [api-inclusive]` | 0.936044 ± 0.00236029 (W 0.00258753) | 1.08119 ± 0.00320502 (W 0.0330251) | - | 🔵 colmat 1.16× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n255/b1` | 2.32629 ± 0.0046189 (W 0.00309494) | 7.15732 ± 0.0172704 (W 0.0233613) | - | 🔵 colmat 3.08× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n255/b1 [api-inclusive]` | 2.33421 ± 0.0041047 (W 0.00618331) | 7.20249 ± 0.00943632 (W 0.0183824) | - | 🔵 colmat 3.09× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n257/b1` | 2.32793 ± 0.00790602 (W 0.00372217) | 7.05423 ± 0.00816039 (W 0.00688907) | - | 🔵 colmat 3.03× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n257/b1 [api-inclusive]` | 2.35444 ± 0.00480172 (W 0.00597187) | 7.10626 ± 0.00376074 (W 0.0163013) | - | 🔵 colmat 3.02× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n511/b1` | 10.5917 ± 0.03835 (W 0.0159615) | 22.9843 ± 0.0733283 (W 0.06988) | - | 🔵 colmat 2.17× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n511/b1 [api-inclusive]` | 10.6288 ± 0.0178376 (W 0.00580304) | 23.0775 ± 0.0447322 (W 0.0393952) | - | 🔵 colmat 2.17× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n513/b1` | 10.6389 ± 0.00674519 (W 0.0059044) | 22.9885 ± 0.00617354 (W 0.0668073) | - | 🔵 colmat 2.16× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n513/b1 [api-inclusive]` | 10.7001 ± 0.0173742 (W 0.00855603) | 23.2056 ± 0.0395464 (W 0.166005) | - | 🔵 colmat 2.17× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n255/b1` | 0.884316 ± 0.000400949 (W 0.00347227) | 2.78392 ± 0.00282943 (W 0.00629019) | - | 🔵 colmat 3.15× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n255/b1 [api-inclusive]` | 1.37962 ± 0.00635447 (W 0.00236937) | 3.853 ± 0.0280903 (W 0.0103157) | - | 🔵 colmat 2.79× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n257/b1` | 0.916815 ± 0.00499221 (W 0.00378519) | 2.88773 ± 0.00580015 (W 0.00318977) | - | 🔵 colmat 3.15× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n257/b1 [api-inclusive]` | 1.40621 ± 0.012617 (W 0.00408166) | 2.90437 ± 0.0141555 (W 0.00812557) | - | 🔵 colmat 2.07× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n511/b1` | 4.07177 ± 0.00795064 (W 0.0105936) | 10.7722 ± 0.0856665 (W 0.012216) | - | 🔵 colmat 2.65× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n511/b1 [api-inclusive]` | 6.11809 ± 0.00721471 (W 0.0141889) | 14.7594 ± 0.0721142 (W 0.0122142) | - | 🔵 colmat 2.41× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n513/b1` | 4.18614 ± 0.0135215 (W 0.0119485) | 10.814 ± 0.114728 (W 0.0132735) | - | 🔵 colmat 2.58× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n513/b1 [api-inclusive]` | 6.19432 ± 0.00694046 (W 0.00966658) | 10.6132 ± 0.0413492 (W 0.0178314) | - | 🔵 colmat 1.71× faster than `faer` | - | `*` one row has no measurement here |
+| `lu/n255/b1` | 0.421964 ± 0.00226828 (W 0.0016438) | 0.71676 ± 0.00454992 (W 0.0117908) | - | 🔵 colmat 1.70× faster than `faer` | - | `*` one row has no measurement here |
+| `lu/n255/b1 [api-inclusive]` | 0.895246 ± 0.00385518 (W 0.00255917) | 0.73639 ± 0.00359504 (W 0.00713277) | - | 🔴 colmat 1.22× slower than `faer` | - | `*` one row has no measurement here |
+| `lu/n257/b1` | 0.404609 ± 0.000986704 (W 0.00233719) | 0.71822 ± 0.0122542 (W 0.0153884) | - | 🔵 colmat 1.78× faster than `faer` | - | `*` one row has no measurement here |
+| `lu/n257/b1 [api-inclusive]` | 0.896196 ± 0.00201043 (W 0.00271512) | 0.626473 ± 0.00959896 (W 0.00967549) | - | 🔴 colmat 1.43× slower than `faer` | - | `*` one row has no measurement here |
+| `lu/n511/b1` | 1.46739 ± 0.00868742 (W 0.00412782) | 2.68518 ± 0.0106148 (W 0.0267975) | - | 🔵 colmat 1.83× faster than `faer` | - | `*` one row has no measurement here |
+| `lu/n511/b1 [api-inclusive]` | 3.63646 ± 0.0153636 (W 0.00462897) | 2.63033 ± 0.0220156 (W 0.0185235) | - | 🔴 colmat 1.38× slower than `faer` | - | `*` one row has no measurement here |
+| `lu/n513/b1` | 1.53889 ± 0.00304999 (W 0.00413207) | 2.72127 ± 0.0199826 (W 0.0332718) | - | 🔵 colmat 1.77× faster than `faer` | - | `*` one row has no measurement here |
+| `lu/n513/b1 [api-inclusive]` | 3.61654 ± 0.00624848 (W 0.00428964) | 2.41651 ± 0.00989858 (W 0.027181) | - | 🔴 colmat 1.50× slower than `faer` | - | `*` one row has no measurement here |
+| `qr/n255/b1` | 1.10857 ± 0.00441569 (W 0.00187577) | 2.73785 ± 0.00449566 (W 0.0155209) | - | 🔵 colmat 2.47× faster than `faer` | - | `*` one row has no measurement here |
+| `qr/n255/b1 [api-inclusive]` | 1.8767 ± 0.00444025 (W 0.00311416) | 2.26658 ± 0.0172088 (W 0.00975423) | - | 🔵 colmat 1.21× faster than `faer` | - | `*` one row has no measurement here |
+| `qr/n257/b1` | 1.15635 ± 0.00896983 (W 0.00304666) | 2.78931 ± 0.0192025 (W 0.0118641) | - | 🔵 colmat 2.41× faster than `faer` | - | `*` one row has no measurement here |
+| `qr/n257/b1 [api-inclusive]` | 1.91017 ± 0.0115073 (W 0.00748811) | 2.69656 ± 5.80034 (W 0.262231) | - | · | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr/n511/b1` | 4.48442 ± 0.0114485 (W 0.00632204) | 11.0936 ± 0.0842793 (W 0.0785046) | - | 🔵 colmat 2.47× faster than `faer` | - | `*` one row has no measurement here |
+| `qr/n511/b1 [api-inclusive]` | 7.55192 ± 0.048566 (W 0.0161485) | 8.87523 ± 0.394269 (W 1.05884) | - | 🔵 colmat 1.18× faster than `faer` (marginal: spread 0.80 of the difference) | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr/n513/b1` | 4.94529 ± 0.00170224 (W 0.0118313) | 11.0259 ± 0.00941191 (W 0.0954714) | - | 🔵 colmat 2.23× faster than `faer` | - | `*` one row has no measurement here |
+| `qr/n513/b1 [api-inclusive]` | 7.9162 ± 0.0235003 (W 0.0149985) | 10.1761 ± 1.02407 (W 0.859601) | - | 🔵 colmat 1.29× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr_factor/n255/b1` | 0.779699 ± 0.00612157 (W 0.00114678) | 2.14385 ± 0.00321589 (W 0.011341) | - | 🔵 colmat 2.75× faster than `faer` | - | `*` one row has no measurement here |
+| `qr_factor/n257/b1` | 0.803008 ± 0.00231157 (W 0.00180412) | 2.1725 ± 0.00548943 (W 0.0126411) | - | 🔵 colmat 2.71× faster than `faer` | - | `*` one row has no measurement here |
+| `qr_factor/n511/b1` | 2.40732 ± 0.00578367 (W 0.00360054) | 7.92084 ± 0.0255898 (W 0.030356) | - | 🔵 colmat 3.29× faster than `faer` | - | `*` one row has no measurement here |
+| `qr_factor/n513/b1` | 2.80094 ± 0.0142656 (W 0.00640733) | 7.88141 ± 0.0569349 (W 0.1028) | - | 🔵 colmat 2.81× faster than `faer` | - | `*` one row has no measurement here |
+| `solve/n255/b1` | 0.369098 ± 0.00126148 (W 0.00490603) | 0.714071 ± 0.130231 (W 0.0132505) | - | 🔵 colmat 1.93× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `solve/n255/b1 [api-inclusive]` | 0.897815 ± 0.000915926 (W 0.0025711) | 0.645981 ± 0.00260167 (W 0.00852476) | - | 🔴 colmat 1.39× slower than `faer` | - | `*` one row has no measurement here |
+| `solve/n257/b1` | 0.394969 ± 0.000991263 (W 0.00287243) | 0.707601 ± 0.00156251 (W 0.0179211) | - | 🔵 colmat 1.79× faster than `faer` | - | `*` one row has no measurement here |
+| `solve/n257/b1 [api-inclusive]` | 0.895435 ± 0.00580766 (W 0.00398287) | 0.613033 ± 0.00718445 (W 0.00758179) | - | 🔴 colmat 1.46× slower than `faer` | - | `*` one row has no measurement here |
+| `solve/n511/b1` | 1.43231 ± 0.00742815 (W 0.00519156) | 2.71913 ± 0.00379445 (W 0.0276868) | - | 🔵 colmat 1.90× faster than `faer` | - | `*` one row has no measurement here |
+| `solve/n511/b1 [api-inclusive]` | 3.60762 ± 0.0204751 (W 0.00776007) | 2.47204 ± 0.00609686 (W 0.016692) | - | 🔴 colmat 1.46× slower than `faer` | - | `*` one row has no measurement here |
+| `solve/n513/b1` | 1.49827 ± 0.00604553 (W 0.0048385) | 2.74825 ± 0.0248411 (W 0.027122) | - | 🔵 colmat 1.83× faster than `faer` | - | `*` one row has no measurement here |
+| `solve/n513/b1 [api-inclusive]` | 3.64209 ± 0.0103166 (W 0.00703525) | 2.37207 ± 0.0207987 (W 0.0341496) | - | 🔴 colmat 1.54× slower than `faer` | - | `*` one row has no measurement here |
+| `svd_thin/n255/b1` | 6.14565 ± 0.0253679 (W 0.00757727) | 13.7181 ± 0.10548 (W 0.0239759) | - | 🔵 colmat 2.23× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_thin/n255/b1 [api-inclusive]` | 6.17965 ± 0.00876649 (W 0.00920275) | 13.9318 ± 0.387342 (W 4.8948) | - | 🔵 colmat 2.25× faster than `faer` (marginal: spread 0.63 of the difference) | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_thin/n257/b1` | 6.28132 ± 0.00328346 (W 0.0061537) | 10.3492 ± 0.0250015 (W 0.0161476) | - | 🔵 colmat 1.65× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_thin/n257/b1 [api-inclusive]` | 6.34341 ± 0.0159005 (W 0.0051493) | 10.3807 ± 0.185531 (W 0.0173421) | - | 🔵 colmat 1.64× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_thin/n511/b1` | 27.4136 ± 0.0950117 (W 0.0417233) | 45.8611 ± 1.24363 (W 1.02365) | - | 🔵 colmat 1.67× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_thin/n511/b1 [api-inclusive]` | 27.4189 ± 0.128665 (W 0.0319869) | 45.0305 ± 0.0654144 (W 0.178787) | - | 🔵 colmat 1.64× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_thin/n513/b1` | 27.5732 ± 0.0687947 (W 0.0426281) | 36.0717 ± 0.25094 (W 0.188029) | - | 🔵 colmat 1.31× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_thin/n513/b1 [api-inclusive]` | 27.8041 ± 0.152208 (W 0.0375376) | 36.0489 ± 0.110898 (W 0.129551) | - | 🔵 colmat 1.30× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n255/b1` | 3.51308 ± 0.00748152 (W 0.00691394) | 11.2821 ± 0.163679 (W 0.0231064) | - | 🔵 colmat 3.21× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n255/b1 [api-inclusive]` | 3.50795 ± 0.00416908 (W 0.00462831) | 11.2729 ± 0.106126 (W 0.0242487) | - | 🔵 colmat 3.21× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n257/b1` | 3.6165 ± 0.0187921 (W 0.00591588) | 8.87645 ± 0.213839 (W 0.0154594) | - | 🔵 colmat 2.45× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n257/b1 [api-inclusive]` | 3.60344 ± 0.0155933 (W 0.00759536) | 8.50484 ± 0.0227218 (W 0.0071446) | - | 🔵 colmat 2.36× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n511/b1` | 15.379 ± 0.052969 (W 0.0302778) | 34.0883 ± 0.1637 (W 0.0503325) | - | 🔵 colmat 2.22× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n511/b1 [api-inclusive]` | 15.5993 ± 0.138493 (W 0.0132914) | 33.9914 ± 0.163727 (W 0.0513518) | - | 🔵 colmat 2.18× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n513/b1` | 15.785 ± 0.109526 (W 0.0231909) | 26.2359 ± 0.159394 (W 0.0133899) | - | 🔵 colmat 1.66× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n513/b1 [api-inclusive]` | 15.8094 ± 0.0648627 (W 0.0322311) | 25.9929 ± 0.136351 (W 0.0409291) | - | 🔵 colmat 1.64× faster than `faer` | - | `*` one row has no measurement here |
+| `triangular_solve/n255/b1` | 0.01421 ± 0.000176012 (W 0.00012614) | 0.015429 ± 0.000133167 (W 9.56556e-05) | 0.017609 ± 0.000459282 (W 8.4322e-05) | 🔵 colmat 1.09× faster than `faer` | 🔵 colmat 1.24× faster than `lapack-mkl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `triangular_solve/n257/b1` | 0.01363 ± 9.32577e-05 (W 6.0649e-05) | 0.015149 ± 7.55447e-05 (W 5.81378e-05) | 0.017249 ± 0.000103684 (W 8.34865e-05) | 🔵 colmat 1.11× faster than `faer` | 🔵 colmat 1.27× faster than `lapack-mkl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n511/b1` | 0.034069 ± 0.000354171 (W 0.000143701) | 0.059316 ± 0.000210616 (W 0.00023194) | 0.063388 ± 0.00283941 (W 0.000257626) | 🔵 colmat 1.74× faster than `faer` | 🔵 colmat 1.86× faster than `lapack-mkl` | `!` between-start range over 5% |
+| `triangular_solve/n513/b1` | 0.032849 ± 0.000675093 (W 0.000141199) | 0.038659 ± 0.000420311 (W 0.000341218) | 0.064048 ± 4.42869e-05 (W 0.000196222) | 🔵 colmat 1.18× faster than `faer` | 🔵 colmat 1.95× faster than `lapack-mkl` |  |
+
+## linalg-boundary, c64, f order, 4T (CPU 0-3)
+
+| case | colmat (ms) | faer (ms) | lapack-mkl (ms) | vs `faer` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `cholesky/n255/b1` | 0.234904 ± 0.00210469 (W 0.00138189) | 0.348326 ± 0.00171119 (W 0.004919) | 0.29179 ± 0.00344359 (W 0.00561921) | 🔵 colmat 1.48× faster than `faer` | 🔵 colmat 1.24× faster than `lapack-mkl` |  |
+| `cholesky/n255/b1 [api-inclusive]` | 0.29385 ± 0.00155072 (W 0.00101606) | 0.419239 ± 0.00296144 (W 0.00627684) | - | 🔵 colmat 1.43× faster than `faer` | - | `*` one row has no measurement here |
+| `cholesky/n257/b1` | 0.213424 ± 0.000112073 (W 0.00112974) | 0.332661 ± 0.00238099 (W 0.00513905) | 0.304591 ± 0.00234226 (W 0.00301901) | 🔵 colmat 1.56× faster than `faer` | 🔵 colmat 1.43× faster than `lapack-mkl` |  |
+| `cholesky/n257/b1 [api-inclusive]` | 0.270871 ± 0.00245337 (W 0.00168411) | 0.37607 ± 0.00205921 (W 0.00701009) | - | 🔵 colmat 1.39× faster than `faer` | - | `*` one row has no measurement here |
+| `cholesky/n511/b1` | 0.955184 ± 0.002255 (W 0.00283082) | 1.25278 ± 0.0541081 (W 0.0624975) | 1.63138 ± 0.00199643 (W 0.00889359) | 🔵 colmat 1.31× faster than `faer` | 🔵 colmat 1.71× faster than `lapack-mkl` | `!` between-start range over 5% |
+| `cholesky/n511/b1 [api-inclusive]` | 1.12466 ± 0.0184599 (W 0.00235546) | 1.43019 ± 0.0115729 (W 0.0449903) | - | 🔵 colmat 1.27× faster than `faer` | - | `*` one row has no measurement here |
+| `cholesky/n513/b1` | 0.932225 ± 0.00122107 (W 0.00392066) | 1.21331 ± 0.0133269 (W 0.0463154) | 1.68606 ± 0.0049415 (W 0.00710848) | 🔵 colmat 1.30× faster than `faer` | 🔵 colmat 1.81× faster than `lapack-mkl` |  |
+| `cholesky/n513/b1 [api-inclusive]` | 1.07988 ± 0.00422748 (W 0.00226669) | 1.34704 ± 0.0116784 (W 0.0538489) | - | 🔵 colmat 1.25× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n255/b1` | 3.26066 ± 0.00191916 (W 0.0051632) | 7.2016 ± 0.034211 (W 0.0144801) | 5.88425 ± 0.005324 (W 0.00707017) | 🔵 colmat 2.21× faster than `faer` | 🔵 colmat 1.80× faster than `lapack-mkl` |  |
+| `eigh/n255/b1 [api-inclusive]` | 3.27801 ± 0.00705734 (W 0.00972274) | 7.20899 ± 0.0252059 (W 0.0068289) | - | 🔵 colmat 2.20× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n257/b1` | 3.27656 ± 0.00189284 (W 0.00499563) | 7.09001 ± 0.00610837 (W 0.00477584) | 5.97214 ± 0.00132627 (W 0.0085001) | 🔵 colmat 2.16× faster than `faer` | 🔵 colmat 1.82× faster than `lapack-mkl` |  |
+| `eigh/n257/b1 [api-inclusive]` | 3.30024 ± 0.00664634 (W 0.00841601) | 7.10157 ± 0.00829604 (W 0.00867827) | - | 🔵 colmat 2.15× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n511/b1` | 16.5 ± 0.0422576 (W 0.0155485) | 25.9212 ± 0.0436436 (W 0.0209747) | 29.903 ± 0.0365931 (W 0.0254886) | 🔵 colmat 1.57× faster than `faer` | 🔵 colmat 1.81× faster than `lapack-mkl` |  |
+| `eigh/n511/b1 [api-inclusive]` | 16.532 ± 0.0415438 (W 0.0195544) | 25.9245 ± 0.0237614 (W 0.0204345) | - | 🔵 colmat 1.57× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n513/b1` | 16.4194 ± 0.0222787 (W 0.00870741) | 25.8962 ± 0.0228962 (W 0.0212725) | 30.0233 ± 0.0376028 (W 0.0294855) | 🔵 colmat 1.58× faster than `faer` | 🔵 colmat 1.83× faster than `lapack-mkl` |  |
+| `eigh/n513/b1 [api-inclusive]` | 16.4382 ± 0.0167356 (W 0.0112189) | 25.8864 ± 0.0311478 (W 0.0250236) | - | 🔵 colmat 1.57× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n255/b1` | 1.10569 ± 0.00523102 (W 0.00377496) | 2.7738 ± 0.00783649 (W 0.00431081) | 5.46808 ± 0.0114717 (W 0.0061469) | 🔵 colmat 2.51× faster than `faer` | 🔵 colmat 4.95× faster than `lapack-mkl` |  |
+| `full_piv_lu/n255/b1 [api-inclusive]` | 1.51805 ± 0.00483065 (W 0.0036708) | 3.83412 ± 0.0512201 (W 0.00379377) | - | 🔵 colmat 2.53× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n257/b1` | 1.11682 ± 0.0071397 (W 0.00387685) | 2.88209 ± 0.0219773 (W 0.00254473) | 5.61039 ± 0.0148695 (W 0.00918544) | 🔵 colmat 2.58× faster than `faer` | 🔵 colmat 5.02× faster than `lapack-mkl` |  |
+| `full_piv_lu/n257/b1 [api-inclusive]` | 1.55816 ± 0.0107121 (W 0.00284603) | 2.88487 ± 0.0164048 (W 0.0044348) | - | 🔵 colmat 1.85× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n511/b1` | 6.52854 ± 0.0173183 (W 0.00641078) | 12.2712 ± 0.02746 (W 0.0249318) | 43.9224 ± 0.0857281 (W 0.0240075) | 🔵 colmat 1.88× faster than `faer` | 🔵 colmat 6.73× faster than `lapack-mkl` |  |
+| `full_piv_lu/n511/b1 [api-inclusive]` | 8.18289 ± 0.0383882 (W 0.010284) | 16.2437 ± 0.0250397 (W 0.0205984) | - | 🔵 colmat 1.99× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n513/b1` | 6.60675 ± 0.0416971 (W 0.00386581) | 12.4675 ± 0.0244639 (W 0.0133356) | 44.4717 ± 0.0327121 (W 0.0229368) | 🔵 colmat 1.89× faster than `faer` | 🔵 colmat 6.73× faster than `lapack-mkl` |  |
+| `full_piv_lu/n513/b1 [api-inclusive]` | 8.28394 ± 0.0472821 (W 0.0089091) | 12.1426 ± 0.021384 (W 0.0110716) | - | 🔵 colmat 1.47× faster than `faer` | - | `*` one row has no measurement here |
+| `lu/n255/b1` | 0.39119 ± 0.00160208 (W 0.00152621) | 0.603833 ± 0.00711025 (W 0.00967587) | 0.519776 ± 0.00178561 (W 0.00323174) | 🔵 colmat 1.54× faster than `faer` | 🔵 colmat 1.33× faster than `lapack-mkl` |  |
+| `lu/n255/b1 [api-inclusive]` | 0.847121 ± 0.00283541 (W 0.00287854) | 0.744648 ± 0.00818889 (W 0.00934961) | - | 🔴 colmat 1.14× slower than `faer` | - | `*` one row has no measurement here |
+| `lu/n257/b1` | 0.409039 ± 0.000516218 (W 0.00155583) | 0.606588 ± 0.009025 (W 0.0166032) | 0.540463 ± 0.00141775 (W 0.0024636) | 🔵 colmat 1.48× faster than `faer` | 🔵 colmat 1.32× faster than `lapack-mkl` |  |
+| `lu/n257/b1 [api-inclusive]` | 0.853687 ± 0.00103464 (W 0.00119103) | 0.673272 ± 0.0139848 (W 0.0199171) | - | 🔴 colmat 1.27× slower than `faer` | - | `*` one row has no measurement here |
+| `lu/n511/b1` | 1.87987 ± 0.00568532 (W 0.00174336) | 2.70032 ± 0.00439843 (W 0.0588907) | 3.19135 ± 0.00535184 (W 0.0128856) | 🔵 colmat 1.44× faster than `faer` | 🔵 colmat 1.70× faster than `lapack-mkl` |  |
+| `lu/n511/b1 [api-inclusive]` | 3.7691 ± 0.0237944 (W 0.00749422) | 3.12003 ± 0.0315113 (W 0.0507412) | - | 🔴 colmat 1.21× slower than `faer` | - | `*` one row has no measurement here |
+| `lu/n513/b1` | 1.95276 ± 0.00107896 (W 0.00551086) | 2.76348 ± 0.0482617 (W 0.0402442) | 3.25364 ± 0.00424132 (W 0.00785833) | 🔵 colmat 1.42× faster than `faer` | 🔵 colmat 1.67× faster than `lapack-mkl` |  |
+| `lu/n513/b1 [api-inclusive]` | 3.75319 ± 0.0251978 (W 0.00611285) | 2.95869 ± 0.0308932 (W 0.0537439) | - | 🔴 colmat 1.27× slower than `faer` | - | `*` one row has no measurement here |
+| `qr/n255/b1` | 1.38428 ± 0.00157323 (W 0.0015876) | 2.00862 ± 0.00404302 (W 0.00332824) | 2.62578 ± 0.00161676 (W 0.00608061) | 🔵 colmat 1.45× faster than `faer` | 🔵 colmat 1.90× faster than `lapack-mkl` |  |
+| `qr/n255/b1 [api-inclusive]` | 2.07576 ± 0.00329894 (W 0.00508513) | 2.67855 ± 0.0054701 (W 0.00595838) | - | 🔵 colmat 1.29× faster than `faer` | - | `*` one row has no measurement here |
+| `qr/n257/b1` | 1.41933 ± 0.00590346 (W 0.00259705) | 2.04243 ± 0.00698537 (W 0.00245173) | 2.69385 ± 0.00120392 (W 0.00789216) | 🔵 colmat 1.44× faster than `faer` | 🔵 colmat 1.90× faster than `lapack-mkl` |  |
+| `qr/n257/b1 [api-inclusive]` | 2.12046 ± 0.000481233 (W 0.00273772) | 2.73996 ± 0.00629373 (W 0.004717) | - | 🔵 colmat 1.29× faster than `faer` | - | `*` one row has no measurement here |
+| `qr/n511/b1` | 7.72412 ± 0.015176 (W 0.00625502) | 8.94367 ± 0.0347869 (W 0.0101822) | 16.5743 ± 0.012239 (W 0.0118531) | 🔵 colmat 1.16× faster than `faer` | 🔵 colmat 2.15× faster than `lapack-mkl` |  |
+| `qr/n511/b1 [api-inclusive]` | 10.4739 ± 0.0204401 (W 0.0153779) | 11.6919 ± 0.0341314 (W 0.0209847) | - | 🔵 colmat 1.12× faster than `faer` | - | `*` one row has no measurement here |
+| `qr/n513/b1` | 7.68165 ± 0.00720852 (W 0.0104419) | 8.99668 ± 0.00709505 (W 0.0104598) | 17.0716 ± 0.0315597 (W 0.0179045) | 🔵 colmat 1.17× faster than `faer` | 🔵 colmat 2.22× faster than `lapack-mkl` |  |
+| `qr/n513/b1 [api-inclusive]` | 10.305 ± 0.0442354 (W 0.00974217) | 10.9597 ± 0.465379 (W 0.329522) | - | 🔵 colmat 1.06× faster than `faer` (marginal: spread 0.78 of the difference) | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr_factor/n255/b1` | 0.796607 ± 0.0015358 (W 0.00175359) | 1.42334 ± 0.00132919 (W 0.00418774) | 1.00734 ± 0.00295433 (W 0.00324896) | 🔵 colmat 1.79× faster than `faer` | 🔵 colmat 1.26× faster than `lapack-mkl` |  |
+| `qr_factor/n257/b1` | 0.816068 ± 0.000763745 (W 0.00191061) | 1.44743 ± 0.00138847 (W 0.00351276) | 1.04145 ± 0.0019981 (W 0.00253424) | 🔵 colmat 1.77× faster than `faer` | 🔵 colmat 1.28× faster than `lapack-mkl` |  |
+| `qr_factor/n511/b1` | 3.87793 ± 0.00404619 (W 0.00328626) | 5.14705 ± 0.0216045 (W 0.00574322) | 6.94417 ± 0.00307262 (W 0.0117989) | 🔵 colmat 1.33× faster than `faer` | 🔵 colmat 1.79× faster than `lapack-mkl` |  |
+| `qr_factor/n513/b1` | 3.74229 ± 0.0137294 (W 0.00938294) | 5.05219 ± 0.00971005 (W 0.00784344) | 7.05934 ± 0.00638307 (W 0.00857004) | 🔵 colmat 1.35× faster than `faer` | 🔵 colmat 1.89× faster than `lapack-mkl` |  |
+| `solve/n255/b1` | 0.38524 ± 0.000168835 (W 0.0017131) | 0.595224 ± 0.00810827 (W 0.0108145) | 0.492706 ± 0.000751286 (W 0.0022122) | 🔵 colmat 1.55× faster than `faer` | 🔵 colmat 1.28× faster than `lapack-mkl` |  |
+| `solve/n255/b1 [api-inclusive]` | 0.841328 ± 0.00642286 (W 0.00246753) | 0.673244 ± 0.0120762 (W 0.0114145) | - | 🔴 colmat 1.25× slower than `faer` | - | `*` one row has no measurement here |
+| `solve/n257/b1` | 0.403323 ± 0.000774907 (W 0.0014927) | 0.625583 ± 0.00587301 (W 0.0141027) | 0.508836 ± 0.000365103 (W 0.00159989) | 🔵 colmat 1.55× faster than `faer` | 🔵 colmat 1.26× faster than `lapack-mkl` |  |
+| `solve/n257/b1 [api-inclusive]` | 0.856857 ± 0.00477597 (W 0.00352733) | 0.681692 ± 0.00838341 (W 0.0204934) | - | 🔴 colmat 1.26× slower than `faer` | - | `*` one row has no measurement here |
+| `solve/n511/b1` | 1.85359 ± 0.00392766 (W 0.00375858) | 2.76925 ± 0.0603298 (W 0.0681885) | 3.13239 ± 0.00452754 (W 0.007946) | 🔵 colmat 1.49× faster than `faer` | 🔵 colmat 1.69× faster than `lapack-mkl` |  |
+| `solve/n511/b1 [api-inclusive]` | 3.71661 ± 0.0183218 (W 0.00606493) | 3.02931 ± 0.050935 (W 0.0638616) | - | 🔴 colmat 1.23× slower than `faer` | - | `*` one row has no measurement here |
+| `solve/n513/b1` | 1.91233 ± 0.0051316 (W 0.00625108) | 2.7257 ± 0.0278616 (W 0.0611272) | 3.1839 ± 0.00212487 (W 0.00679489) | 🔵 colmat 1.43× faster than `faer` | 🔵 colmat 1.66× faster than `lapack-mkl` |  |
+| `solve/n513/b1 [api-inclusive]` | 3.75207 ± 0.00990899 (W 0.00551945) | 2.92436 ± 0.02177 (W 0.0837473) | - | 🔴 colmat 1.28× slower than `faer` | - | `*` one row has no measurement here |
+| `svd_thin/n255/b1` | 7.08838 ± 0.00343854 (W 0.0102959) | 13.7769 ± 0.0261024 (W 0.0163864) | 10.2072 ± 0.0307345 (W 0.0174136) | 🔵 colmat 1.94× faster than `faer` | 🔵 colmat 1.44× faster than `lapack-mkl` |  |
+| `svd_thin/n255/b1 [api-inclusive]` | 7.09871 ± 0.012555 (W 0.0110434) | 13.7163 ± 0.0337349 (W 0.0195054) | - | 🔵 colmat 1.93× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_thin/n257/b1` | 7.22083 ± 0.00353633 (W 0.00727677) | 10.509 ± 0.0822249 (W 0.0146136) | 10.4152 ± 0.00790035 (W 0.00951426) | 🔵 colmat 1.46× faster than `faer` | 🔵 colmat 1.44× faster than `lapack-mkl` |  |
+| `svd_thin/n257/b1 [api-inclusive]` | 7.26349 ± 0.0137676 (W 0.00688209) | 10.664 ± 0.0206283 (W 0.0135511) | - | 🔵 colmat 1.47× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_thin/n511/b1` | 35.7888 ± 0.0328016 (W 0.0729751) | 52.188 ± 0.694813 (W 0.113395) | 53.8466 ± 0.146831 (W 0.0454593) | 🔵 colmat 1.46× faster than `faer` | 🔵 colmat 1.50× faster than `lapack-mkl` |  |
+| `svd_thin/n511/b1 [api-inclusive]` | 35.9638 ± 0.0596586 (W 0.0439475) | 51.1814 ± 1.00977 (W 0.663029) | - | 🔵 colmat 1.42× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_thin/n513/b1` | 36.2372 ± 0.0944221 (W 0.06892) | 42.021 ± 0.0804123 (W 0.0544626) | 54.479 ± 0.110978 (W 0.109043) | 🔵 colmat 1.16× faster than `faer` | 🔵 colmat 1.50× faster than `lapack-mkl` |  |
+| `svd_thin/n513/b1 [api-inclusive]` | 36.4463 ± 0.141733 (W 0.0587641) | 42.2606 ± 0.0305058 (W 0.492617) | - | 🔵 colmat 1.16× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n255/b1` | 3.77775 ± 0.00152346 (W 0.0118827) | 11.1535 ± 0.0277335 (W 0.0112506) | 4.89393 ± 0.0204082 (W 0.00676764) | 🔵 colmat 2.95× faster than `faer` | 🔵 colmat 1.30× faster than `lapack-mkl` |  |
+| `svd_values/n255/b1 [api-inclusive]` | 3.77226 ± 0.00574723 (W 0.00927093) | 11.19 ± 0.0139185 (W 0.0166016) | - | 🔵 colmat 2.97× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n257/b1` | 3.89305 ± 0.0173282 (W 0.00905165) | 8.59152 ± 0.107562 (W 0.0149635) | 4.98494 ± 0.181899 (W 0.00592838) | 🔵 colmat 2.21× faster than `faer` | 🔵 colmat 1.28× faster than `lapack-mkl` | `!` between-start range over 5% |
+| `svd_values/n257/b1 [api-inclusive]` | 3.90447 ± 0.0041991 (W 0.00614098) | 8.77723 ± 0.00426172 (W 0.0285312) | - | 🔵 colmat 2.25× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n511/b1` | 19.6692 ± 0.0511071 (W 0.0161153) | 39.0548 ± 0.214737 (W 0.0395926) | 25.8864 ± 0.0987486 (W 0.0181718) | 🔵 colmat 1.99× faster than `faer` | 🔵 colmat 1.32× faster than `lapack-mkl` |  |
+| `svd_values/n511/b1 [api-inclusive]` | 19.6432 ± 0.0560609 (W 0.0329709) | 38.2657 ± 0.152686 (W 0.0390127) | - | 🔵 colmat 1.95× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n513/b1` | 19.6738 ± 0.197609 (W 0.034868) | 30.5383 ± 0.025051 (W 0.0219983) | 26.1524 ± 0.063553 (W 0.0151751) | 🔵 colmat 1.55× faster than `faer` | 🔵 colmat 1.33× faster than `lapack-mkl` |  |
+| `svd_values/n513/b1 [api-inclusive]` | 19.7982 ± 0.113247 (W 0.0110497) | 30.5294 ± 0.0198409 (W 0.0572188) | - | 🔵 colmat 1.54× faster than `faer` | - | `*` one row has no measurement here |
+| `triangular_solve/n255/b1` | 0.014099 ± 0.000190308 (W 0.000152155) | 0.016699 ± 0.000369022 (W 9.09907e-05) | 0.017609 ± 0.000103184 (W 7.46411e-05) | 🔵 colmat 1.18× faster than `faer` | 🔵 colmat 1.25× faster than `lapack-mkl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n257/b1` | 0.01373 ± 0.000289563 (W 6.91375e-05) | 0.016709 ± 0.000115902 (W 0.000116919) | 0.01766 ± 1.70392e-05 (W 3.1305e-05) | 🔵 colmat 1.22× faster than `faer` | 🔵 colmat 1.29× faster than `lapack-mkl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n511/b1` | 0.037699 ± 0.000747918 (W 0.000395638) | 0.060858 ± 0.000565033 (W 0.00167215) | 0.067028 ± 0.000197791 (W 0.00156096) | 🔵 colmat 1.61× faster than `faer` | 🔵 colmat 1.78× faster than `lapack-mkl` |  |
+| `triangular_solve/n513/b1` | 0.036748 ± 0.000281544 (W 0.0005158) | 0.045639 ± 0.0007064 (W 0.000211731) | 0.066396 ± 0.000246903 (W 0.0016309) | 🔵 colmat 1.24× faster than `faer` | 🔵 colmat 1.81× faster than `lapack-mkl` |  |
+
+## linalg-boundary, c64, f order, 8T (CPU 0-7)
+
+| case | colmat (ms) | faer (ms) | lapack-mkl (ms) | vs `faer` | vs `lapack-mkl` | notes |
+|---|---|---|---|---|---|---|
+| `cholesky/n255/b1` | 0.204795 ± 0.0017385 (W 0.00159628) | 0.35653 ± 0.00714573 (W 0.00980312) | 0.193825 ± 0.00256393 (W 0.00375234) | 🔵 colmat 1.74× faster than `faer` | 🔴 colmat 1.06× slower than `lapack-mkl` |  |
+| `cholesky/n255/b1 [api-inclusive]` | 0.271612 ± 0.000790237 (W 0.00165093) | 0.413878 ± 0.00354885 (W 0.00568211) | - | 🔵 colmat 1.52× faster than `faer` | - | `*` one row has no measurement here |
+| `cholesky/n257/b1` | 0.185395 ± 0.00128916 (W 0.00154849) | 0.339081 ± 0.00617537 (W 0.00553509) | 0.200014 ± 0.00278902 (W 0.00509063) | 🔵 colmat 1.83× faster than `faer` | 🔵 colmat 1.08× faster than `lapack-mkl` |  |
+| `cholesky/n257/b1 [api-inclusive]` | 0.243603 ± 0.00322749 (W 0.00153751) | 0.381667 ± 0.0131043 (W 0.0149292) | - | 🔵 colmat 1.57× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `cholesky/n511/b1` | 0.695221 ± 0.000867509 (W 0.00319396) | 1.00859 ± 0.0019782 (W 0.0138644) | 0.894346 ± 0.0103401 (W 0.0102749) | 🔵 colmat 1.45× faster than `faer` | 🔵 colmat 1.29× faster than `lapack-mkl` |  |
+| `cholesky/n511/b1 [api-inclusive]` | 0.873236 ± 0.00169459 (W 0.00183055) | 1.19812 ± 0.00514884 (W 0.0153351) | - | 🔵 colmat 1.37× faster than `faer` | - | `*` one row has no measurement here |
+| `cholesky/n513/b1` | 0.665292 ± 0.042841 (W 0.00313785) | 0.98023 ± 0.0163767 (W 0.0241154) | 0.930415 ± 0.00258936 (W 0.00474592) | 🔵 colmat 1.47× faster than `faer` | 🔵 colmat 1.40× faster than `lapack-mkl` | `!` between-start range over 5% |
+| `cholesky/n513/b1 [api-inclusive]` | 0.820168 ± 0.000633554 (W 0.00353015) | 1.1054 ± 0.0196056 (W 0.0185146) | - | 🔵 colmat 1.35× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n255/b1` | 2.32769 ± 0.00614416 (W 0.00253962) | 7.15244 ± 0.0113286 (W 0.0198222) | 4.70248 ± 0.0144155 (W 0.00762536) | 🔵 colmat 3.07× faster than `faer` | 🔵 colmat 2.02× faster than `lapack-mkl` |  |
+| `eigh/n255/b1 [api-inclusive]` | 2.34333 ± 0.00585046 (W 0.00458955) | 7.21812 ± 0.0264177 (W 0.0162254) | - | 🔵 colmat 3.08× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n257/b1` | 2.33347 ± 0.00383586 (W 0.00601477) | 7.07265 ± 0.0207257 (W 0.0123796) | 4.7694 ± 0.00634009 (W 0.00789486) | 🔵 colmat 3.03× faster than `faer` | 🔵 colmat 2.04× faster than `lapack-mkl` |  |
+| `eigh/n257/b1 [api-inclusive]` | 2.36577 ± 0.00466154 (W 0.00932882) | 7.1002 ± 0.0083262 (W 0.013092) | - | 🔵 colmat 3.00× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n511/b1` | 10.4713 ± 0.00359955 (W 0.00760965) | 23.0159 ± 0.0461583 (W 0.0826026) | 20.5747 ± 0.0093749 (W 0.0369105) | 🔵 colmat 2.20× faster than `faer` | 🔵 colmat 1.96× faster than `lapack-mkl` |  |
+| `eigh/n511/b1 [api-inclusive]` | 10.4825 ± 0.019597 (W 0.00798258) | 23.1682 ± 0.0591355 (W 0.308146) | - | 🔵 colmat 2.21× faster than `faer` | - | `*` one row has no measurement here |
+| `eigh/n513/b1` | 10.5187 ± 0.00115651 (W 0.010064) | 22.976 ± 0.0536849 (W 0.0830082) | 20.6611 ± 0.0416409 (W 0.0258836) | 🔵 colmat 2.18× faster than `faer` | 🔵 colmat 1.96× faster than `lapack-mkl` |  |
+| `eigh/n513/b1 [api-inclusive]` | 10.5866 ± 0.00368365 (W 0.0158458) | 23.0548 ± 0.0992946 (W 0.455504) | - | 🔵 colmat 2.18× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n255/b1` | 0.854106 ± 0.00801563 (W 0.00242287) | 2.78767 ± 0.014637 (W 0.00239624) | 5.46148 ± 0.00651751 (W 0.0084396) | 🔵 colmat 3.26× faster than `faer` | 🔵 colmat 6.39× faster than `lapack-mkl` |  |
+| `full_piv_lu/n255/b1 [api-inclusive]` | 1.27656 ± 0.0101939 (W 0.00256348) | 3.83225 ± 0.0137596 (W 0.00597881) | - | 🔵 colmat 3.00× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n257/b1` | 0.849007 ± 0.00778567 (W 0.00252598) | 2.86659 ± 0.0307434 (W 0.00283831) | 5.6446 ± 0.0258128 (W 0.0179753) | 🔵 colmat 3.38× faster than `faer` | 🔵 colmat 6.65× faster than `lapack-mkl` |  |
+| `full_piv_lu/n257/b1 [api-inclusive]` | 1.30147 ± 0.00777726 (W 0.00265952) | 2.88493 ± 0.0161871 (W 0.00517813) | - | 🔵 colmat 2.22× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n511/b1` | 4.00143 ± 0.0143936 (W 0.00707016) | 10.6839 ± 0.0248195 (W 0.0174142) | 44.1454 ± 0.115863 (W 0.0208357) | 🔵 colmat 2.67× faster than `faer` | 🔵 colmat 11.03× faster than `lapack-mkl` |  |
+| `full_piv_lu/n511/b1 [api-inclusive]` | 5.71632 ± 0.014524 (W 0.004401) | 14.6908 ± 0.0120068 (W 0.0259964) | - | 🔵 colmat 2.57× faster than `faer` | - | `*` one row has no measurement here |
+| `full_piv_lu/n513/b1` | 4.04992 ± 0.00858152 (W 0.0078749) | 10.8104 ± 0.0419301 (W 0.0908655) | 44.639 ± 0.0480702 (W 0.0385598) | 🔵 colmat 2.67× faster than `faer` | 🔵 colmat 11.02× faster than `lapack-mkl` |  |
+| `full_piv_lu/n513/b1 [api-inclusive]` | 5.76818 ± 0.0141287 (W 0.00975102) | 10.5453 ± 0.0335356 (W 0.0144263) | - | 🔵 colmat 1.83× faster than `faer` | - | `*` one row has no measurement here |
+| `lu/n255/b1` | 0.332961 ± 0.001536 (W 0.00216106) | 0.580664 ± 0.00224816 (W 0.00803304) | 0.369247 ± 0.00233809 (W 0.00280217) | 🔵 colmat 1.74× faster than `faer` | 🔵 colmat 1.11× faster than `lapack-mkl` |  |
+| `lu/n255/b1 [api-inclusive]` | 0.79607 ± 0.00157429 (W 0.00167668) | 0.732981 ± 0.00199985 (W 0.00843982) | - | 🔴 colmat 1.09× slower than `faer` | - | `*` one row has no measurement here |
+| `lu/n257/b1` | 0.346658 ± 0.000934956 (W 0.00195539) | 0.562595 ± 0.00300117 (W 0.008267) | 0.377189 ± 0.00195966 (W 0.00336441) | 🔵 colmat 1.62× faster than `faer` | 🔵 colmat 1.09× faster than `lapack-mkl` |  |
+| `lu/n257/b1 [api-inclusive]` | 0.796839 ± 0.0044243 (W 0.00153065) | 0.624663 ± 0.0051027 (W 0.00634195) | - | 🔴 colmat 1.28× slower than `faer` | - | `*` one row has no measurement here |
+| `lu/n511/b1` | 1.33798 ± 0.00486002 (W 0.00336033) | 2.17 ± 0.00368172 (W 0.0178751) | 1.78598 ± 0.00348373 (W 0.00544739) | 🔵 colmat 1.62× faster than `faer` | 🔵 colmat 1.33× faster than `lapack-mkl` |  |
+| `lu/n511/b1 [api-inclusive]` | 3.21265 ± 0.0284791 (W 0.00634547) | 2.61575 ± 0.0122851 (W 0.0158816) | - | 🔴 colmat 1.23× slower than `faer` | - | `*` one row has no measurement here |
+| `lu/n513/b1` | 1.39202 ± 0.00769204 (W 0.00341116) | 2.15058 ± 0.00815871 (W 0.0269575) | 1.79953 ± 0.0117495 (W 0.00445779) | 🔵 colmat 1.54× faster than `faer` | 🔵 colmat 1.29× faster than `lapack-mkl` |  |
+| `lu/n513/b1 [api-inclusive]` | 3.21092 ± 0.0149698 (W 0.00599382) | 2.38675 ± 0.00706862 (W 0.0262423) | - | 🔴 colmat 1.35× slower than `faer` | - | `*` one row has no measurement here |
+| `qr/n255/b1` | 1.06907 ± 0.00272589 (W 0.00184303) | 2.15035 ± 1.93605 (W 0.0200174) | 1.77364 ± 0.000741822 (W 0.00285909) | · | 🔵 colmat 1.66× faster than `lapack-mkl` | `!` between-start range over 5%; `p` position effect over 5% |
+| `qr/n255/b1 [api-inclusive]` | 1.77058 ± 0.00284568 (W 0.00656862) | 2.23177 ± 0.232998 (W 0.0161505) | - | 🔵 colmat 1.26× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr/n257/b1` | 1.09694 ± 0.00336925 (W 0.00430697) | 2.16833 ± 0.00679504 (W 0.0137697) | 1.85731 ± 0.00218441 (W 0.00625381) | 🔵 colmat 1.98× faster than `faer` | 🔵 colmat 1.69× faster than `lapack-mkl` |  |
+| `qr/n257/b1 [api-inclusive]` | 1.80032 ± 0.0107466 (W 0.00360502) | 2.44829 ± 0.209051 (W 0.154977) | - | 🔵 colmat 1.36× faster than `faer` | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr/n511/b1` | 4.33145 ± 0.00613921 (W 0.00756291) | 8.09699 ± 0.0200116 (W 0.0647541) | 8.52095 ± 0.0105574 (W 0.0110868) | 🔵 colmat 1.87× faster than `faer` | 🔵 colmat 1.97× faster than `lapack-mkl` |  |
+| `qr/n511/b1 [api-inclusive]` | 7.13443 ± 0.0318996 (W 0.0116586) | 10.8003 ± 3.89553 (W 0.455642) | - | · | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr/n513/b1` | 4.74464 ± 0.0128843 (W 0.00843183) | 8.04878 ± 0.0436248 (W 0.051907) | 8.79722 ± 0.0031245 (W 0.0128493) | 🔵 colmat 1.70× faster than `faer` | 🔵 colmat 1.85× faster than `lapack-mkl` |  |
+| `qr/n513/b1 [api-inclusive]` | 7.44015 ± 0.0144739 (W 0.00642187) | 8.4056 ± 9.7961 (W 0.257867) | - | · | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr_factor/n255/b1` | 0.73626 ± 0.00380915 (W 0.00242174) | 1.5755 ± 0.006373 (W 0.00514588) | 0.922555 ± 0.00243788 (W 0.0023693) | 🔵 colmat 2.14× faster than `faer` | 🔵 colmat 1.25× faster than `lapack-mkl` |  |
+| `qr_factor/n257/b1` | 0.75593 ± 0.0026525 (W 0.00202904) | 1.57701 ± 0.00899012 (W 0.00667224) | 0.953914 ± 0.00213475 (W 0.00362672) | 🔵 colmat 2.09× faster than `faer` | 🔵 colmat 1.26× faster than `lapack-mkl` |  |
+| `qr_factor/n511/b1` | 2.2941 ± 0.004772 (W 0.00421879) | 5.07266 ± 0.0149005 (W 0.0312591) | 3.53531 ± 0.014688 (W 0.0083034) | 🔵 colmat 2.21× faster than `faer` | 🔵 colmat 1.54× faster than `lapack-mkl` |  |
+| `qr_factor/n513/b1` | 2.66405 ± 0.00897546 (W 0.00468534) | 4.89815 ± 11.3119 (W 0.0491376) | 3.6044 ± 0.00653699 (W 0.00433505) | · | 🔵 colmat 1.35× faster than `lapack-mkl` | `!` between-start range over 5%; `p` position effect over 5% |
+| `solve/n255/b1` | 0.330191 ± 0.00211997 (W 0.00314073) | 0.558855 ± 0.00730889 (W 0.00861794) | 0.36242 ± 0.000873769 (W 0.00231404) | 🔵 colmat 1.69× faster than `faer` | 🔵 colmat 1.10× faster than `lapack-mkl` |  |
+| `solve/n255/b1 [api-inclusive]` | 0.801609 ± 0.00746208 (W 0.00662405) | 0.644032 ± 0.002754 (W 0.00720492) | - | 🔴 colmat 1.24× slower than `faer` | - | `*` one row has no measurement here |
+| `solve/n257/b1` | 0.343721 ± 0.000708974 (W 0.00186962) | 0.554255 ± 0.0039697 (W 0.0113291) | 0.3726 ± 0.000855858 (W 0.00235593) | 🔵 colmat 1.61× faster than `faer` | 🔵 colmat 1.08× faster than `lapack-mkl` |  |
+| `solve/n257/b1 [api-inclusive]` | 0.801041 ± 0.00277511 (W 0.00261105) | 0.619952 ± 0.00696834 (W 0.00777407) | - | 🔴 colmat 1.29× slower than `faer` | - | `*` one row has no measurement here |
+| `solve/n511/b1` | 1.3183 ± 0.000338721 (W 0.00378027) | 2.16407 ± 0.00892996 (W 0.0128132) | 1.76213 ± 0.00246061 (W 0.00627936) | 🔵 colmat 1.64× faster than `faer` | 🔵 colmat 1.34× faster than `lapack-mkl` |  |
+| `solve/n511/b1 [api-inclusive]` | 3.2092 ± 0.01101 (W 0.00504275) | 2.4683 ± 0.0251852 (W 0.0220606) | - | 🔴 colmat 1.30× slower than `faer` | - | `*` one row has no measurement here |
+| `solve/n513/b1` | 1.37136 ± 0.00280513 (W 0.00368499) | 2.14746 ± 0.0111087 (W 0.020407) | 1.79205 ± 0.00375715 (W 0.00405828) | 🔵 colmat 1.57× faster than `faer` | 🔵 colmat 1.31× faster than `lapack-mkl` |  |
+| `solve/n513/b1 [api-inclusive]` | 3.21569 ± 0.0193101 (W 0.0065734) | 2.37016 ± 0.0219687 (W 0.0248731) | - | 🔴 colmat 1.36× slower than `faer` | - | `*` one row has no measurement here |
+| `svd_thin/n255/b1` | 6.19055 ± 0.0187722 (W 0.00977112) | 13.7927 ± 0.069578 (W 0.0274815) | 7.77858 ± 0.0242908 (W 0.0204527) | 🔵 colmat 2.23× faster than `faer` | 🔵 colmat 1.26× faster than `lapack-mkl` |  |
+| `svd_thin/n255/b1 [api-inclusive]` | 6.20921 ± 0.0117475 (W 0.0134321) | 13.7113 ± 0.0793121 (W 0.135916) | - | 🔵 colmat 2.21× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_thin/n257/b1` | 6.29168 ± 0.00382973 (W 0.00570509) | 10.4328 ± 0.168431 (W 0.0177038) | 7.95986 ± 0.016863 (W 0.0209137) | 🔵 colmat 1.66× faster than `faer` | 🔵 colmat 1.27× faster than `lapack-mkl` |  |
+| `svd_thin/n257/b1 [api-inclusive]` | 6.32482 ± 0.00603061 (W 0.0113302) | 10.4666 ± 0.14096 (W 0.0544327) | - | 🔵 colmat 1.65× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_thin/n511/b1` | 27.184 ± 0.156709 (W 0.0323618) | 46.8629 ± 0.856863 (W 0.179668) | 35.5199 ± 0.155052 (W 0.0778758) | 🔵 colmat 1.72× faster than `faer` | 🔵 colmat 1.31× faster than `lapack-mkl` |  |
+| `svd_thin/n511/b1 [api-inclusive]` | 27.4423 ± 0.0597904 (W 0.0345806) | 45.3203 ± 0.648715 (W 0.113304) | - | 🔵 colmat 1.65× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_thin/n513/b1` | 27.58 ± 0.0682152 (W 0.0343719) | 35.6524 ± 0.0926098 (W 0.174052) | 36.0792 ± 0.0248155 (W 0.0394514) | 🔵 colmat 1.29× faster than `faer` | 🔵 colmat 1.31× faster than `lapack-mkl` |  |
+| `svd_thin/n513/b1 [api-inclusive]` | 27.6972 ± 0.115766 (W 0.050251) | 36.0242 ± 0.0527084 (W 0.171375) | - | 🔵 colmat 1.30× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n255/b1` | 3.52446 ± 0.00833749 (W 0.00568754) | 11.3247 ± 0.0843476 (W 0.0221368) | 3.94733 ± 0.00564905 (W 0.00736863) | 🔵 colmat 3.21× faster than `faer` | 🔵 colmat 1.12× faster than `lapack-mkl` |  |
+| `svd_values/n255/b1 [api-inclusive]` | 3.51546 ± 0.00848644 (W 0.00401515) | 11.2964 ± 0.0247142 (W 0.0237676) | - | 🔵 colmat 3.21× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n257/b1` | 3.61548 ± 0.01514 (W 0.00866358) | 8.59491 ± 0.192122 (W 0.00973887) | 4.02382 ± 0.00404062 (W 0.0047371) | 🔵 colmat 2.38× faster than `faer` | 🔵 colmat 1.11× faster than `lapack-mkl` |  |
+| `svd_values/n257/b1 [api-inclusive]` | 3.62083 ± 0.0159069 (W 0.00478313) | 8.56856 ± 0.187419 (W 0.00771695) | - | 🔵 colmat 2.37× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n511/b1` | 15.5749 ± 0.088998 (W 0.0193158) | 33.878 ± 0.415337 (W 0.0488616) | 17.6696 ± 0.0382958 (W 0.0170219) | 🔵 colmat 2.18× faster than `faer` | 🔵 colmat 1.13× faster than `lapack-mkl` |  |
+| `svd_values/n511/b1 [api-inclusive]` | 15.5663 ± 0.0304077 (W 0.0181326) | 33.953 ± 0.0410519 (W 0.0300629) | - | 🔵 colmat 2.18× faster than `faer` | - | `*` one row has no measurement here |
+| `svd_values/n513/b1` | 15.6608 ± 0.0864498 (W 0.0177425) | 26.3203 ± 0.0440607 (W 0.0177978) | 17.9446 ± 0.0573077 (W 0.0315808) | 🔵 colmat 1.68× faster than `faer` | 🔵 colmat 1.15× faster than `lapack-mkl` |  |
+| `svd_values/n513/b1 [api-inclusive]` | 15.8107 ± 0.0973225 (W 0.0145413) | 26.2673 ± 0.0281348 (W 0.0249615) | - | 🔵 colmat 1.66× faster than `faer` | - | `*` one row has no measurement here |
+| `triangular_solve/n255/b1` | 0.01449 ± 0.000100732 (W 0.000140641) | 0.016619 ± 0.000168573 (W 7.36206e-05) | 0.01776 ± 0.000210017 (W 5.32663e-05) | 🔵 colmat 1.15× faster than `faer` | 🔵 colmat 1.23× faster than `lapack-mkl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n257/b1` | 0.013889 ± 7.05715e-05 (W 0.00010429) | 0.016559 ± 8.14269e-05 (W 5.86711e-05) | 0.017729 ± 5.17397e-05 (W 7.695e-05) | 🔵 colmat 1.19× faster than `faer` | 🔵 colmat 1.28× faster than `lapack-mkl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n511/b1` | 0.037889 ± 0.000251293 (W 0.000160842) | 0.061108 ± 0.000353924 (W 0.000428388) | 0.066796 ± 0.000281605 (W 0.000123369) | 🔵 colmat 1.61× faster than `faer` | 🔵 colmat 1.76× faster than `lapack-mkl` |  |
+| `triangular_solve/n513/b1` | 0.037079 ± 0.000429384 (W 0.00025501) | 0.042619 ± 0.00064825 (W 0.000383838) | 0.066416 ± 0.000303187 (W 0.000276055) | 🔵 colmat 1.15× faster than `faer` | 🔵 colmat 1.79× faster than `lapack-mkl` |  |
+
+Not applicable to this population's shapes and reported as skipped: `cholesky/255`, `cholesky/257`, `cholesky/511`, `cholesky/513`, `eigh/255`, `eigh/257`, `eigh/511`, `eigh/513`, `full_piv_lu/255`, `full_piv_lu/257`, `full_piv_lu/511`, `full_piv_lu/513`, `lu/255`, `lu/257`, `lu/511`, `lu/513`, `qr/255`, `qr/257`, `qr/511`, `qr/513`, `qr_factor/255`, `qr_factor/257`, `qr_factor/511`, `qr_factor/513`, `solve/255`, `solve/257`, `solve/511`, `solve/513`, `svd_thin/255`, `svd_thin/257`, `svd_thin/511`, `svd_thin/513`, `svd_values/255`, `svd_values/257`, `svd_values/511`, `svd_values/513`.
+
+Repeated process sets describe observed repeatability under the recorded order schedule; they are not a paired baseline/candidate experiment and do not establish equal performance between engines.

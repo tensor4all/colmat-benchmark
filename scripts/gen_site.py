@@ -21,7 +21,8 @@ numbers are made, and each machine's provenance and run pages, folded. Every num
 from `family_matrix.py` (`by_vendor` and `tally`); the machines are whatever the data recorded, not
 a list kept here. What is also this campaign's own is the four-way view: the MKL and
 OpenBLAS arms (and, on AMD profiles once recorded, the AOCL arm) of the current `colmat-kernels` pages joined on the cell key by `gen_comparison.py`,
-written to `result/zen5-cpu/colmat-kernels/<rev12>-comparison.html` and linked from the landing page.
+written to `result/<profile>/colmat-kernels/<rev12>-comparison.html` under the profile those pages were
+recorded on (`publication_profile`), and linked from that machine's section of the landing page.
 
 The site is not written when the pin has no current recording (`campaign_toolkit.pin_recorded`,
 the same rule as `gen_index --check`): a landing page that says nothing is recorded at the pin while
@@ -48,7 +49,10 @@ import gen_comparison  # noqa: E402
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 PIN = 'pins/colmat.rev'
 SUITE = 'colmat-kernels'
-# The profile the published charts, the joined view and the provenance notes below describe.
+# The historical development host: its pages carry the provenance notes of their own recording
+# (the reserved-host role, the excluded wrong-pin partial). Which machine the charts and the joined
+# view describe is not this constant but `publication_profile`: since #129 the measurement host is
+# evo2 (`evo2-zen5-16c`), and zen5-cpu's pages are history at the earlier pin.
 ZEN5 = 'zen5-cpu'
 # Read from the current arms' manifests, not restated here: a constant outlived the last
 # publication (harness commit, toolkit commit, vendor kernel, coverage) and the reader had no
@@ -87,6 +91,18 @@ def current_arms():
     return arms, control
 
 
+def publication_profile(arms):
+    """The profile the current `colmat-kernels` arms were recorded on, or None without one.
+
+    The joined view, the throughput charts and the suite's stated limitation describe these runs,
+    so they belong to that machine's section. It is read from where the runs are filed
+    (`data/results/<profile>/...`), not kept as a constant: a constant outlived the move of the
+    publication from zen5-cpu to evo2 (#129).
+    """
+    owners = {pathlib.Path(d).parent.parent.name for d in arms.values()}  # <profile>/<suite>/<run>
+    return next(iter(owners)) if len(owners) == 1 else None
+
+
 def write_comparison():
     """Write the four-way view under its measured revision.
 
@@ -103,7 +119,7 @@ def write_comparison():
     if 'mkl' not in arms or 'openblas' not in arms:
         return None, None
     rev = load(arms['mkl'] / 'run.yaml')['library']['commit'][:12]
-    out = ROOT / 'result' / 'zen5-cpu' / SUITE / f'{rev}-comparison.html'
+    out = ROOT / 'result' / (publication_profile(arms) or '') / SUITE / f'{rev}-comparison.html'
     argv = ['--mkl', str(arms['mkl']), '--openblas', str(arms['openblas']), '--out', str(out)]
     if control is not None:
         argv += ['--control-mkl', str(control)]
@@ -781,7 +797,10 @@ def trend_html(trend):
             f'<details><summary class="sm">table: the plotted numbers</summary><div class="matrix-wrap">{table}'
             f'</div><p class="sm"><a href="{html.escape(f["data"].relative_to(root).as_posix())}">'
             'as Markdown</a></p></details>\n')
-    return ('<details><summary>Representative cases across pins (time, zen5-cpu)</summary>\n'
+    # The trend joins a column only within one profile and power state, so it carries the earlier
+    # machine's pins beside the current one's; naming a single machine here would mislabel them.
+    return ('<details><summary>Representative cases across pins (time; one line per machine and '
+            'power state)</summary>\n'
             + ''.join(items) + '</details>\n')
 
 
@@ -929,18 +948,15 @@ def main(argv=None):
     # belong to the machine those runs were recorded on, and only that machine links to them. A
     # second machine with a charted suite gets its own recorded pages until it has its own charts,
     # instead of a link to another machine's (#114).
-    results = ROOT / 'data' / 'results'
-    owners = {pathlib.Path(d).resolve().relative_to(results.resolve()).parts[0] for d in arms.values()}
-    charted = {a.profile for m in machines for a in m['arms'] if a.suite in chart_suites} & owners
-    if len(owners) != 1:
-        charted = set()
+    published = publication_profile(arms)
+    charted = {a.profile for m in machines for a in m['arms'] if a.suite in chart_suites} & {published}
     first_page = next(iter(chart_pages.values()), None)
     chart_href = {p: first_page.name for p in charted} if first_page else {}
 
     provenance = []
     for m in machines:
         notices, comparison_link = [], None
-        if m['profile'] == ZEN5:
+        if m['profile'] == published:
             if comparison is not None:
                 n_cells = len(re.findall(r'<tr><td class="k">', comparison.read_text()))
                 comparison_link = (f'<a href="{comparison.relative_to(index.parent)}">joined comparison</a>'

@@ -1,0 +1,401 @@
+regime,family,dtype,order,m,n,k,batch,row,threads,total_ms,per_item_us,status,note,samples_ms,rayon_threads,vendor_threads,profile
+linalg-wide,lu,f64,c,64,1024,,1,lapack-aocl,4,,,skipped,"lu in c order has no vendor route that leaves the clock free of allocation and layout conversion: LAPACKE's row-major path allocates a transposed copy and transposes in and out of it inside the call. The vendor row is measured in f order, where both arms run column-major",,4,4,evo2-zen5-16c
+linalg-wide,lu,f64,c,64,1024,,1,colmat,4,0.145126,145.126000,ok,api-inclusive,"[0.14507699999999998, 0.144496, 0.145286, 0.145126, 0.145196]",4,4,evo2-zen5-16c
+linalg-wide,lu,f64,c,64,1024,,1,colmat,4,0.078028,78.028000,ok,,"[0.078958, 0.078028, 0.077798, 0.078098, 0.077828]",4,4,evo2-zen5-16c
+linalg-wide,lu,f64,f,64,1024,,1,lapack-aocl,4,0.064668,64.668000,ok,,"[0.065188, 0.06458799999999999, 0.064438, 0.06526799999999999, 0.064668]",4,4,evo2-zen5-16c
+linalg-wide,lu,f64,f,64,1024,,1,colmat,4,0.071058,71.058000,ok,api-inclusive,"[0.071478, 0.070998, 0.070898, 0.071058, 0.07119800000000001]",4,4,evo2-zen5-16c
+linalg-wide,lu,f64,f,64,1024,,1,colmat,4,0.057789,57.789000,ok,,"[0.057739, 0.057568, 0.058137999999999995, 0.057789, 0.057849000000000005]",4,4,evo2-zen5-16c
+linalg-wide,lu,f64,c,256,4096,,1,lapack-aocl,4,,,skipped,"lu in c order has no vendor route that leaves the clock free of allocation and layout conversion: LAPACKE's row-major path allocates a transposed copy and transposes in and out of it inside the call. The vendor row is measured in f order, where both arms run column-major",,4,4,evo2-zen5-16c
+linalg-wide,lu,f64,c,256,4096,,1,colmat,4,2.935223,2935.223000,ok,api-inclusive,"[2.9417229999999996, 2.9354530000000003, 2.931764, 2.9352229999999997, 2.917313]",4,4,evo2-zen5-16c
+linalg-wide,lu,f64,c,256,4096,,1,colmat,4,1.631547,1631.547000,ok,,"[1.628157, 1.635087, 1.6315469999999999, 1.630587, 1.634637]",4,4,evo2-zen5-16c
+linalg-wide,lu,f64,f,256,4096,,1,lapack-aocl,4,4.666648,4666.648000,ok,,"[4.680108, 4.6629380000000005, 4.6666479999999995, 4.674837, 4.666488]",4,4,evo2-zen5-16c
+linalg-wide,lu,f64,f,256,4096,,1,colmat,4,1.783044,1783.044000,ok,api-inclusive,"[1.7820340000000001, 1.786643, 1.788143, 1.7804929999999999, 1.7830439999999999]",4,4,evo2-zen5-16c
+linalg-wide,lu,f64,f,256,4096,,1,colmat,4,1.557909,1557.909000,ok,,"[1.555559, 1.5666689999999999, 1.55707, 1.564539, 1.557909]",4,4,evo2-zen5-16c
+linalg-wide,full_piv_lu,f64,c,64,1024,,1,lapack-aocl,4,,,skipped,"full_piv_lu in c order has no vendor route: ?getc2 is a Fortran routine with no row-major entry point (LAPACKE does not wrap it), so a row-major input would need a transposed copy inside the vendor's clock. The vendor row is measured in f order, where both arms run column-major",,4,4,evo2-zen5-16c
+linalg-wide,full_piv_lu,f64,c,64,1024,,1,colmat,4,0.364291,364.291000,ok,api-inclusive,"[0.368971, 0.36334, 0.364291, 0.36655, 0.362661]",4,4,evo2-zen5-16c
+linalg-wide,full_piv_lu,f64,c,64,1024,,1,colmat,4,0.230844,230.844000,ok,,"[0.230904, 0.228874, 0.230844, 0.23236400000000001, 0.229604]",4,4,evo2-zen5-16c
+linalg-wide,full_piv_lu,f64,f,64,1024,,1,lapack-aocl,4,,,skipped,"full_piv_lu has no vendor route for the non-square shape 64x1024: ?getc2, the only complete-pivoting LU LAPACK ships, is square only; the vendor row is skipped",,4,4,evo2-zen5-16c
+linalg-wide,full_piv_lu,f64,f,64,1024,,1,colmat,4,0.295842,295.842000,ok,api-inclusive,"[0.294703, 0.295842, 0.299572, 0.29575199999999996, 0.296213]",4,4,evo2-zen5-16c
+linalg-wide,full_piv_lu,f64,f,64,1024,,1,colmat,4,0.294903,294.903000,ok,,"[0.297603, 0.29484299999999997, 0.294803, 0.297543, 0.294903]",4,4,evo2-zen5-16c
+linalg-wide,full_piv_lu,f64,c,256,4096,,1,lapack-aocl,4,,,skipped,"full_piv_lu in c order has no vendor route: ?getc2 is a Fortran routine with no row-major entry point (LAPACKE does not wrap it), so a row-major input would need a transposed copy inside the vendor's clock. The vendor row is measured in f order, where both arms run column-major",,4,4,evo2-zen5-16c
+linalg-wide,full_piv_lu,f64,c,256,4096,,1,colmat,4,9.844082,9844.082000,ok,api-inclusive,"[9.838462, 9.837043, 9.857251, 9.844082, 9.849993]",4,4,evo2-zen5-16c
+linalg-wide,full_piv_lu,f64,c,256,4096,,1,colmat,4,8.181466,8181.466000,ok,,"[8.181466, 8.162626, 8.157556999999999, 8.210225, 8.185976]",4,4,evo2-zen5-16c
+linalg-wide,full_piv_lu,f64,f,256,4096,,1,lapack-aocl,4,,,skipped,"full_piv_lu has no vendor route for the non-square shape 256x4096: ?getc2, the only complete-pivoting LU LAPACK ships, is square only; the vendor row is skipped",,4,4,evo2-zen5-16c
+linalg-wide,full_piv_lu,f64,f,256,4096,,1,colmat,4,8.486227,8486.227000,ok,api-inclusive,"[8.486227000000001, 8.489988, 8.485507, 8.480608, 8.502367]",4,4,evo2-zen5-16c
+linalg-wide,full_piv_lu,f64,f,256,4096,,1,colmat,4,9.579889,9579.889000,ok,,"[9.579889, 9.599648, 9.57602, 9.596248, 9.578339]",4,4,evo2-zen5-16c
+linalg-wide,cholesky,f64,c,64,1024,,1,lapack-aocl,4,,,skipped,"cholesky in c order has no vendor route that leaves the clock free of allocation and layout conversion: LAPACKE's row-major path allocates a transposed copy and transposes in and out of it inside the call. The vendor row is measured in f order, where both arms run column-major",,4,4,evo2-zen5-16c
+linalg-wide,cholesky,f64,c,64,1024,,1,colmat,4,,,skipped,cholesky needs a square matrix; 64x1024 is not,,4,4,evo2-zen5-16c
+linalg-wide,cholesky,f64,f,64,1024,,1,lapack-aocl,4,,,skipped,cholesky needs a square matrix; 64x1024 is not,,4,4,evo2-zen5-16c
+linalg-wide,cholesky,f64,f,64,1024,,1,colmat,4,,,skipped,cholesky needs a square matrix; 64x1024 is not,,4,4,evo2-zen5-16c
+linalg-wide,cholesky,f64,c,256,4096,,1,lapack-aocl,4,,,skipped,"cholesky in c order has no vendor route that leaves the clock free of allocation and layout conversion: LAPACKE's row-major path allocates a transposed copy and transposes in and out of it inside the call. The vendor row is measured in f order, where both arms run column-major",,4,4,evo2-zen5-16c
+linalg-wide,cholesky,f64,c,256,4096,,1,colmat,4,,,skipped,cholesky needs a square matrix; 256x4096 is not,,4,4,evo2-zen5-16c
+linalg-wide,cholesky,f64,f,256,4096,,1,lapack-aocl,4,,,skipped,cholesky needs a square matrix; 256x4096 is not,,4,4,evo2-zen5-16c
+linalg-wide,cholesky,f64,f,256,4096,,1,colmat,4,,,skipped,cholesky needs a square matrix; 256x4096 is not,,4,4,evo2-zen5-16c
+linalg-wide,triangular_solve,f64,c,64,1024,,1,lapack-aocl,4,,,skipped,triangular_solve needs a square matrix; 64x1024 is not,,4,4,evo2-zen5-16c
+linalg-wide,triangular_solve,f64,c,64,1024,,1,colmat,4,,,skipped,triangular_solve needs a square matrix; 64x1024 is not,,4,4,evo2-zen5-16c
+linalg-wide,triangular_solve,f64,f,64,1024,,1,lapack-aocl,4,,,skipped,triangular_solve needs a square matrix; 64x1024 is not,,4,4,evo2-zen5-16c
+linalg-wide,triangular_solve,f64,f,64,1024,,1,colmat,4,,,skipped,triangular_solve needs a square matrix; 64x1024 is not,,4,4,evo2-zen5-16c
+linalg-wide,triangular_solve,f64,c,256,4096,,1,lapack-aocl,4,,,skipped,triangular_solve needs a square matrix; 256x4096 is not,,4,4,evo2-zen5-16c
+linalg-wide,triangular_solve,f64,c,256,4096,,1,colmat,4,,,skipped,triangular_solve needs a square matrix; 256x4096 is not,,4,4,evo2-zen5-16c
+linalg-wide,triangular_solve,f64,f,256,4096,,1,lapack-aocl,4,,,skipped,triangular_solve needs a square matrix; 256x4096 is not,,4,4,evo2-zen5-16c
+linalg-wide,triangular_solve,f64,f,256,4096,,1,colmat,4,,,skipped,triangular_solve needs a square matrix; 256x4096 is not,,4,4,evo2-zen5-16c
+linalg-wide,solve,f64,c,64,1024,,1,lapack-aocl,4,,,skipped,"solve in c order has no vendor route that leaves the clock free of allocation and layout conversion: LAPACKE's row-major path allocates a transposed copy and transposes in and out of it inside the call. The vendor row is measured in f order, where both arms run column-major",,4,4,evo2-zen5-16c
+linalg-wide,solve,f64,c,64,1024,,1,colmat,4,,,skipped,solve needs a square matrix; 64x1024 is not,,4,4,evo2-zen5-16c
+linalg-wide,solve,f64,f,64,1024,,1,lapack-aocl,4,,,skipped,solve needs a square matrix; 64x1024 is not,,4,4,evo2-zen5-16c
+linalg-wide,solve,f64,f,64,1024,,1,colmat,4,,,skipped,solve needs a square matrix; 64x1024 is not,,4,4,evo2-zen5-16c
+linalg-wide,solve,f64,c,256,4096,,1,lapack-aocl,4,,,skipped,"solve in c order has no vendor route that leaves the clock free of allocation and layout conversion: LAPACKE's row-major path allocates a transposed copy and transposes in and out of it inside the call. The vendor row is measured in f order, where both arms run column-major",,4,4,evo2-zen5-16c
+linalg-wide,solve,f64,c,256,4096,,1,colmat,4,,,skipped,solve needs a square matrix; 256x4096 is not,,4,4,evo2-zen5-16c
+linalg-wide,solve,f64,f,256,4096,,1,lapack-aocl,4,,,skipped,solve needs a square matrix; 256x4096 is not,,4,4,evo2-zen5-16c
+linalg-wide,solve,f64,f,256,4096,,1,colmat,4,,,skipped,solve needs a square matrix; 256x4096 is not,,4,4,evo2-zen5-16c
+linalg-wide,qr_factor,f64,c,64,1024,,1,lapack-aocl,4,,,skipped,"qr_factor in c order has no vendor route that leaves the clock free of allocation and layout conversion: LAPACKE's row-major path allocates a transposed copy and transposes in and out of it inside the call. The vendor row is measured in f order, where both arms run column-major",,4,4,evo2-zen5-16c
+linalg-wide,qr_factor,f64,c,64,1024,,1,colmat,4,0.387370,387.370000,ok,,"[0.392469, 0.38737, 0.38099, 0.389059, 0.38735]",4,4,evo2-zen5-16c
+linalg-wide,qr_factor,f64,f,64,1024,,1,lapack-aocl,4,0.643823,643.823000,ok,,"[0.6440130000000001, 0.6438229999999999, 0.643203, 0.644693, 0.639673]",4,4,evo2-zen5-16c
+linalg-wide,qr_factor,f64,f,64,1024,,1,colmat,4,0.112727,112.727000,ok,,"[0.11272700000000001, 0.112747, 0.112837, 0.11265700000000001, 0.112447]",4,4,evo2-zen5-16c
+linalg-wide,qr_factor,f64,c,256,4096,,1,lapack-aocl,4,,,skipped,"qr_factor in c order has no vendor route that leaves the clock free of allocation and layout conversion: LAPACKE's row-major path allocates a transposed copy and transposes in and out of it inside the call. The vendor row is measured in f order, where both arms run column-major",,4,4,evo2-zen5-16c
+linalg-wide,qr_factor,f64,c,256,4096,,1,colmat,4,5.450117,5450.117000,ok,,"[5.420147999999999, 5.463237, 5.450117, 5.449807, 5.463467]",4,4,evo2-zen5-16c
+linalg-wide,qr_factor,f64,f,256,4096,,1,lapack-aocl,4,16.087418,16087.418000,ok,,"[16.105677999999997, 16.137536, 16.087418, 16.086988, 16.071608]",4,4,evo2-zen5-16c
+linalg-wide,qr_factor,f64,f,256,4096,,1,colmat,4,2.778147,2778.147000,ok,,"[2.7781469999999997, 2.775338, 2.776527, 2.791677, 2.778398]",4,4,evo2-zen5-16c
+linalg-wide,qr,f64,c,64,1024,,1,lapack-aocl,4,,,skipped,"qr in c order has no vendor route that leaves the clock free of allocation and layout conversion: LAPACKE's row-major path allocates a transposed copy and transposes in and out of it inside the call. The vendor row is measured in f order, where both arms run column-major",,4,4,evo2-zen5-16c
+linalg-wide,qr,f64,c,64,1024,,1,colmat,4,0.210685,210.685000,ok,api-inclusive,"[0.210685, 0.211364, 0.209965, 0.209944, 0.211755]",4,4,evo2-zen5-16c
+linalg-wide,qr,f64,c,64,1024,,1,colmat,4,0.392430,392.430000,ok,,"[0.39089, 0.39381000000000005, 0.393589, 0.39243, 0.39221]",4,4,evo2-zen5-16c
+linalg-wide,qr,f64,f,64,1024,,1,lapack-aocl,4,0.736170,736.170000,ok,,"[0.73617, 0.741801, 0.7390909999999999, 0.7344400000000001, 0.726861]",4,4,evo2-zen5-16c
+linalg-wide,qr,f64,f,64,1024,,1,colmat,4,0.139817,139.817000,ok,api-inclusive,"[0.13990699999999998, 0.139766, 0.140156, 0.139817, 0.13956600000000002]",4,4,evo2-zen5-16c
+linalg-wide,qr,f64,f,64,1024,,1,colmat,4,0.125427,125.427000,ok,,"[0.12528699999999998, 0.124866, 0.125577, 0.125506, 0.125427]",4,4,evo2-zen5-16c
+linalg-wide,qr,f64,c,256,4096,,1,lapack-aocl,4,,,skipped,"qr in c order has no vendor route that leaves the clock free of allocation and layout conversion: LAPACKE's row-major path allocates a transposed copy and transposes in and out of it inside the call. The vendor row is measured in f order, where both arms run column-major",,4,4,evo2-zen5-16c
+linalg-wide,qr,f64,c,256,4096,,1,colmat,4,4.369325,4369.325000,ok,api-inclusive,"[4.369325, 4.358205000000001, 4.369546000000001, 4.3633750000000004, 4.393135]",4,4,evo2-zen5-16c
+linalg-wide,qr,f64,c,256,4096,,1,colmat,4,5.964104,5964.104000,ok,,"[5.975263, 5.965623, 5.964104, 5.811068, 5.573514]",4,4,evo2-zen5-16c
+linalg-wide,qr,f64,f,256,4096,,1,lapack-aocl,4,17.017793,17017.793000,ok,,"[17.017793, 17.011583, 17.037363, 16.993664, 17.068702000000002]",4,4,evo2-zen5-16c
+linalg-wide,qr,f64,f,256,4096,,1,colmat,4,3.150647,3150.647000,ok,api-inclusive,"[3.159747, 3.141258, 3.1506469999999998, 3.146207, 3.1918070000000003]",4,4,evo2-zen5-16c
+linalg-wide,qr,f64,f,256,4096,,1,colmat,4,2.982122,2982.122000,ok,,"[2.982122, 2.985392, 2.981072, 2.983321, 2.980992]",4,4,evo2-zen5-16c
+linalg-wide,svd_values,f64,c,64,1024,,1,lapack-aocl,4,,,skipped,"svd_values in c order has no vendor route that leaves the clock free of allocation and layout conversion: LAPACKE's row-major path allocates a transposed copy and transposes in and out of it inside the call. The vendor row is measured in f order, where both arms run column-major",,4,4,evo2-zen5-16c
+linalg-wide,svd_values,f64,c,64,1024,,1,colmat,4,0.498067,498.067000,ok,api-inclusive,"[0.49806700000000004, 0.501787, 0.498007, 0.500356, 0.496997]",4,4,evo2-zen5-16c
+linalg-wide,svd_values,f64,c,64,1024,,1,colmat,4,0.497747,497.747000,ok,,"[0.497747, 0.499147, 0.49603699999999995, 0.49904699999999996, 0.497707]",4,4,evo2-zen5-16c
+linalg-wide,svd_values,f64,f,64,1024,,1,lapack-aocl,4,1.343275,1343.275000,ok,,"[1.338555, 1.350425, 1.341935, 1.3439439999999998, 1.343275]",4,4,evo2-zen5-16c
+linalg-wide,svd_values,f64,f,64,1024,,1,colmat,4,0.546616,546.616000,ok,api-inclusive,"[0.546616, 0.549625, 0.542346, 0.552175, 0.543266]",4,4,evo2-zen5-16c
+linalg-wide,svd_values,f64,f,64,1024,,1,colmat,4,0.560275,560.275000,ok,,"[0.558206, 0.5614049999999999, 0.560325, 0.5484659999999999, 0.5602750000000001]",4,4,evo2-zen5-16c
+linalg-wide,svd_values,f64,c,256,4096,,1,lapack-aocl,4,,,skipped,"svd_values in c order has no vendor route that leaves the clock free of allocation and layout conversion: LAPACKE's row-major path allocates a transposed copy and transposes in and out of it inside the call. The vendor row is measured in f order, where both arms run column-major",,4,4,evo2-zen5-16c
+linalg-wide,svd_values,f64,c,256,4096,,1,colmat,4,9.431571,9431.571000,ok,api-inclusive,"[9.412893, 9.442532, 9.439812, 9.431571, 9.426853000000001]",4,4,evo2-zen5-16c
+linalg-wide,svd_values,f64,c,256,4096,,1,colmat,4,9.166679,9166.679000,ok,,"[9.166679, 9.178249, 9.177598999999999, 9.157029000000001, 9.163678999999998]",4,4,evo2-zen5-16c
+linalg-wide,svd_values,f64,f,256,4096,,1,lapack-aocl,4,38.751481,38751.481000,ok,,"[38.659063, 38.708773, 38.983455, 38.956246, 38.751481]",4,4,evo2-zen5-16c
+linalg-wide,svd_values,f64,f,256,4096,,1,colmat,4,13.096635,13096.635000,ok,api-inclusive,"[13.099566, 13.096635000000001, 13.095446, 13.082346, 13.137014]",4,4,evo2-zen5-16c
+linalg-wide,svd_values,f64,f,256,4096,,1,colmat,4,13.144795,13144.795000,ok,,"[13.096695, 13.144795, 13.096965, 13.203323, 13.184133000000001]",4,4,evo2-zen5-16c
+linalg-wide,svd_thin,f64,c,64,1024,,1,lapack-aocl,4,,,skipped,"svd_thin in c order has no vendor route that leaves the clock free of allocation and layout conversion: LAPACKE's row-major path allocates a transposed copy and transposes in and out of it inside the call. The vendor row is measured in f order, where both arms run column-major",,4,4,evo2-zen5-16c
+linalg-wide,svd_thin,f64,c,64,1024,,1,colmat,4,0.789020,789.020000,ok,api-inclusive,"[0.7869189999999999, 0.790839, 0.788689, 0.7890199999999999, 0.7921990000000001]",4,4,evo2-zen5-16c
+linalg-wide,svd_thin,f64,c,64,1024,,1,colmat,4,0.779309,779.309000,ok,,"[0.7794399999999999, 0.777809, 0.7793089999999999, 0.77762, 0.779659]",4,4,evo2-zen5-16c
+linalg-wide,svd_thin,f64,f,64,1024,,1,lapack-aocl,4,2.893194,2893.194000,ok,,"[2.880824, 2.893194, 2.888114, 2.967502, 2.907563]",4,4,evo2-zen5-16c
+linalg-wide,svd_thin,f64,f,64,1024,,1,colmat,4,0.824978,824.978000,ok,api-inclusive,"[0.824978, 0.8257680000000001, 0.844548, 0.8200689999999999, 0.824848]",4,4,evo2-zen5-16c
+linalg-wide,svd_thin,f64,f,64,1024,,1,colmat,4,0.820568,820.568000,ok,,"[0.8157880000000001, 0.820098, 0.844738, 0.8205680000000001, 0.847668]",4,4,evo2-zen5-16c
+linalg-wide,svd_thin,f64,c,256,4096,,1,lapack-aocl,4,,,skipped,"svd_thin in c order has no vendor route that leaves the clock free of allocation and layout conversion: LAPACKE's row-major path allocates a transposed copy and transposes in and out of it inside the call. The vendor row is measured in f order, where both arms run column-major",,4,4,evo2-zen5-16c
+linalg-wide,svd_thin,f64,c,256,4096,,1,colmat,4,15.012525,15012.525000,ok,api-inclusive,"[15.182331, 15.029154, 15.012525, 14.989365, 15.001445]",4,4,evo2-zen5-16c
+linalg-wide,svd_thin,f64,c,256,4096,,1,colmat,4,14.967756,14967.756000,ok,,"[14.952587, 14.952036999999999, 14.967756, 15.053494, 14.976626]",4,4,evo2-zen5-16c
+linalg-wide,svd_thin,f64,f,256,4096,,1,lapack-aocl,4,84.999031,84999.031000,ok,,"[81.115674, 85.576826, 84.999031, 85.04182, 82.090438]",4,4,evo2-zen5-16c
+linalg-wide,svd_thin,f64,f,256,4096,,1,colmat,4,18.959421,18959.421000,ok,api-inclusive,"[18.999229, 18.959421, 18.953999999999997, 19.009518999999997, 18.896843]",4,4,evo2-zen5-16c
+linalg-wide,svd_thin,f64,f,256,4096,,1,colmat,4,18.849234,18849.234000,ok,,"[18.849234, 18.873333, 18.874082, 18.768404999999998, 18.786045]",4,4,evo2-zen5-16c
+linalg-wide,eigh,f64,c,64,1024,,1,lapack-aocl,4,,,skipped,"eigh in c order has no vendor route that leaves the clock free of allocation and layout conversion: LAPACKE's row-major path allocates a transposed copy and transposes in and out of it inside the call. The vendor row is measured in f order, where both arms run column-major",,4,4,evo2-zen5-16c
+linalg-wide,eigh,f64,c,64,1024,,1,colmat,4,,,skipped,eigh needs a square matrix; 64x1024 is not,,4,4,evo2-zen5-16c
+linalg-wide,eigh,f64,f,64,1024,,1,lapack-aocl,4,,,skipped,eigh needs a square matrix; 64x1024 is not,,4,4,evo2-zen5-16c
+linalg-wide,eigh,f64,f,64,1024,,1,colmat,4,,,skipped,eigh needs a square matrix; 64x1024 is not,,4,4,evo2-zen5-16c
+linalg-wide,eigh,f64,c,256,4096,,1,lapack-aocl,4,,,skipped,"eigh in c order has no vendor route that leaves the clock free of allocation and layout conversion: LAPACKE's row-major path allocates a transposed copy and transposes in and out of it inside the call. The vendor row is measured in f order, where both arms run column-major",,4,4,evo2-zen5-16c
+linalg-wide,eigh,f64,c,256,4096,,1,colmat,4,,,skipped,eigh needs a square matrix; 256x4096 is not,,4,4,evo2-zen5-16c
+linalg-wide,eigh,f64,f,256,4096,,1,lapack-aocl,4,,,skipped,eigh needs a square matrix; 256x4096 is not,,4,4,evo2-zen5-16c
+linalg-wide,eigh,f64,f,256,4096,,1,colmat,4,,,skipped,eigh needs a square matrix; 256x4096 is not,,4,4,evo2-zen5-16c
+linalg-wide,lu,c64,c,64,1024,,1,lapack-aocl,4,,,skipped,"lu in c order has no vendor route that leaves the clock free of allocation and layout conversion: LAPACKE's row-major path allocates a transposed copy and transposes in and out of it inside the call. The vendor row is measured in f order, where both arms run column-major",,4,4,evo2-zen5-16c
+linalg-wide,lu,c64,c,64,1024,,1,colmat,4,0.234884,234.884000,ok,api-inclusive,"[0.23440399999999997, 0.234884, 0.237433, 0.235664, 0.234744]",4,4,evo2-zen5-16c
+linalg-wide,lu,c64,c,64,1024,,1,colmat,4,0.159836,159.836000,ok,,"[0.160205, 0.15920600000000001, 0.159836, 0.162196, 0.15804600000000002]",4,4,evo2-zen5-16c
+linalg-wide,lu,c64,f,64,1024,,1,lapack-aocl,4,0.126927,126.927000,ok,,"[0.126387, 0.126927, 0.12922699999999998, 0.126537, 0.128517]",4,4,evo2-zen5-16c
+linalg-wide,lu,c64,f,64,1024,,1,colmat,4,0.162426,162.426000,ok,api-inclusive,"[0.162426, 0.16187600000000002, 0.16251500000000002, 0.162196, 0.165596]",4,4,evo2-zen5-16c
+linalg-wide,lu,c64,f,64,1024,,1,colmat,4,0.134297,134.297000,ok,,"[0.134956, 0.134297, 0.13778600000000002, 0.134266, 0.13378700000000002]",4,4,evo2-zen5-16c
+linalg-wide,lu,c64,c,256,4096,,1,lapack-aocl,4,,,skipped,"lu in c order has no vendor route that leaves the clock free of allocation and layout conversion: LAPACKE's row-major path allocates a transposed copy and transposes in and out of it inside the call. The vendor row is measured in f order, where both arms run column-major",,4,4,evo2-zen5-16c
+linalg-wide,lu,c64,c,256,4096,,1,colmat,4,7.294518,7294.518000,ok,api-inclusive,"[7.294518, 7.408114, 7.289798, 7.310517, 7.272649]",4,4,evo2-zen5-16c
+linalg-wide,lu,c64,c,256,4096,,1,colmat,4,4.649067,4649.067000,ok,,"[4.649067, 4.6547469999999995, 4.649207, 4.6453880000000005, 4.648897]",4,4,evo2-zen5-16c
+linalg-wide,lu,c64,f,256,4096,,1,lapack-aocl,4,11.994004,11994.004000,ok,,"[11.981184, 11.981444000000002, 11.994004, 12.007513, 12.018173]",4,4,evo2-zen5-16c
+linalg-wide,lu,c64,f,256,4096,,1,colmat,4,5.202473,5202.473000,ok,api-inclusive,"[5.210193, 5.192003, 5.181293, 5.202473, 5.223572]",4,4,evo2-zen5-16c
+linalg-wide,lu,c64,f,256,4096,,1,colmat,4,4.596858,4596.858000,ok,,"[4.598739, 4.596858, 4.599119, 4.593589000000001, 4.576918999999999]",4,4,evo2-zen5-16c
+linalg-wide,full_piv_lu,c64,c,64,1024,,1,lapack-aocl,4,,,skipped,"full_piv_lu in c order has no vendor route: ?getc2 is a Fortran routine with no row-major entry point (LAPACKE does not wrap it), so a row-major input would need a transposed copy inside the vendor's clock. The vendor row is measured in f order, where both arms run column-major",,4,4,evo2-zen5-16c
+linalg-wide,full_piv_lu,c64,c,64,1024,,1,colmat,4,0.575064,575.064000,ok,api-inclusive,"[0.570485, 0.5746049999999999, 0.575835, 0.575064, 0.575225]",4,4,evo2-zen5-16c
+linalg-wide,full_piv_lu,c64,c,64,1024,,1,colmat,4,0.472897,472.897000,ok,,"[0.470647, 0.472937, 0.470128, 0.473978, 0.472897]",4,4,evo2-zen5-16c
+linalg-wide,full_piv_lu,c64,f,64,1024,,1,lapack-aocl,4,,,skipped,"full_piv_lu has no vendor route for the non-square shape 64x1024: ?getc2, the only complete-pivoting LU LAPACK ships, is square only; the vendor row is skipped",,4,4,evo2-zen5-16c
+linalg-wide,full_piv_lu,c64,f,64,1024,,1,colmat,4,0.450239,450.239000,ok,api-inclusive,"[0.449298, 0.450239, 0.450528, 0.452938, 0.448548]",4,4,evo2-zen5-16c
+linalg-wide,full_piv_lu,c64,f,64,1024,,1,colmat,4,0.522027,522.027000,ok,,"[0.520966, 0.5210469999999999, 0.524956, 0.522027, 0.523316]",4,4,evo2-zen5-16c
+linalg-wide,full_piv_lu,c64,c,256,4096,,1,lapack-aocl,4,,,skipped,"full_piv_lu in c order has no vendor route: ?getc2 is a Fortran routine with no row-major entry point (LAPACKE does not wrap it), so a row-major input would need a transposed copy inside the vendor's clock. The vendor row is measured in f order, where both arms run column-major",,4,4,evo2-zen5-16c
+linalg-wide,full_piv_lu,c64,c,256,4096,,1,colmat,4,21.263718,21263.718000,ok,api-inclusive,"[21.19051, 21.160332, 21.284968000000003, 21.263718, 21.345917]",4,4,evo2-zen5-16c
+linalg-wide,full_piv_lu,c64,c,256,4096,,1,colmat,4,17.860318,17860.318000,ok,,"[17.860318, 17.833599, 17.869467999999998, 18.372345000000003, 17.845228000000002]",4,4,evo2-zen5-16c
+linalg-wide,full_piv_lu,c64,f,256,4096,,1,lapack-aocl,4,,,skipped,"full_piv_lu has no vendor route for the non-square shape 256x4096: ?getc2, the only complete-pivoting LU LAPACK ships, is square only; the vendor row is skipped",,4,4,evo2-zen5-16c
+linalg-wide,full_piv_lu,c64,f,256,4096,,1,colmat,4,19.713309,19713.309000,ok,api-inclusive,"[19.69174, 19.70758, 19.717429000000003, 19.807277000000003, 19.713309]",4,4,evo2-zen5-16c
+linalg-wide,full_piv_lu,c64,f,256,4096,,1,colmat,4,20.849089,20849.089000,ok,,"[20.903986999999997, 20.883948, 20.849089000000003, 20.823999999999998, 20.835959000000003]",4,4,evo2-zen5-16c
+linalg-wide,cholesky,c64,c,64,1024,,1,lapack-aocl,4,,,skipped,"cholesky in c order has no vendor route that leaves the clock free of allocation and layout conversion: LAPACKE's row-major path allocates a transposed copy and transposes in and out of it inside the call. The vendor row is measured in f order, where both arms run column-major",,4,4,evo2-zen5-16c
+linalg-wide,cholesky,c64,c,64,1024,,1,colmat,4,,,skipped,cholesky needs a square matrix; 64x1024 is not,,4,4,evo2-zen5-16c
+linalg-wide,cholesky,c64,f,64,1024,,1,lapack-aocl,4,,,skipped,cholesky needs a square matrix; 64x1024 is not,,4,4,evo2-zen5-16c
+linalg-wide,cholesky,c64,f,64,1024,,1,colmat,4,,,skipped,cholesky needs a square matrix; 64x1024 is not,,4,4,evo2-zen5-16c
+linalg-wide,cholesky,c64,c,256,4096,,1,lapack-aocl,4,,,skipped,"cholesky in c order has no vendor route that leaves the clock free of allocation and layout conversion: LAPACKE's row-major path allocates a transposed copy and transposes in and out of it inside the call. The vendor row is measured in f order, where both arms run column-major",,4,4,evo2-zen5-16c
+linalg-wide,cholesky,c64,c,256,4096,,1,colmat,4,,,skipped,cholesky needs a square matrix; 256x4096 is not,,4,4,evo2-zen5-16c
+linalg-wide,cholesky,c64,f,256,4096,,1,lapack-aocl,4,,,skipped,cholesky needs a square matrix; 256x4096 is not,,4,4,evo2-zen5-16c
+linalg-wide,cholesky,c64,f,256,4096,,1,colmat,4,,,skipped,cholesky needs a square matrix; 256x4096 is not,,4,4,evo2-zen5-16c
+linalg-wide,triangular_solve,c64,c,64,1024,,1,lapack-aocl,4,,,skipped,triangular_solve needs a square matrix; 64x1024 is not,,4,4,evo2-zen5-16c
+linalg-wide,triangular_solve,c64,c,64,1024,,1,colmat,4,,,skipped,triangular_solve needs a square matrix; 64x1024 is not,,4,4,evo2-zen5-16c
+linalg-wide,triangular_solve,c64,f,64,1024,,1,lapack-aocl,4,,,skipped,triangular_solve needs a square matrix; 64x1024 is not,,4,4,evo2-zen5-16c
+linalg-wide,triangular_solve,c64,f,64,1024,,1,colmat,4,,,skipped,triangular_solve needs a square matrix; 64x1024 is not,,4,4,evo2-zen5-16c
+linalg-wide,triangular_solve,c64,c,256,4096,,1,lapack-aocl,4,,,skipped,triangular_solve needs a square matrix; 256x4096 is not,,4,4,evo2-zen5-16c
+linalg-wide,triangular_solve,c64,c,256,4096,,1,colmat,4,,,skipped,triangular_solve needs a square matrix; 256x4096 is not,,4,4,evo2-zen5-16c
+linalg-wide,triangular_solve,c64,f,256,4096,,1,lapack-aocl,4,,,skipped,triangular_solve needs a square matrix; 256x4096 is not,,4,4,evo2-zen5-16c
+linalg-wide,triangular_solve,c64,f,256,4096,,1,colmat,4,,,skipped,triangular_solve needs a square matrix; 256x4096 is not,,4,4,evo2-zen5-16c
+linalg-wide,solve,c64,c,64,1024,,1,lapack-aocl,4,,,skipped,"solve in c order has no vendor route that leaves the clock free of allocation and layout conversion: LAPACKE's row-major path allocates a transposed copy and transposes in and out of it inside the call. The vendor row is measured in f order, where both arms run column-major",,4,4,evo2-zen5-16c
+linalg-wide,solve,c64,c,64,1024,,1,colmat,4,,,skipped,solve needs a square matrix; 64x1024 is not,,4,4,evo2-zen5-16c
+linalg-wide,solve,c64,f,64,1024,,1,lapack-aocl,4,,,skipped,solve needs a square matrix; 64x1024 is not,,4,4,evo2-zen5-16c
+linalg-wide,solve,c64,f,64,1024,,1,colmat,4,,,skipped,solve needs a square matrix; 64x1024 is not,,4,4,evo2-zen5-16c
+linalg-wide,solve,c64,c,256,4096,,1,lapack-aocl,4,,,skipped,"solve in c order has no vendor route that leaves the clock free of allocation and layout conversion: LAPACKE's row-major path allocates a transposed copy and transposes in and out of it inside the call. The vendor row is measured in f order, where both arms run column-major",,4,4,evo2-zen5-16c
+linalg-wide,solve,c64,c,256,4096,,1,colmat,4,,,skipped,solve needs a square matrix; 256x4096 is not,,4,4,evo2-zen5-16c
+linalg-wide,solve,c64,f,256,4096,,1,lapack-aocl,4,,,skipped,solve needs a square matrix; 256x4096 is not,,4,4,evo2-zen5-16c
+linalg-wide,solve,c64,f,256,4096,,1,colmat,4,,,skipped,solve needs a square matrix; 256x4096 is not,,4,4,evo2-zen5-16c
+linalg-wide,qr_factor,c64,c,64,1024,,1,lapack-aocl,4,,,skipped,"qr_factor in c order has no vendor route that leaves the clock free of allocation and layout conversion: LAPACKE's row-major path allocates a transposed copy and transposes in and out of it inside the call. The vendor row is measured in f order, where both arms run column-major",,4,4,evo2-zen5-16c
+linalg-wide,qr_factor,c64,c,64,1024,,1,colmat,4,0.532126,532.126000,ok,,"[0.533635, 0.5283059999999999, 0.5319259999999999, 0.5362159999999999, 0.532126]",4,4,evo2-zen5-16c
+linalg-wide,qr_factor,c64,f,64,1024,,1,lapack-aocl,4,1.231238,1231.238000,ok,,"[1.231867, 1.230168, 1.231238, 1.235257, 1.2231379999999998]",4,4,evo2-zen5-16c
+linalg-wide,qr_factor,c64,f,64,1024,,1,colmat,4,0.320092,320.092000,ok,,"[0.32032099999999997, 0.320002, 0.322792, 0.320092, 0.31944100000000003]",4,4,evo2-zen5-16c
+linalg-wide,qr_factor,c64,c,256,4096,,1,lapack-aocl,4,,,skipped,"qr_factor in c order has no vendor route that leaves the clock free of allocation and layout conversion: LAPACKE's row-major path allocates a transposed copy and transposes in and out of it inside the call. The vendor row is measured in f order, where both arms run column-major",,4,4,evo2-zen5-16c
+linalg-wide,qr_factor,c64,c,256,4096,,1,colmat,4,11.487856,11487.856000,ok,,"[11.478427, 11.480196999999999, 11.487855999999999, 11.559884, 11.510546]",4,4,evo2-zen5-16c
+linalg-wide,qr_factor,c64,f,256,4096,,1,lapack-aocl,4,46.076782,46076.782000,ok,,"[48.096038, 46.076781999999994, 45.950894999999996, 46.018013, 46.181589]",4,4,evo2-zen5-16c
+linalg-wide,qr_factor,c64,f,256,4096,,1,colmat,4,9.349293,9349.293000,ok,,"[9.372252, 9.348773, 9.354332999999999, 9.344083, 9.349293]",4,4,evo2-zen5-16c
+linalg-wide,qr,c64,c,64,1024,,1,lapack-aocl,4,,,skipped,"qr in c order has no vendor route that leaves the clock free of allocation and layout conversion: LAPACKE's row-major path allocates a transposed copy and transposes in and out of it inside the call. The vendor row is measured in f order, where both arms run column-major",,4,4,evo2-zen5-16c
+linalg-wide,qr,c64,c,64,1024,,1,colmat,4,0.457428,457.428000,ok,api-inclusive,"[0.454997, 0.45951800000000004, 0.457428, 0.46116799999999997, 0.45740800000000004]",4,4,evo2-zen5-16c
+linalg-wide,qr,c64,c,64,1024,,1,colmat,4,0.571205,571.205000,ok,,"[0.574365, 0.563755, 0.571675, 0.571205, 0.565485]",4,4,evo2-zen5-16c
+linalg-wide,qr,c64,f,64,1024,,1,lapack-aocl,4,1.316715,1316.715000,ok,,"[1.3203150000000001, 1.316305, 1.322665, 1.316715, 1.3145850000000001]",4,4,evo2-zen5-16c
+linalg-wide,qr,c64,f,64,1024,,1,colmat,4,0.387160,387.160000,ok,api-inclusive,"[0.38716, 0.38988, 0.386119, 0.38666, 0.3905]",4,4,evo2-zen5-16c
+linalg-wide,qr,c64,f,64,1024,,1,colmat,4,0.353891,353.891000,ok,,"[0.35374099999999997, 0.353691, 0.35572099999999995, 0.353891, 0.35828]",4,4,evo2-zen5-16c
+linalg-wide,qr,c64,c,256,4096,,1,lapack-aocl,4,,,skipped,"qr in c order has no vendor route that leaves the clock free of allocation and layout conversion: LAPACKE's row-major path allocates a transposed copy and transposes in and out of it inside the call. The vendor row is measured in f order, where both arms run column-major",,4,4,evo2-zen5-16c
+linalg-wide,qr,c64,c,256,4096,,1,colmat,4,13.002165,13002.165000,ok,api-inclusive,"[13.008545, 12.991806, 13.019916, 13.002165, 12.922038]",4,4,evo2-zen5-16c
+linalg-wide,qr,c64,c,256,4096,,1,colmat,4,12.106319,12106.319000,ok,,"[12.110459, 12.106319000000001, 12.08249, 12.055, 12.114619]",4,4,evo2-zen5-16c
+linalg-wide,qr,c64,f,256,4096,,1,lapack-aocl,4,47.530352,47530.352000,ok,,"[47.857133000000005, 47.347967, 47.666657, 47.530352, 47.273468]",4,4,evo2-zen5-16c
+linalg-wide,qr,c64,f,256,4096,,1,colmat,4,10.399184,10399.184000,ok,api-inclusive,"[10.409253999999999, 10.394635, 10.375445000000001, 10.399184, 10.409195]",4,4,evo2-zen5-16c
+linalg-wide,qr,c64,f,256,4096,,1,colmat,4,9.996035,9996.035000,ok,,"[10.055234, 9.974936, 10.013374, 9.936587, 9.996035000000001]",4,4,evo2-zen5-16c
+linalg-wide,svd_values,c64,c,64,1024,,1,lapack-aocl,4,,,skipped,"svd_values in c order has no vendor route that leaves the clock free of allocation and layout conversion: LAPACKE's row-major path allocates a transposed copy and transposes in and out of it inside the call. The vendor row is measured in f order, where both arms run column-major",,4,4,evo2-zen5-16c
+linalg-wide,svd_values,c64,c,64,1024,,1,colmat,4,0.907966,907.966000,ok,api-inclusive,"[0.905826, 0.908776, 0.9079659999999999, 0.906076, 0.922675]",4,4,evo2-zen5-16c
+linalg-wide,svd_values,c64,c,64,1024,,1,colmat,4,0.897896,897.896000,ok,,"[0.8896270000000001, 0.897896, 0.898986, 0.904716, 0.896536]",4,4,evo2-zen5-16c
+linalg-wide,svd_values,c64,f,64,1024,,1,lapack-aocl,4,2.409166,2409.166000,ok,,"[2.390437, 2.414196, 2.402217, 2.409666, 2.409166]",4,4,evo2-zen5-16c
+linalg-wide,svd_values,c64,f,64,1024,,1,colmat,4,0.958865,958.865000,ok,api-inclusive,"[0.9588650000000001, 0.956835, 0.957464, 0.960905, 0.960014]",4,4,evo2-zen5-16c
+linalg-wide,svd_values,c64,f,64,1024,,1,colmat,4,0.964275,964.275000,ok,,"[0.964275, 0.962134, 0.965055, 0.9645940000000001, 0.962525]",4,4,evo2-zen5-16c
+linalg-wide,svd_values,c64,c,256,4096,,1,lapack-aocl,4,,,skipped,"svd_values in c order has no vendor route that leaves the clock free of allocation and layout conversion: LAPACKE's row-major path allocates a transposed copy and transposes in and out of it inside the call. The vendor row is measured in f order, where both arms run column-major",,4,4,evo2-zen5-16c
+linalg-wide,svd_values,c64,c,256,4096,,1,colmat,4,19.994940,19994.940000,ok,api-inclusive,"[20.062068, 19.99494, 19.98016, 20.031499, 19.966250000000002]",4,4,evo2-zen5-16c
+linalg-wide,svd_values,c64,c,256,4096,,1,colmat,4,19.992920,19992.920000,ok,,"[19.96764, 19.984370000000002, 20.060358, 19.99292, 19.995049]",4,4,evo2-zen5-16c
+linalg-wide,svd_values,c64,f,256,4096,,1,lapack-aocl,4,113.122509,113122.509000,ok,,"[114.13878199999999, 114.362696, 112.86444599999999, 112.779638, 113.122509]",4,4,evo2-zen5-16c
+linalg-wide,svd_values,c64,f,256,4096,,1,colmat,4,28.630720,28630.720000,ok,api-inclusive,"[28.630719999999997, 28.712278, 28.425345, 28.692659, 28.61198]",4,4,evo2-zen5-16c
+linalg-wide,svd_values,c64,f,256,4096,,1,colmat,4,28.677139,28677.139000,ok,,"[28.480574, 28.677139, 28.735488, 28.687278, 28.667399]",4,4,evo2-zen5-16c
+linalg-wide,svd_thin,c64,c,64,1024,,1,lapack-aocl,4,,,skipped,"svd_thin in c order has no vendor route that leaves the clock free of allocation and layout conversion: LAPACKE's row-major path allocates a transposed copy and transposes in and out of it inside the call. The vendor row is measured in f order, where both arms run column-major",,4,4,evo2-zen5-16c
+linalg-wide,svd_thin,c64,c,64,1024,,1,colmat,4,1.427242,1427.242000,ok,api-inclusive,"[1.423533, 1.427242, 1.4335120000000001, 1.423432, 1.430712]",4,4,evo2-zen5-16c
+linalg-wide,svd_thin,c64,c,64,1024,,1,colmat,4,1.410113,1410.113000,ok,,"[1.410642, 1.408513, 1.410113, 1.413242, 1.409052]",4,4,evo2-zen5-16c
+linalg-wide,svd_thin,c64,f,64,1024,,1,lapack-aocl,4,4.910470,4910.470000,ok,,"[4.8994800000000005, 4.91239, 4.917009, 4.9031400000000005, 4.91047]",4,4,evo2-zen5-16c
+linalg-wide,svd_thin,c64,f,64,1024,,1,colmat,4,1.497760,1497.760000,ok,api-inclusive,"[1.49828, 1.4977600000000002, 1.4974, 1.491091, 1.49929]",4,4,evo2-zen5-16c
+linalg-wide,svd_thin,c64,f,64,1024,,1,colmat,4,1.477681,1477.681000,ok,,"[1.474461, 1.482631, 1.47795, 1.477681, 1.475341]",4,4,evo2-zen5-16c
+linalg-wide,svd_thin,c64,c,256,4096,,1,lapack-aocl,4,,,skipped,"svd_thin in c order has no vendor route that leaves the clock free of allocation and layout conversion: LAPACKE's row-major path allocates a transposed copy and transposes in and out of it inside the call. The vendor row is measured in f order, where both arms run column-major",,4,4,evo2-zen5-16c
+linalg-wide,svd_thin,c64,c,256,4096,,1,colmat,4,37.393146,37393.146000,ok,api-inclusive,"[37.383827000000004, 37.393146, 37.460345, 37.353168, 37.404847]",4,4,evo2-zen5-16c
+linalg-wide,svd_thin,c64,c,256,4096,,1,colmat,4,37.078945,37078.945000,ok,,"[37.078945000000004, 37.096354999999996, 37.071235, 37.129363, 37.055365]",4,4,evo2-zen5-16c
+linalg-wide,svd_thin,c64,f,256,4096,,1,lapack-aocl,4,220.739252,220739.252000,ok,,"[220.739252, 220.825489, 219.430247, 228.34639900000002, 220.027289]",4,4,evo2-zen5-16c
+linalg-wide,svd_thin,c64,f,256,4096,,1,colmat,4,45.795621,45795.621000,ok,api-inclusive,"[45.795621000000004, 45.803732, 45.780143, 45.962197, 45.754134]",4,4,evo2-zen5-16c
+linalg-wide,svd_thin,c64,f,256,4096,,1,colmat,4,45.593027,45593.027000,ok,,"[45.541589, 45.593027, 45.80810099999999, 45.806931, 45.554888]",4,4,evo2-zen5-16c
+linalg-wide,eigh,c64,c,64,1024,,1,lapack-aocl,4,,,skipped,"eigh in c order has no vendor route that leaves the clock free of allocation and layout conversion: LAPACKE's row-major path allocates a transposed copy and transposes in and out of it inside the call. The vendor row is measured in f order, where both arms run column-major",,4,4,evo2-zen5-16c
+linalg-wide,eigh,c64,c,64,1024,,1,colmat,4,,,skipped,eigh needs a square matrix; 64x1024 is not,,4,4,evo2-zen5-16c
+linalg-wide,eigh,c64,f,64,1024,,1,lapack-aocl,4,,,skipped,eigh needs a square matrix; 64x1024 is not,,4,4,evo2-zen5-16c
+linalg-wide,eigh,c64,f,64,1024,,1,colmat,4,,,skipped,eigh needs a square matrix; 64x1024 is not,,4,4,evo2-zen5-16c
+linalg-wide,eigh,c64,c,256,4096,,1,lapack-aocl,4,,,skipped,"eigh in c order has no vendor route that leaves the clock free of allocation and layout conversion: LAPACKE's row-major path allocates a transposed copy and transposes in and out of it inside the call. The vendor row is measured in f order, where both arms run column-major",,4,4,evo2-zen5-16c
+linalg-wide,eigh,c64,c,256,4096,,1,colmat,4,,,skipped,eigh needs a square matrix; 256x4096 is not,,4,4,evo2-zen5-16c
+linalg-wide,eigh,c64,f,256,4096,,1,lapack-aocl,4,,,skipped,eigh needs a square matrix; 256x4096 is not,,4,4,evo2-zen5-16c
+linalg-wide,eigh,c64,f,256,4096,,1,colmat,4,,,skipped,eigh needs a square matrix; 256x4096 is not,,4,4,evo2-zen5-16c
+linalg-wide,lu,f32,c,64,1024,,1,lapack-aocl,4,,,skipped,lu has no f32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,lu,f32,c,64,1024,,1,colmat,4,0.126707,126.707000,ok,api-inclusive,"[0.126707, 0.127536, 0.129757, 0.125926, 0.125367]",4,4,evo2-zen5-16c
+linalg-wide,lu,f32,c,64,1024,,1,colmat,4,0.050879,50.879000,ok,,"[0.051168000000000005, 0.050519, 0.050879, 0.050219, 0.053979]",4,4,evo2-zen5-16c
+linalg-wide,lu,f32,f,64,1024,,1,lapack-aocl,4,,,skipped,lu has no f32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,lu,f32,f,64,1024,,1,colmat,4,0.056728,56.728000,ok,api-inclusive,"[0.056728, 0.056819, 0.056658, 0.056809, 0.056318]",4,4,evo2-zen5-16c
+linalg-wide,lu,f32,f,64,1024,,1,colmat,4,0.049438,49.438000,ok,,"[0.049879, 0.049438, 0.049419000000000005, 0.049269, 0.049609]",4,4,evo2-zen5-16c
+linalg-wide,lu,f32,c,256,4096,,1,lapack-aocl,4,,,skipped,lu has no f32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,lu,f32,c,256,4096,,1,colmat,4,2.251500,2251.500000,ok,api-inclusive,"[2.2515, 2.2569500000000002, 2.2483199999999997, 2.272779, 2.24993]",4,4,evo2-zen5-16c
+linalg-wide,lu,f32,c,256,4096,,1,colmat,4,0.965604,965.604000,ok,,"[0.9697939999999999, 0.963035, 0.964454, 0.965604, 0.967684]",4,4,evo2-zen5-16c
+linalg-wide,lu,f32,f,256,4096,,1,lapack-aocl,4,,,skipped,lu has no f32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,lu,f32,f,256,4096,,1,colmat,4,1.143230,1143.230000,ok,api-inclusive,"[1.13836, 1.145439, 1.14323, 1.13992, 1.143949]",4,4,evo2-zen5-16c
+linalg-wide,lu,f32,f,256,4096,,1,colmat,4,1.011893,1011.893000,ok,,"[1.029592, 1.0110029999999999, 1.0109730000000001, 1.014453, 1.011893]",4,4,evo2-zen5-16c
+linalg-wide,full_piv_lu,f32,c,64,1024,,1,lapack-aocl,4,,,skipped,full_piv_lu has no f32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,full_piv_lu,f32,c,64,1024,,1,colmat,4,0.413609,413.609000,ok,api-inclusive,"[0.413609, 0.416529, 0.412469, 0.412809, 0.414189]",4,4,evo2-zen5-16c
+linalg-wide,full_piv_lu,f32,c,64,1024,,1,colmat,4,0.164156,164.156000,ok,,"[0.164145, 0.164686, 0.163055, 0.164156, 0.165945]",4,4,evo2-zen5-16c
+linalg-wide,full_piv_lu,f32,f,64,1024,,1,lapack-aocl,4,,,skipped,full_piv_lu has no f32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,full_piv_lu,f32,f,64,1024,,1,colmat,4,0.273933,273.933000,ok,api-inclusive,"[0.273503, 0.27487300000000003, 0.273352, 0.276863, 0.27393300000000004]",4,4,evo2-zen5-16c
+linalg-wide,full_piv_lu,f32,f,64,1024,,1,colmat,4,0.271803,271.803000,ok,,"[0.271643, 0.26965300000000003, 0.27180299999999996, 0.272723, 0.275183]",4,4,evo2-zen5-16c
+linalg-wide,full_piv_lu,f32,c,256,4096,,1,lapack-aocl,4,,,skipped,full_piv_lu has no f32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,full_piv_lu,f32,c,256,4096,,1,colmat,4,6.284162,6284.162000,ok,api-inclusive,"[6.277063, 6.280392, 6.287173, 6.284162, 6.291062]",4,4,evo2-zen5-16c
+linalg-wide,full_piv_lu,f32,c,256,4096,,1,colmat,4,4.433742,4433.742000,ok,,"[4.433742, 4.427642, 4.434362, 4.429591, 4.438612]",4,4,evo2-zen5-16c
+linalg-wide,full_piv_lu,f32,f,256,4096,,1,lapack-aocl,4,,,skipped,full_piv_lu has no f32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,full_piv_lu,f32,f,256,4096,,1,colmat,4,4.940778,4940.778000,ok,api-inclusive,"[4.940778, 4.949168, 4.936089, 4.9494880000000006, 4.940608]",4,4,evo2-zen5-16c
+linalg-wide,full_piv_lu,f32,f,256,4096,,1,colmat,4,5.224100,5224.100000,ok,,"[5.213421, 5.2241, 5.230641, 5.2177500000000006, 5.225081]",4,4,evo2-zen5-16c
+linalg-wide,cholesky,f32,c,64,1024,,1,lapack-aocl,4,,,skipped,cholesky has no f32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,cholesky,f32,c,64,1024,,1,colmat,4,,,skipped,cholesky needs a square matrix; 64x1024 is not,,4,4,evo2-zen5-16c
+linalg-wide,cholesky,f32,f,64,1024,,1,lapack-aocl,4,,,skipped,cholesky has no f32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,cholesky,f32,f,64,1024,,1,colmat,4,,,skipped,cholesky needs a square matrix; 64x1024 is not,,4,4,evo2-zen5-16c
+linalg-wide,cholesky,f32,c,256,4096,,1,lapack-aocl,4,,,skipped,cholesky has no f32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,cholesky,f32,c,256,4096,,1,colmat,4,,,skipped,cholesky needs a square matrix; 256x4096 is not,,4,4,evo2-zen5-16c
+linalg-wide,cholesky,f32,f,256,4096,,1,lapack-aocl,4,,,skipped,cholesky has no f32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,cholesky,f32,f,256,4096,,1,colmat,4,,,skipped,cholesky needs a square matrix; 256x4096 is not,,4,4,evo2-zen5-16c
+linalg-wide,triangular_solve,f32,c,64,1024,,1,lapack-aocl,4,,,skipped,triangular_solve needs a square matrix; 64x1024 is not,,4,4,evo2-zen5-16c
+linalg-wide,triangular_solve,f32,c,64,1024,,1,colmat,4,,,skipped,triangular_solve needs a square matrix; 64x1024 is not,,4,4,evo2-zen5-16c
+linalg-wide,triangular_solve,f32,f,64,1024,,1,lapack-aocl,4,,,skipped,triangular_solve needs a square matrix; 64x1024 is not,,4,4,evo2-zen5-16c
+linalg-wide,triangular_solve,f32,f,64,1024,,1,colmat,4,,,skipped,triangular_solve needs a square matrix; 64x1024 is not,,4,4,evo2-zen5-16c
+linalg-wide,triangular_solve,f32,c,256,4096,,1,lapack-aocl,4,,,skipped,triangular_solve needs a square matrix; 256x4096 is not,,4,4,evo2-zen5-16c
+linalg-wide,triangular_solve,f32,c,256,4096,,1,colmat,4,,,skipped,triangular_solve needs a square matrix; 256x4096 is not,,4,4,evo2-zen5-16c
+linalg-wide,triangular_solve,f32,f,256,4096,,1,lapack-aocl,4,,,skipped,triangular_solve needs a square matrix; 256x4096 is not,,4,4,evo2-zen5-16c
+linalg-wide,triangular_solve,f32,f,256,4096,,1,colmat,4,,,skipped,triangular_solve needs a square matrix; 256x4096 is not,,4,4,evo2-zen5-16c
+linalg-wide,solve,f32,c,64,1024,,1,lapack-aocl,4,,,skipped,solve has no f32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,solve,f32,c,64,1024,,1,colmat,4,,,skipped,solve needs a square matrix; 64x1024 is not,,4,4,evo2-zen5-16c
+linalg-wide,solve,f32,f,64,1024,,1,lapack-aocl,4,,,skipped,solve has no f32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,solve,f32,f,64,1024,,1,colmat,4,,,skipped,solve needs a square matrix; 64x1024 is not,,4,4,evo2-zen5-16c
+linalg-wide,solve,f32,c,256,4096,,1,lapack-aocl,4,,,skipped,solve has no f32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,solve,f32,c,256,4096,,1,colmat,4,,,skipped,solve needs a square matrix; 256x4096 is not,,4,4,evo2-zen5-16c
+linalg-wide,solve,f32,f,256,4096,,1,lapack-aocl,4,,,skipped,solve has no f32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,solve,f32,f,256,4096,,1,colmat,4,,,skipped,solve needs a square matrix; 256x4096 is not,,4,4,evo2-zen5-16c
+linalg-wide,qr_factor,f32,c,64,1024,,1,lapack-aocl,4,,,skipped,qr_factor has no f32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,qr_factor,f32,c,64,1024,,1,colmat,4,0.368650,368.650000,ok,,"[0.3684, 0.37055, 0.36477, 0.36865, 0.36963]",4,4,evo2-zen5-16c
+linalg-wide,qr_factor,f32,f,64,1024,,1,lapack-aocl,4,,,skipped,qr_factor has no f32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,qr_factor,f32,f,64,1024,,1,colmat,4,0.091518,91.518000,ok,,"[0.09163800000000001, 0.091518, 0.091307, 0.09168799999999999, 0.09147799999999999]",4,4,evo2-zen5-16c
+linalg-wide,qr_factor,f32,c,256,4096,,1,lapack-aocl,4,,,skipped,qr_factor has no f32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,qr_factor,f32,c,256,4096,,1,colmat,4,4.253677,4253.677000,ok,,"[4.250156, 4.234667, 4.253677, 4.262866, 4.261276]",4,4,evo2-zen5-16c
+linalg-wide,qr_factor,f32,f,256,4096,,1,lapack-aocl,4,,,skipped,qr_factor has no f32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,qr_factor,f32,f,256,4096,,1,colmat,4,1.915449,1915.449000,ok,,"[1.923009, 1.915449, 1.9131289999999999, 1.9121489999999999, 1.922268]",4,4,evo2-zen5-16c
+linalg-wide,qr,f32,c,64,1024,,1,lapack-aocl,4,,,skipped,qr has no f32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,qr,f32,c,64,1024,,1,colmat,4,0.222094,222.094000,ok,api-inclusive,"[0.218745, 0.221804, 0.227404, 0.22209399999999999, 0.223324]",4,4,evo2-zen5-16c
+linalg-wide,qr,f32,c,64,1024,,1,colmat,4,0.380180,380.180000,ok,,"[0.38165, 0.38362999999999997, 0.379279, 0.3775, 0.38017999999999996]",4,4,evo2-zen5-16c
+linalg-wide,qr,f32,f,64,1024,,1,lapack-aocl,4,,,skipped,qr has no f32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,qr,f32,f,64,1024,,1,colmat,4,0.156596,156.596000,ok,api-inclusive,"[0.156856, 0.151086, 0.151576, 0.156596, 0.15787500000000002]",4,4,evo2-zen5-16c
+linalg-wide,qr,f32,f,64,1024,,1,colmat,4,0.102288,102.288000,ok,,"[0.102367, 0.10227699999999999, 0.102617, 0.101867, 0.10228799999999999]",4,4,evo2-zen5-16c
+linalg-wide,qr,f32,c,256,4096,,1,lapack-aocl,4,,,skipped,qr has no f32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,qr,f32,c,256,4096,,1,colmat,4,3.302182,3302.182000,ok,api-inclusive,"[3.294852, 3.315291, 3.3021819999999997, 3.290762, 3.3108220000000004]",4,4,evo2-zen5-16c
+linalg-wide,qr,f32,c,256,4096,,1,colmat,4,4.044512,4044.512000,ok,,"[4.065411, 4.044512, 4.043812, 4.034052, 4.057832]",4,4,evo2-zen5-16c
+linalg-wide,qr,f32,f,256,4096,,1,lapack-aocl,4,,,skipped,qr has no f32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,qr,f32,f,256,4096,,1,colmat,4,2.163762,2163.762000,ok,api-inclusive,"[2.166652, 2.1614619999999998, 2.176702, 2.163762, 2.163243]",4,4,evo2-zen5-16c
+linalg-wide,qr,f32,f,256,4096,,1,colmat,4,2.041425,2041.425000,ok,,"[2.0315559999999997, 2.041425, 2.045425, 2.037976, 2.041756]",4,4,evo2-zen5-16c
+linalg-wide,svd_values,f32,c,64,1024,,1,lapack-aocl,4,,,skipped,svd_values has no f32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,svd_values,f32,c,64,1024,,1,colmat,4,0.418299,418.299000,ok,api-inclusive,"[0.41829900000000003, 0.419638, 0.415989, 0.418969, 0.41546900000000003]",4,4,evo2-zen5-16c
+linalg-wide,svd_values,f32,c,64,1024,,1,colmat,4,0.414139,414.139000,ok,,"[0.413929, 0.41543800000000003, 0.413219, 0.416749, 0.414139]",4,4,evo2-zen5-16c
+linalg-wide,svd_values,f32,f,64,1024,,1,lapack-aocl,4,,,skipped,svd_values has no f32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,svd_values,f32,f,64,1024,,1,colmat,4,0.451118,451.118000,ok,api-inclusive,"[0.45153800000000005, 0.450148, 0.451118, 0.452318, 0.450398]",4,4,evo2-zen5-16c
+linalg-wide,svd_values,f32,f,64,1024,,1,colmat,4,0.447178,447.178000,ok,,"[0.446618, 0.451118, 0.447178, 0.450258, 0.441618]",4,4,evo2-zen5-16c
+linalg-wide,svd_values,f32,c,256,4096,,1,lapack-aocl,4,,,skipped,svd_values has no f32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,svd_values,f32,c,256,4096,,1,colmat,4,6.720640,6720.640000,ok,api-inclusive,"[6.7299, 6.721761, 6.7206399999999995, 6.710551000000001, 6.71989]",4,4,evo2-zen5-16c
+linalg-wide,svd_values,f32,c,256,4096,,1,colmat,4,6.710431,6710.431000,ok,,"[6.710431, 6.697121, 6.71439, 6.727091, 6.709200999999999]",4,4,evo2-zen5-16c
+linalg-wide,svd_values,f32,f,256,4096,,1,lapack-aocl,4,,,skipped,svd_values has no f32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,svd_values,f32,f,256,4096,,1,colmat,4,8.720597,8720.597000,ok,api-inclusive,"[8.716437, 8.720597, 8.743136, 8.731097, 8.712317]",4,4,evo2-zen5-16c
+linalg-wide,svd_values,f32,f,256,4096,,1,colmat,4,8.698677,8698.677000,ok,,"[8.698677, 8.706358000000002, 8.683578, 8.706807000000001, 8.697177]",4,4,evo2-zen5-16c
+linalg-wide,svd_thin,f32,c,64,1024,,1,lapack-aocl,4,,,skipped,svd_thin has no f32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,svd_thin,f32,c,64,1024,,1,colmat,4,0.627473,627.473000,ok,api-inclusive,"[0.6274730000000001, 0.628383, 0.623323, 0.625764, 0.6279429999999999]",4,4,evo2-zen5-16c
+linalg-wide,svd_thin,f32,c,64,1024,,1,colmat,4,0.619314,619.314000,ok,,"[0.617664, 0.619314, 0.620523, 0.618823, 0.6195740000000001]",4,4,evo2-zen5-16c
+linalg-wide,svd_thin,f32,f,64,1024,,1,lapack-aocl,4,,,skipped,svd_thin has no f32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,svd_thin,f32,f,64,1024,,1,colmat,4,0.649362,649.362000,ok,api-inclusive,"[0.6518029999999999, 0.648202, 0.650363, 0.6466729999999999, 0.649362]",4,4,evo2-zen5-16c
+linalg-wide,svd_thin,f32,f,64,1024,,1,colmat,4,0.637503,637.503000,ok,,"[0.640893, 0.6375029999999999, 0.638903, 0.6372030000000001, 0.637443]",4,4,evo2-zen5-16c
+linalg-wide,svd_thin,f32,c,256,4096,,1,lapack-aocl,4,,,skipped,svd_thin has no f32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,svd_thin,f32,c,256,4096,,1,colmat,4,9.851797,9851.797000,ok,api-inclusive,"[9.893595, 9.858246, 9.845147, 9.851797000000001, 9.842577]",4,4,evo2-zen5-16c
+linalg-wide,svd_thin,f32,c,256,4096,,1,colmat,4,9.748149,9748.149000,ok,,"[9.748149, 9.73133, 9.746039999999999, 9.752189, 9.767388]",4,4,evo2-zen5-16c
+linalg-wide,svd_thin,f32,f,256,4096,,1,lapack-aocl,4,,,skipped,svd_thin has no f32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,svd_thin,f32,f,256,4096,,1,colmat,4,11.896802,11896.802000,ok,api-inclusive,"[11.899502, 11.888652, 12.356048999999999, 11.896802, 11.743926]",4,4,evo2-zen5-16c
+linalg-wide,svd_thin,f32,f,256,4096,,1,colmat,4,11.817554,11817.554000,ok,,"[11.834433, 11.817554, 11.813614, 11.812285000000001, 12.191154]",4,4,evo2-zen5-16c
+linalg-wide,eigh,f32,c,64,1024,,1,lapack-aocl,4,,,skipped,eigh has no f32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,eigh,f32,c,64,1024,,1,colmat,4,,,skipped,eigh needs a square matrix; 64x1024 is not,,4,4,evo2-zen5-16c
+linalg-wide,eigh,f32,f,64,1024,,1,lapack-aocl,4,,,skipped,eigh has no f32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,eigh,f32,f,64,1024,,1,colmat,4,,,skipped,eigh needs a square matrix; 64x1024 is not,,4,4,evo2-zen5-16c
+linalg-wide,eigh,f32,c,256,4096,,1,lapack-aocl,4,,,skipped,eigh has no f32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,eigh,f32,c,256,4096,,1,colmat,4,,,skipped,eigh needs a square matrix; 256x4096 is not,,4,4,evo2-zen5-16c
+linalg-wide,eigh,f32,f,256,4096,,1,lapack-aocl,4,,,skipped,eigh has no f32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,eigh,f32,f,256,4096,,1,colmat,4,,,skipped,eigh needs a square matrix; 256x4096 is not,,4,4,evo2-zen5-16c
+linalg-wide,lu,c32,c,64,1024,,1,lapack-aocl,4,,,skipped,lu has no c32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,lu,c32,c,64,1024,,1,colmat,4,0.183235,183.235000,ok,api-inclusive,"[0.18323499999999998, 0.183475, 0.18277500000000002, 0.18299500000000002, 0.18685500000000002]",4,4,evo2-zen5-16c
+linalg-wide,lu,c32,c,64,1024,,1,colmat,4,0.115986,115.986000,ok,,"[0.118827, 0.113977, 0.11598599999999999, 0.114677, 0.116227]",4,4,evo2-zen5-16c
+linalg-wide,lu,c32,f,64,1024,,1,lapack-aocl,4,,,skipped,lu has no c32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,lu,c32,f,64,1024,,1,colmat,4,0.107357,107.357000,ok,api-inclusive,"[0.108057, 0.107718, 0.10693699999999999, 0.107057, 0.107357]",4,4,evo2-zen5-16c
+linalg-wide,lu,c32,f,64,1024,,1,colmat,4,0.093438,93.438000,ok,,"[0.093307, 0.093438, 0.093668, 0.09329699999999999, 0.093568]",4,4,evo2-zen5-16c
+linalg-wide,lu,c32,c,256,4096,,1,lapack-aocl,4,,,skipped,lu has no c32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,lu,c32,c,256,4096,,1,colmat,4,4.126069,4126.069000,ok,api-inclusive,"[4.1211, 4.126068999999999, 4.126739, 4.1340200000000005, 4.12438]",4,4,evo2-zen5-16c
+linalg-wide,lu,c32,c,256,4096,,1,colmat,4,2.649019,2649.019000,ok,,"[2.649019, 2.663309, 2.6483499999999998, 2.653279, 2.641429]",4,4,evo2-zen5-16c
+linalg-wide,lu,c32,f,256,4096,,1,lapack-aocl,4,,,skipped,lu has no c32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,lu,c32,f,256,4096,,1,colmat,4,2.891133,2891.133000,ok,api-inclusive,"[2.889913, 2.891133, 2.9079319999999997, 2.9030620000000003, 2.883033]",4,4,evo2-zen5-16c
+linalg-wide,lu,c32,f,256,4096,,1,colmat,4,2.639369,2639.369000,ok,,"[2.638349, 2.634589, 2.654779, 2.64155, 2.639369]",4,4,evo2-zen5-16c
+linalg-wide,full_piv_lu,c32,c,64,1024,,1,lapack-aocl,4,,,skipped,full_piv_lu has no c32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,full_piv_lu,c32,c,64,1024,,1,colmat,4,0.404560,404.560000,ok,api-inclusive,"[0.404459, 0.40342900000000004, 0.407179, 0.40456, 0.405559]",4,4,evo2-zen5-16c
+linalg-wide,full_piv_lu,c32,c,64,1024,,1,colmat,4,0.255283,255.283000,ok,,"[0.251643, 0.25549299999999997, 0.255964, 0.255283, 0.251033]",4,4,evo2-zen5-16c
+linalg-wide,full_piv_lu,c32,f,64,1024,,1,lapack-aocl,4,,,skipped,full_piv_lu has no c32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,full_piv_lu,c32,f,64,1024,,1,colmat,4,0.330701,330.701000,ok,api-inclusive,"[0.33070099999999997, 0.33188100000000004, 0.336501, 0.330602, 0.329151]",4,4,evo2-zen5-16c
+linalg-wide,full_piv_lu,c32,f,64,1024,,1,colmat,4,0.322651,322.651000,ok,,"[0.32234100000000004, 0.321781, 0.325631, 0.323561, 0.322651]",4,4,evo2-zen5-16c
+linalg-wide,full_piv_lu,c32,c,256,4096,,1,lapack-aocl,4,,,skipped,full_piv_lu has no c32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,full_piv_lu,c32,c,256,4096,,1,colmat,4,11.361365,11361.365000,ok,api-inclusive,"[11.398795, 11.409254, 11.359246, 11.361365, 11.331156]",4,4,evo2-zen5-16c
+linalg-wide,full_piv_lu,c32,c,256,4096,,1,colmat,4,9.187314,9187.314000,ok,,"[9.179794, 9.175594, 9.191652999999999, 9.224563, 9.187314]",4,4,evo2-zen5-16c
+linalg-wide,full_piv_lu,c32,f,256,4096,,1,lapack-aocl,4,,,skipped,full_piv_lu has no c32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,full_piv_lu,c32,f,256,4096,,1,colmat,4,10.212986,10212.986000,ok,api-inclusive,"[10.209426, 10.214276, 10.200087, 10.220296, 10.212986]",4,4,evo2-zen5-16c
+linalg-wide,full_piv_lu,c32,f,256,4096,,1,colmat,4,10.931837,10931.837000,ok,,"[10.913077, 10.938207, 10.939727, 10.895847, 10.931837]",4,4,evo2-zen5-16c
+linalg-wide,cholesky,c32,c,64,1024,,1,lapack-aocl,4,,,skipped,cholesky has no c32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,cholesky,c32,c,64,1024,,1,colmat,4,,,skipped,cholesky needs a square matrix; 64x1024 is not,,4,4,evo2-zen5-16c
+linalg-wide,cholesky,c32,f,64,1024,,1,lapack-aocl,4,,,skipped,cholesky has no c32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,cholesky,c32,f,64,1024,,1,colmat,4,,,skipped,cholesky needs a square matrix; 64x1024 is not,,4,4,evo2-zen5-16c
+linalg-wide,cholesky,c32,c,256,4096,,1,lapack-aocl,4,,,skipped,cholesky has no c32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,cholesky,c32,c,256,4096,,1,colmat,4,,,skipped,cholesky needs a square matrix; 256x4096 is not,,4,4,evo2-zen5-16c
+linalg-wide,cholesky,c32,f,256,4096,,1,lapack-aocl,4,,,skipped,cholesky has no c32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,cholesky,c32,f,256,4096,,1,colmat,4,,,skipped,cholesky needs a square matrix; 256x4096 is not,,4,4,evo2-zen5-16c
+linalg-wide,triangular_solve,c32,c,64,1024,,1,lapack-aocl,4,,,skipped,triangular_solve needs a square matrix; 64x1024 is not,,4,4,evo2-zen5-16c
+linalg-wide,triangular_solve,c32,c,64,1024,,1,colmat,4,,,skipped,triangular_solve needs a square matrix; 64x1024 is not,,4,4,evo2-zen5-16c
+linalg-wide,triangular_solve,c32,f,64,1024,,1,lapack-aocl,4,,,skipped,triangular_solve needs a square matrix; 64x1024 is not,,4,4,evo2-zen5-16c
+linalg-wide,triangular_solve,c32,f,64,1024,,1,colmat,4,,,skipped,triangular_solve needs a square matrix; 64x1024 is not,,4,4,evo2-zen5-16c
+linalg-wide,triangular_solve,c32,c,256,4096,,1,lapack-aocl,4,,,skipped,triangular_solve needs a square matrix; 256x4096 is not,,4,4,evo2-zen5-16c
+linalg-wide,triangular_solve,c32,c,256,4096,,1,colmat,4,,,skipped,triangular_solve needs a square matrix; 256x4096 is not,,4,4,evo2-zen5-16c
+linalg-wide,triangular_solve,c32,f,256,4096,,1,lapack-aocl,4,,,skipped,triangular_solve needs a square matrix; 256x4096 is not,,4,4,evo2-zen5-16c
+linalg-wide,triangular_solve,c32,f,256,4096,,1,colmat,4,,,skipped,triangular_solve needs a square matrix; 256x4096 is not,,4,4,evo2-zen5-16c
+linalg-wide,solve,c32,c,64,1024,,1,lapack-aocl,4,,,skipped,solve has no c32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,solve,c32,c,64,1024,,1,colmat,4,,,skipped,solve needs a square matrix; 64x1024 is not,,4,4,evo2-zen5-16c
+linalg-wide,solve,c32,f,64,1024,,1,lapack-aocl,4,,,skipped,solve has no c32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,solve,c32,f,64,1024,,1,colmat,4,,,skipped,solve needs a square matrix; 64x1024 is not,,4,4,evo2-zen5-16c
+linalg-wide,solve,c32,c,256,4096,,1,lapack-aocl,4,,,skipped,solve has no c32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,solve,c32,c,256,4096,,1,colmat,4,,,skipped,solve needs a square matrix; 256x4096 is not,,4,4,evo2-zen5-16c
+linalg-wide,solve,c32,f,256,4096,,1,lapack-aocl,4,,,skipped,solve has no c32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,solve,c32,f,256,4096,,1,colmat,4,,,skipped,solve needs a square matrix; 256x4096 is not,,4,4,evo2-zen5-16c
+linalg-wide,qr_factor,c32,c,64,1024,,1,lapack-aocl,4,,,skipped,qr_factor has no c32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,qr_factor,c32,c,64,1024,,1,colmat,4,0.433138,433.138000,ok,,"[0.436578, 0.429358, 0.433138, 0.43636800000000003, 0.430948]",4,4,evo2-zen5-16c
+linalg-wide,qr_factor,c32,f,64,1024,,1,lapack-aocl,4,,,skipped,qr_factor has no c32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,qr_factor,c32,f,64,1024,,1,colmat,4,0.205244,205.244000,ok,,"[0.205444, 0.204795, 0.205185, 0.20796399999999998, 0.20524399999999998]",4,4,evo2-zen5-16c
+linalg-wide,qr_factor,c32,c,256,4096,,1,lapack-aocl,4,,,skipped,qr_factor has no c32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,qr_factor,c32,c,256,4096,,1,colmat,4,7.616906,7616.906000,ok,,"[7.630875, 7.631246, 7.616905999999999, 7.604716, 7.612596]",4,4,evo2-zen5-16c
+linalg-wide,qr_factor,c32,f,256,4096,,1,lapack-aocl,4,,,skipped,qr_factor has no c32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,qr_factor,c32,f,256,4096,,1,colmat,4,5.441484,5441.484000,ok,,"[5.4298139999999995, 5.441484, 5.596, 5.439234, 5.449843]",4,4,evo2-zen5-16c
+linalg-wide,qr,c32,c,64,1024,,1,lapack-aocl,4,,,skipped,qr has no c32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,qr,c32,c,64,1024,,1,colmat,4,0.320521,320.521000,ok,api-inclusive,"[0.316382, 0.320551, 0.32151199999999996, 0.316381, 0.320521]",4,4,evo2-zen5-16c
+linalg-wide,qr,c32,c,64,1024,,1,colmat,4,0.456228,456.228000,ok,,"[0.457778, 0.45622799999999997, 0.451528, 0.452508, 0.45749799999999996]",4,4,evo2-zen5-16c
+linalg-wide,qr,c32,f,64,1024,,1,lapack-aocl,4,,,skipped,qr has no c32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,qr,c32,f,64,1024,,1,colmat,4,0.244624,244.624000,ok,api-inclusive,"[0.24462399999999998, 0.244603, 0.244134, 0.24817300000000003, 0.24525300000000003]",4,4,evo2-zen5-16c
+linalg-wide,qr,c32,f,64,1024,,1,colmat,4,0.226814,226.814000,ok,,"[0.227164, 0.226734, 0.22676400000000002, 0.230083, 0.226814]",4,4,evo2-zen5-16c
+linalg-wide,qr,c32,c,256,4096,,1,lapack-aocl,4,,,skipped,qr has no c32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,qr,c32,c,256,4096,,1,colmat,4,7.244776,7244.776000,ok,api-inclusive,"[7.221157, 7.279164000000001, 7.226916, 7.244776, 7.252655]",4,4,evo2-zen5-16c
+linalg-wide,qr,c32,c,256,4096,,1,colmat,4,7.697613,7697.613000,ok,,"[7.697703000000001, 7.675024, 7.667204000000001, 7.697613, 7.727682]",4,4,evo2-zen5-16c
+linalg-wide,qr,c32,f,256,4096,,1,lapack-aocl,4,,,skipped,qr has no c32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,qr,c32,f,256,4096,,1,colmat,4,5.948560,5948.560000,ok,api-inclusive,"[5.94871, 5.96123, 5.9378210000000005, 5.9427, 5.9485600000000005]",4,4,evo2-zen5-16c
+linalg-wide,qr,c32,f,256,4096,,1,colmat,4,5.806584,5806.584000,ok,,"[5.807844, 5.802024, 5.7953149999999996, 5.806584, 5.810283999999999]",4,4,evo2-zen5-16c
+linalg-wide,svd_values,c32,c,64,1024,,1,lapack-aocl,4,,,skipped,svd_values has no c32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,svd_values,c32,c,64,1024,,1,colmat,4,0.598984,598.984000,ok,api-inclusive,"[0.595564, 0.599414, 0.599274, 0.598704, 0.598984]",4,4,evo2-zen5-16c
+linalg-wide,svd_values,c32,c,64,1024,,1,colmat,4,0.598274,598.274000,ok,,"[0.598924, 0.598274, 0.594074, 0.599974, 0.595094]",4,4,evo2-zen5-16c
+linalg-wide,svd_values,c32,f,64,1024,,1,lapack-aocl,4,,,skipped,svd_values has no c32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,svd_values,c32,f,64,1024,,1,colmat,4,0.650153,650.153000,ok,api-inclusive,"[0.651923, 0.641883, 0.6512319999999999, 0.650153, 0.643902]",4,4,evo2-zen5-16c
+linalg-wide,svd_values,c32,f,64,1024,,1,colmat,4,0.638193,638.193000,ok,,"[0.6348229999999999, 0.641092, 0.630943, 0.641903, 0.638193]",4,4,evo2-zen5-16c
+linalg-wide,svd_values,c32,c,256,4096,,1,lapack-aocl,4,,,skipped,svd_values has no c32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,svd_values,c32,c,256,4096,,1,colmat,4,12.565442,12565.442000,ok,api-inclusive,"[12.561403, 12.545473, 12.603181, 12.565442, 12.570293]",4,4,evo2-zen5-16c
+linalg-wide,svd_values,c32,c,256,4096,,1,colmat,4,12.537443,12537.443000,ok,,"[12.520873, 12.556863, 12.525922999999999, 12.537443, 12.573992]",4,4,evo2-zen5-16c
+linalg-wide,svd_values,c32,f,256,4096,,1,lapack-aocl,4,,,skipped,svd_values has no c32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,svd_values,c32,f,256,4096,,1,colmat,4,16.448888,16448.888000,ok,api-inclusive,"[16.448887999999997, 16.436338000000003, 16.474498, 16.436228, 16.466937]",4,4,evo2-zen5-16c
+linalg-wide,svd_values,c32,f,256,4096,,1,colmat,4,16.482428,16482.428000,ok,,"[16.460658, 16.418159000000003, 16.490755999999998, 16.482428, 16.508016]",4,4,evo2-zen5-16c
+linalg-wide,svd_thin,c32,c,64,1024,,1,lapack-aocl,4,,,skipped,svd_thin has no c32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,svd_thin,c32,c,64,1024,,1,colmat,4,0.927055,927.055000,ok,api-inclusive,"[0.9235960000000001, 0.9281349999999999, 0.926995, 0.928065, 0.927055]",4,4,evo2-zen5-16c
+linalg-wide,svd_thin,c32,c,64,1024,,1,colmat,4,0.916975,916.975000,ok,,"[0.914316, 0.9148649999999999, 0.916975, 0.918965, 0.916975]",4,4,evo2-zen5-16c
+linalg-wide,svd_thin,c32,f,64,1024,,1,lapack-aocl,4,,,skipped,svd_thin has no c32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,svd_thin,c32,f,64,1024,,1,colmat,4,0.969524,969.524000,ok,api-inclusive,"[0.971514, 0.965394, 0.9641740000000001, 0.975374, 0.969524]",4,4,evo2-zen5-16c
+linalg-wide,svd_thin,c32,f,64,1024,,1,colmat,4,0.961534,961.534000,ok,,"[0.961534, 0.956454, 0.961874, 0.961134, 0.962974]",4,4,evo2-zen5-16c
+linalg-wide,svd_thin,c32,c,256,4096,,1,lapack-aocl,4,,,skipped,svd_thin has no c32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,svd_thin,c32,c,256,4096,,1,colmat,4,21.370686,21370.686000,ok,api-inclusive,"[21.397115000000003, 21.354625, 21.364815, 21.370686, 21.402924]",4,4,evo2-zen5-16c
+linalg-wide,svd_thin,c32,c,256,4096,,1,colmat,4,21.426054,21426.054000,ok,,"[21.325266, 21.522181, 21.426054, 21.428684, 21.400064]",4,4,evo2-zen5-16c
+linalg-wide,svd_thin,c32,f,256,4096,,1,lapack-aocl,4,,,skipped,svd_thin has no c32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,svd_thin,c32,f,256,4096,,1,colmat,4,25.374677,25374.677000,ok,api-inclusive,"[25.448765, 25.390797, 25.330038, 25.374677000000002, 25.328908000000002]",4,4,evo2-zen5-16c
+linalg-wide,svd_thin,c32,f,256,4096,,1,colmat,4,25.260000,25260.000000,ok,,"[25.306988999999998, 25.313848999999998, 25.26, 25.246601000000002, 25.236271000000002]",4,4,evo2-zen5-16c
+linalg-wide,eigh,c32,c,64,1024,,1,lapack-aocl,4,,,skipped,eigh has no c32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,eigh,c32,c,64,1024,,1,colmat,4,,,skipped,eigh needs a square matrix; 64x1024 is not,,4,4,evo2-zen5-16c
+linalg-wide,eigh,c32,f,64,1024,,1,lapack-aocl,4,,,skipped,eigh has no c32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,eigh,c32,f,64,1024,,1,colmat,4,,,skipped,eigh needs a square matrix; 64x1024 is not,,4,4,evo2-zen5-16c
+linalg-wide,eigh,c32,c,256,4096,,1,lapack-aocl,4,,,skipped,eigh has no c32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,eigh,c32,c,256,4096,,1,colmat,4,,,skipped,eigh needs a square matrix; 256x4096 is not,,4,4,evo2-zen5-16c
+linalg-wide,eigh,c32,f,256,4096,,1,lapack-aocl,4,,,skipped,eigh has no c32 LAPACK route in this harness yet; the vendor row is skipped,,4,4,evo2-zen5-16c
+linalg-wide,eigh,c32,f,256,4096,,1,colmat,4,,,skipped,eigh needs a square matrix; 256x4096 is not,,4,4,evo2-zen5-16c
