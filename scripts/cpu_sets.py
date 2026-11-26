@@ -57,12 +57,15 @@ def l3_domains(sysfs_root=Path('/')):
     return [list(d) for d in domains]
 
 
-def derive_row(threads, domains):
-    """Fill whole L3 domains in order; the observer is every CPU outside the domains touched."""
-    everything = [c for d in domains for c in d]
-    if threads > len(everything):
-        raise SystemExit(f'{threads}T needs {threads} CPUs, node has {len(everything)}')
-    measured = sorted(everything)[:threads]
+def derive_row(threads, domains, start=0):
+    """Fill whole L3 domains in CPU order from CPU `start`; the observer is every CPU outside the
+    domains touched. `start` is the first CPU of a declared row, so a profile whose rows begin
+    above CPU 0 (the observing side sits on CCX 0) is judged on its own start, not on CPU 0."""
+    everything = sorted(c for d in domains for c in d)
+    pool = [c for c in everything if c >= start]
+    if threads > len(pool):
+        raise SystemExit(f'{threads}T from CPU {start} needs {threads} CPUs, only {len(pool)} remain')
+    measured = pool[:threads]
     touched = [d for d in domains if set(d) & set(measured)]
     observer = sorted(set(everything) - {c for d in touched for c in d})
     return {
@@ -77,13 +80,16 @@ def derive_row(threads, domains):
 
 def declared(profile_name):
     profiles = yaml.safe_load((ROOT / 'benchmarks/profiles.yaml').read_text())
-    prof = next(p for p in profiles['profiles']
-                if isinstance(p, dict) and p.get('name') == profile_name)
+    prof = next((p for p in profiles['profiles']
+                 if isinstance(p, dict) and p.get('name') == profile_name), None)
+    if prof is None or 'thread_rows' not in prof:
+        raise SystemExit(f'profile {profile_name!r} is not declared with thread_rows in profiles.yaml')
     rows = {r['threads']: r for r in prof['thread_rows']}
     suites = {}
     for path in sorted((ROOT / 'benchmarks/suites').glob('*.yaml')):
         for run in yaml.safe_load(path.read_text()).get('runs') or []:
-            sets = (run.get('cpu_sets') or {}).get(profile_name)
+            sets = run.get('cpu_sets') or {}
+            sets = sets.get(profile_name) if isinstance(sets, dict) else None
             if sets:
                 suites[path.stem] = suites.get(path.stem, []) + [(run['threads'], sets)]
     return rows, suites
@@ -93,17 +99,22 @@ def cmd_check(args):
     domains = l3_domains(Path(args.sysfs_root))
     rows, suites = declared(args.profile)
     bad = []
-    derived = {t: derive_row(t, domains) for t in rows}
+    derived = {}
     for t, row in rows.items():
-        if row['measured'] != derived[t]['measured'] or (row.get('observer') or '') != derived[t]['observer']:
-            bad.append(f'profile row {t}T: declared {row["measured"]!r}/{row.get("observer")!r}, '
-                       f'derived {derived[t]["measured"]!r}/{derived[t]["observer"]!r}')
+        start = parse_cpu_list(row['measured'])[0]
+        d = derived[t] = derive_row(t, domains, start)
+        if row['measured'] != d['measured']:
+            bad.append(f'profile row {t}T: declared {row["measured"]!r}, derived {d["measured"]!r} from CPU {start}')
+        touched = {c for dom in domains if set(dom) & set(parse_cpu_list(d['measured'])) for c in dom}
+        clash = touched & set(parse_cpu_list(row.get('observer') or ''))
+        if clash:
+            bad.append(f'profile row {t}T: observer {row.get("observer")!r} is inside the measured L3 domains ({fmt_cpu_list(clash)})')
     for suite, runs in suites.items():
         for threads, sets in runs:
             if len(threads) != len(sets):
                 bad.append(f'suite {suite}: {len(threads)} thread counts but {len(sets)} cpu_sets')
             for t, cpus in zip(threads, sets):
-                d = derived.get(t) or derive_row(t, domains)
+                d = derived.get(t) or derive_row(t, domains, parse_cpu_list(cpus)[0])
                 if cpus != d['measured']:
                     bad.append(f'suite {suite} {t}T: cpu_sets {cpus!r}, derived {d["measured"]!r}')
     print(f'L3 domains: {len(domains)} of sizes {sorted({len(d) for d in domains})}')

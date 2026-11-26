@@ -85,8 +85,8 @@ profiles:
       2x AMD EPYC 7702 (Zen 2), 128 physical / 128 logical cores (SMT off), 8 NUMA nodes of 16
       cores, 16 MiB L3 per 4-core CCX (32 L3 domains of 4 CPUs, no larger L3 group exists). NO
       ROW ABOVE 1T IS L3-LOCAL, unlike the evo2 profile's one-L3-domain cells: with 4-CPU domains
-      a 16T cell cannot sit in one. Thread rows follow the NUMA layout and fill whole domains,
-      the fewest that give the thread count (scripts/cpu_sets.py derives and checks them from
+      a 16T cell cannot sit in one. Thread rows follow the NUMA layout; from 16T up they fill whole
+      domains, the fewest that give the thread count (scripts/cpu_sets.py derives and checks them from
       /sys/devices/system/cpu/*/cache/index3/shared_cpu_list): 1T is one CPU of one domain, 16T is
       4 domains (NUMA node 0), 32T 8 domains (nodes 0-1), 64T 16 domains (socket 0), 128T all 32.
       So the 16T-and-above rows measure that many threads over that many private 16 MiB L3
