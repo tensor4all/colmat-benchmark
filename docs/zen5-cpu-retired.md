@@ -28,14 +28,17 @@ published comparison; the index does not merge them.
   `optional_profiles` and `cpu_sets`. `cpu_sets` now names `evo2-zen5-16c` with the rows its
   toolkit profile already declares (the suite schema requires at least one entry).
 - `result/INDEX.md`: the six `zen5-cpu` rows (`missing`) are gone, not promised.
-- CI: the validator requires a suite to list a run's profile, so the frozen `zen5-cpu` manifests
+- CI (`benchmarks/zen5-cpu-frozen.txt` lists the 102 frozen manifests): the validator requires a suite to list a run's profile, so the frozen `zen5-cpu` manifests
   produce exactly one message, `does not list profile 'zen5-cpu'`. CI tolerates that message and
-  nothing else for them; every other check still runs on them.
-- `scripts/publish.sh` and `scripts/docker_preflight.py` recorded `zen5-cpu` on evo's Zen5c cores and
-  are reduced to a refusal with a pointer here (their bodies are in git history); `docker_campaign.sh
-  run` and `preflight` therefore refuse too. `start`, `build-image` and `shell` are generic container
-  operations and are untouched. evo2 is recorded by its own procedure. `PublishTest`, which grepped
-  the deleted recipe, is removed.
+  nothing else for them, and only for the manifests on that list: a new `zen5-cpu` recording fails CI; every other check still runs on them.
+- `scripts/publish.sh`, `scripts/docker_preflight.py` and `scripts/docker_campaign.sh` recorded or
+  hosted `zen5-cpu` on evo's Zen5c cores (4-11). Each is reduced to a refusal with a pointer here (the
+  recipes are in git history), including `docker_campaign.sh start`, which would create the container
+  #130 calls invalid. `PublishTest`, which grepped the deleted recipe, is removed. evo2 is recorded
+  by its own procedure.
+- `docs/rules.md` and `docs/how-it-works.md` still show `record_run.py zen5-cpu ...` as examples of
+  the recorder's CLI; read them as historical. The recorder itself has no profile-listing check, so
+  the guard against a new `zen5-cpu` recording is CI: the frozen list below.
 - Declaration hashes: editing `colmat-kernels.yaml` and `colmat-kernels-large.yaml` changes their
   `suite_sha256`, so the recorded evo2 cells of those two suites report "declaration-derived checks
   skipped" from now on (the same, said-so state as after #111). Their rows, commits and vendors are

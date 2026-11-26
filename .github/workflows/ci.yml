@@ -80,7 +80,8 @@ jobs:
         run: |
           # `zen5-cpu` is retired (docs/zen5-cpu-retired.md): no suite lists it, so the validator
           # reports one message for its frozen manifests, "does not list profile 'zen5-cpu'".
-          # Everything else still has to pass for them, so only that message is tolerated.
+          # Everything else still has to pass for them, so only that message is tolerated, and only
+          # for the manifests frozen in benchmarks/zen5-cpu-frozen.txt: a NEW zen5-cpu recording fails.
           shopt -s nullglob
           files=(data/results/*/*/*/run.yaml)
           if [ ${#files[@]} -eq 0 ]; then echo "no runs recorded yet"; exit 0; fi
@@ -88,9 +89,10 @@ jobs:
           import sys
           from campaign_toolkit import validate_run
           bad = 0
+          frozen = set(open("benchmarks/zen5-cpu-frozen.txt").read().split())
           for f in sys.argv[1:]:
               errs = validate_run.validate(f)
-              if f.startswith("data/results/zen5-cpu/"):
+              if f in frozen:
                   errs = [e for e in errs if not e.endswith("does not list profile 'zen5-cpu'")]
               if errs:
                   bad += 1
