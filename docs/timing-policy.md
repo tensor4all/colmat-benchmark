@@ -193,7 +193,7 @@ sets from the machine topology, refuses to start when its own affinity overlaps 
 siblings included), warns when a declared CPU set spans more than one L3 domain, and prints the derived
 free CPUs. `ohtaka-cpu` has only 4-CPU L3 domains, so none of its rows above 1T can be L3-local: the
 profile and the suites say so (`NOT L3-LOCAL`), and `scripts/cpu_sets.py check <profile>` verifies the
-declared sets against a node's cache topology (#143). It also walks the ancestor chain: an
+declared sets against a node's cache topology (#143; contiguous rows only, an interleaved profile such as `ohtaka-fat` is refused with exit 2). It also walks the ancestor chain: an
 ancestor that still owns a measured CPU and was using at least 1% of a core over a half-second
 sample is refused by name,
 because pinning the recorder cannot move the agent that launched it - that is how two runs of this

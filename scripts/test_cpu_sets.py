@@ -103,6 +103,11 @@ class CpuSetsTest(unittest.TestCase):
             finally:
                 cpu_sets.declared = real
 
+    def test_interleaved_profiles_are_refused_not_misjudged(self):
+        with tempfile.TemporaryDirectory() as t:
+            fake_sysfs(t, 4, cpus=112)
+            self.assertEqual(cpu_sets.main(['check', 'ohtaka-fat', '--sysfs-root', t]), 2)
+
 
 if __name__ == '__main__':
     unittest.main()

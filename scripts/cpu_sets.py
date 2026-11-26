@@ -5,7 +5,7 @@ colmat-benchmark#143: the `ohtaka-cpu` rows were listed by hand (`0-15` ...) and
 four L3 domains, which a reader of "16T" would not guess. This reads
 `/sys/devices/system/cpu/cpu*/cache/index3/shared_cpu_list` (under `--sysfs-root`, default `/`),
 fills whole L3 domains in CPU order for each requested thread count, and reports for every row the
-domains it spans and whether it is L3-local (one domain). `check` compares a profile's
+domains it spans and whether it is L3-local (one domain). `check` (contiguous rows only; interleaved profiles such as ohtaka-fat exit 2) compares a profile's
 `thread_rows` and every suite's `cpu_sets` for that profile with the derived sets and exits 1 on a
 difference, so a hand-edited list cannot drift from the node.
 
@@ -98,6 +98,12 @@ def declared(profile_name):
 def cmd_check(args):
     domains = l3_domains(Path(args.sysfs_root))
     rows, suites = declared(args.profile)
+    for t, row in rows.items():
+        if len(parse_cpu_list(row['measured'])) != 1 and ',' in row['measured']:
+            print(f'cpu_sets check: profile {args.profile!r} row {t}T names its CPUs one by one '
+                  f'({row["measured"][:40]}...); this tool derives contiguous rows only and does not '
+                  'support interleaved numbering', file=sys.stderr)
+            return 2
     bad = []
     derived = {}
     for t, row in rows.items():
