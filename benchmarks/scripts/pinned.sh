@@ -67,6 +67,7 @@ if [[ -n $evidence ]] && mkdir -p -- "$evidence"; then
     guard=$(mktemp "$evidence/pinned-guard.XXXXXX")
 else
     [[ -z $evidence ]] || echo "pinned.sh: cannot create evidence dir $evidence; using ${TMPDIR:-/tmp}" >&2
+    evidence=
     tmp=$(mktemp)
     guard=$(mktemp)
 fi

@@ -102,6 +102,8 @@ def cmd_check(args):
     derived = {}
     for t, row in rows.items():
         start = parse_cpu_list(row['measured'])[0]
+        if start not in {dom[0] for dom in domains}:
+            bad.append(f'profile row {t}T: starts at CPU {start}, which is not the first CPU of an L3 domain')
         d = derived[t] = derive_row(t, domains, start)
         if row['measured'] != d['measured']:
             bad.append(f'profile row {t}T: declared {row["measured"]!r}, derived {d["measured"]!r} from CPU {start}')

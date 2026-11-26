@@ -77,6 +77,19 @@ class CpuSetsTest(unittest.TestCase):
             finally:
                 cpu_sets.declared = real
 
+    def test_a_row_that_starts_inside_a_domain_is_a_mismatch(self):
+        real = cpu_sets.declared
+        def shifted(profile):
+            rows, suites = real(profile)
+            return {t: dict(r, measured='2-17', observer='20-127') if t == 16 else r for t, r in rows.items()}, suites
+        with tempfile.TemporaryDirectory() as t:
+            fake_sysfs(t, 4)
+            cpu_sets.declared = shifted
+            try:
+                self.assertEqual(cpu_sets.main(['check', 'ohtaka-cpu', '--sysfs-root', t]), 1)
+            finally:
+                cpu_sets.declared = real
+
 
 if __name__ == '__main__':
     unittest.main()
