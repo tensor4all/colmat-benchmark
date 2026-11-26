@@ -175,6 +175,20 @@ class PinnedTest(unittest.TestCase):
         self.assertIn('cannot create evidence dir', result.stderr)
         self.assertEqual(result.returncode, 0, result.stderr)  # second attempt is valid
 
+    def test_unwritable_evidence_dir_falls_back(self):
+        import stat
+        shared = tempfile.TemporaryDirectory(prefix='shared fs ')
+        self.addCleanup(shared.cleanup)
+        ro = Path(shared.name)/'ro'
+        ro.mkdir()
+        ro.chmod(stat.S_IRUSR | stat.S_IXUSR)
+        self.addCleanup(ro.chmod, stat.S_IRWXU)
+        if os.access(ro, os.W_OK):
+            self.skipTest('running as a user that ignores directory permissions')
+        root, local, result = self._run_evidence(0, PINNED_EVIDENCE_DIR=str(ro))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('cannot create evidence dir', result.stderr)
+
 
 if __name__ == '__main__':
     unittest.main()

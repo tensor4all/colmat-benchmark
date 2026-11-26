@@ -90,6 +90,19 @@ class CpuSetsTest(unittest.TestCase):
             finally:
                 cpu_sets.declared = real
 
+    def test_a_suite_row_for_an_undeclared_thread_count_must_still_be_domain_aligned(self):
+        real = cpu_sets.declared
+        def odd(profile):
+            rows, suites = real(profile)
+            return rows, {'s': [([8], ['2-9'])]}
+        with tempfile.TemporaryDirectory() as t:
+            fake_sysfs(t, 4)
+            cpu_sets.declared = odd
+            try:
+                self.assertEqual(cpu_sets.main(['check', 'ohtaka-cpu', '--sysfs-root', t]), 1)
+            finally:
+                cpu_sets.declared = real
+
 
 if __name__ == '__main__':
     unittest.main()

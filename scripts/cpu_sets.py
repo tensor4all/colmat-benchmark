@@ -116,7 +116,11 @@ def cmd_check(args):
             if len(threads) != len(sets):
                 bad.append(f'suite {suite}: {len(threads)} thread counts but {len(sets)} cpu_sets')
             for t, cpus in zip(threads, sets):
-                d = derived.get(t) or derive_row(t, domains, parse_cpu_list(cpus)[0])
+                start = parse_cpu_list(cpus)[0]
+                if start not in {dom[0] for dom in domains}:
+                    bad.append(f'suite {suite} {t}T: cpu_sets {cpus!r} starts at CPU {start}, '
+                               'which is not the first CPU of an L3 domain')
+                d = derived.get(t) or derive_row(t, domains, start)
                 if cpus != d['measured']:
                     bad.append(f'suite {suite} {t}T: cpu_sets {cpus!r}, derived {d["measured"]!r}')
     print(f'L3 domains: {len(domains)} of sizes {sorted({len(d) for d in domains})}')

@@ -62,10 +62,14 @@ evidence=${PINNED_EVIDENCE_DIR:-}
 if [[ -z $evidence && -n ${SLURM_JOB_ID:-} ]]; then
     evidence=${SLURM_SUBMIT_DIR:-$PWD}/failed-evidence/$SLURM_JOB_ID
 fi
-if [[ -n $evidence ]] && mkdir -p -- "$evidence"; then
-    tmp=$(mktemp "$evidence/pinned-stdout.XXXXXX")
-    guard=$(mktemp "$evidence/pinned-guard.XXXXXX")
+tmp=
+if [[ -n $evidence ]] && mkdir -p -- "$evidence" 2>/dev/null \
+        && tmp=$(mktemp "$evidence/pinned-stdout.XXXXXX" 2>/dev/null) \
+        && guard=$(mktemp "$evidence/pinned-guard.XXXXXX" 2>/dev/null); then
+    :
 else
+    [[ -z $tmp ]] || rm -f -- "$tmp"
+
     [[ -z $evidence ]] || echo "pinned.sh: cannot create evidence dir $evidence; using ${TMPDIR:-/tmp}" >&2
     evidence=
     tmp=$(mktemp)
