@@ -20,6 +20,7 @@
 mod backend;
 mod lapack;
 mod op;
+mod run_record;
 mod shared;
 mod timing;
 mod vendor;
@@ -1519,6 +1520,25 @@ fn main() -> ExitCode {
     if let Err(e) = std::fs::write(path, text) {
         eprintln!("cannot write {path}: {e}");
         return ExitCode::from(2);
+    }
+    // Beside the CSV: what this process was actually allowed to run on, and, for a run that did
+    // not complete, a marker that says the rows above are partial (#65, #130).
+    if let Some(report) = run_record::affinity_report(threads) {
+        eprintln!("CELL affinity {}", report.replace('\n', " ").trim_end());
+        let _ = std::fs::write(format!("{path}.affinity"), report);
+    }
+    let rows: Vec<(&str, &str)> = records.iter().map(|r| (r.status, r.note.as_str())).collect();
+    let marker = format!("{path}.partial");
+    match run_record::partial_marker(&rows) {
+        Some(body) => {
+            if let Err(e) = std::fs::write(&marker, body) {
+                eprintln!("cannot write {marker}: {e}");
+                return ExitCode::from(2);
+            }
+        }
+        None => {
+            let _ = std::fs::remove_file(&marker);
+        }
     }
     if all_ok {
         ExitCode::SUCCESS
