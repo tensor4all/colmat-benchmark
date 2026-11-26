@@ -11,6 +11,16 @@
 #
 # Exits 75 when no valid run was obtained.
 #
+# Evidence location (#143): the command's stdout and the guard log are created *in* an evidence
+# directory on the shared filesystem, not in node-local /tmp, because on a Slurm compute node /tmp
+# dies with the job and a four-hour failure would leave only a log line naming files that no
+# longer exist. The directory is $PINNED_EVIDENCE_DIR if set, else
+# $SLURM_SUBMIT_DIR/failed-evidence/$SLURM_JOB_ID inside a Slurm job, else $TMPDIR (or /tmp).
+# Writing there directly (not copying from an EXIT trap) means a SIGKILL, a wall-time kill or a
+# node failure still leaves the files. A valid run deletes them; a failed one keeps them. A
+# rejected attempt (busy after the run) is archived beside $PINNED_CSV when that is declared, else
+# in the evidence directory, so the "no valid run" outcome is on the shared filesystem too.
+#
 # Container mode (#99): with BENCH_CONTAINER=<name> the measured command runs *inside* that
 # running container as `docker exec <name> taskset -c CPUS COMMAND...` instead of under a
 # host `taskset`. The recorder, this script and the idle guard stay on the observing side
@@ -48,14 +58,36 @@ if [[ $(uname -s) != Linux ]] || [[ ! -r /proc/stat ]] || ! command -v taskset >
     exec "$@"
 fi
 echo "pinned.sh: cpus=$cpus idle_window=${seconds}s max_busy=$max_busy retries=$retries" >&2
-tmp=$(mktemp)
-guard=$(mktemp)
+evidence=${PINNED_EVIDENCE_DIR:-}
+if [[ -z $evidence && -n ${SLURM_JOB_ID:-} ]]; then
+    evidence=${SLURM_SUBMIT_DIR:-$PWD}/failed-evidence/$SLURM_JOB_ID
+fi
+tmp=
+made_dirs=()
+if [[ -n $evidence ]]; then
+    # Remember which directories this run creates, so a valid run leaves none of them behind.
+    d=$evidence
+    while [[ -n $d && $d != / && $d != . && ! -d $d ]]; do made_dirs+=("$d"); d=$(dirname -- "$d"); done
+fi
+if [[ -n $evidence ]] && mkdir -p -- "$evidence" 2>/dev/null \
+        && tmp=$(mktemp "$evidence/pinned-stdout.XXXXXX" 2>/dev/null) \
+        && guard=$(mktemp "$evidence/pinned-guard.XXXXXX" 2>/dev/null); then
+    :
+else
+    [[ -z $tmp ]] || rm -f -- "$tmp"
+
+    [[ -z $evidence ]] || echo "pinned.sh: cannot create evidence dir $evidence; using ${TMPDIR:-/tmp}" >&2
+    evidence=
+    tmp=$(mktemp)
+    guard=$(mktemp)
+fi
 keep=0
 cleanup() {
     if [[ $keep == 1 ]]; then
         echo "pinned.sh: evidence retained at $tmp and $guard" >&2
     else
         rm -f "$tmp" "$guard"
+        for d in ${made_dirs[@]+"${made_dirs[@]}"}; do rmdir -- "$d" 2>/dev/null || true; done
     fi
 }
 trap cleanup EXIT
@@ -80,7 +112,9 @@ for attempt in $(seq 1 "$retries"); do
         exit 0
     fi
     echo "pinned.sh: cpus $cpus busy after run (attempt $attempt); rejecting it" >&2
-    archive=$(mktemp -d "${PINNED_CSV:-${TMPDIR:-/tmp}/pinned}.rejected.XXXXXX")
+    archive_base=${PINNED_CSV:-}
+    if [[ -z $archive_base ]]; then archive_base=${evidence:+$evidence/pinned}; fi
+    archive=$(mktemp -d "${archive_base:-${TMPDIR:-/tmp}/pinned}.rejected.XXXXXX")
     echo "pinned.sh: rejected attempt $attempt archived at $archive" >&2
     cp -- "$tmp" "$archive/command.stdout"
     if [[ -n ${PINNED_CSV:-} ]]; then

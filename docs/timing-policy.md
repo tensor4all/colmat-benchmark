@@ -187,10 +187,13 @@ busy before and after, 3 attempts. A spoiled run is discarded, not
 published. The recorder holds one campaign-level lock across build, verify and
 timing, so no second recorder builds another revision while a measurement runs;
 unrelated workloads remain an operator precondition, and that includes the observing side itself.
-A cell's measured threads share one L3 domain; the agent, the recorder and the guard checker belong
-on the CPUs outside it. `record_run.py` derives both sets from the machine topology, refuses to
-start when its own affinity overlaps the measured set (SMT siblings included) or when a declared
-CPU set spans two L3 domains, and prints the derived free CPUs. It also walks the ancestor chain: an
+Where the machine has an L3 group large enough, a cell's measured threads share one L3 domain; the
+agent, the recorder and the guard checker belong on the CPUs outside it. `record_run.py` derives both
+sets from the machine topology, refuses to start when its own affinity overlaps the measured set (SMT
+siblings included), warns when a declared CPU set spans more than one L3 domain, and prints the derived
+free CPUs. `ohtaka-cpu` has only 4-CPU L3 domains, so none of its rows above 1T can be L3-local: the
+profile and the suites say so (`NOT L3-LOCAL`), and `scripts/cpu_sets.py check <profile>` verifies the
+declared sets against a node's cache topology (#143; contiguous rows only, an interleaved profile such as `ohtaka-fat` is refused with exit 2). It also walks the ancestor chain: an
 ancestor that still owns a measured CPU and was using at least 1% of a core over a half-second
 sample is refused by name,
 because pinning the recorder cannot move the agent that launched it - that is how two runs of this

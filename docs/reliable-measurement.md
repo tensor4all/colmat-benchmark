@@ -233,8 +233,8 @@ declared 3 s window, `max_busy=0.05` and 30 s wait, and the observing side
 (driver, guard checker, agent) is launched on the CPUs outside the measured L3
 domain - derived from the machine topology, not a fixed list. The recorder
 **refuses to start** when its own affinity overlaps the measured set expanded with
-SMT siblings, or when a declared measured set spans two L3 domains, so the pin is
-an enforced precondition rather than a remembered habit; the agent's own pin lives
+SMT siblings (a declared measured set that spans more than one L3 domain only warns; `ohtaka-cpu` has
+no L3 group above 4 CPUs and says so), so the pin is an enforced precondition rather than a remembered habit; the agent's own pin lives
 in its process and must be re-established after a restart. One representative
 control (`data/probes/20261015-observer-pin/`) found the pin does not move the
 measured distribution there; it removes a guard-rejection source and an

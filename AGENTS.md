@@ -67,10 +67,12 @@ a CSV must declare it too. Archives are evidence, not additional accepted sample
 
 The observing side is pinned too, because unrelated work on the measured cores is what the idle
 guard then has to reject. The rule is not machine-specific: a cell's measured threads sit in one
-L3 domain, and everything else - the agent, the recorder, the guard checker - runs on the CPUs
-outside that domain. The recorder derives both sets from the machine's own topology, refuses to
-start when its affinity overlaps the measured set (SMT siblings included) or when a declared CPU
-set spans more than one L3 domain, and names the derived free CPUs in the refusal. It checks the
+L3 domain where the machine has an L3 group that large, and everything else - the agent, the
+recorder, the guard checker - runs on the CPUs outside the domains it measures. The recorder derives
+both sets from the machine's own topology, refuses to start when its affinity overlaps the measured
+set (SMT siblings included), warns when a declared CPU set spans more than one L3 domain (ohtaka-cpu
+has only 4-CPU domains, so its rows above 1T are declared NOT L3-LOCAL), and names the derived free
+CPUs in the refusal. It checks the
 whole ancestor chain, not only itself: pinning the recorder cannot move the agent that launched it,
 so an ancestor that still owns a measured CPU and was using at least 1% of a core during a
 half-second sample is refused by name with the `taskset -pc` that fixes it. The affinity lives in the process, so the agent's own

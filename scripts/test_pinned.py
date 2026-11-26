@@ -75,7 +75,7 @@ class PinnedTest(unittest.TestCase):
                 csv = root/'effective output.csv'
                 ignored = root/'ignored.csv'
                 ignored.write_text('unchanged')
-                env = dict(os.environ, PATH=str(bindir)+os.pathsep+os.environ['PATH'],
+                env = dict({k: v for k, v in os.environ.items() if not k.startswith(('SLURM_', 'PINNED_'))}, PATH=str(bindir)+os.pathsep+os.environ['PATH'],
                            SIM_ROOT=str(root),TMPDIR=str(scratch),FAIL_CHECKS=failures,
                            REAL_CP=shutil.which('cp'),REAL_MKTEMP=shutil.which('mktemp'),
                            PINNED_RETRIES=str(retries),PINNED_WAIT='0',PINNED_IDLE_SECONDS='0',
@@ -109,6 +109,85 @@ class PinnedTest(unittest.TestCase):
                     self.assertEqual((root/'checks').read_text(),'1')
                 if name == 'precheck_only':
                     self.assertIn('cpu16 busy=0.20 (cache peer)',result.stderr)
+
+    def _run_evidence(self, status, **extra_env):
+        tmp = tempfile.TemporaryDirectory(prefix='pinned evidence ')
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        bindir = root/'bin'
+        bindir.mkdir()
+        script = bindir/'fake.py'
+        script.write_text(f'#!{sys.executable}\n'+FAKE)
+        script.chmod(0o755)
+        for program in ('python3','taskset','writer'):
+            (bindir/program).symlink_to(script)
+        local = root/'node-local-tmp'
+        local.mkdir()
+        env = {k: v for k, v in os.environ.items() if not k.startswith(('SLURM_', 'PINNED_'))}
+        env.update(PATH=str(bindir)+os.pathsep+os.environ['PATH'], SIM_ROOT=str(root),
+                   TMPDIR=str(local), PINNED_WAIT='0',
+                   PINNED_IDLE_SECONDS='0', COMMAND_STATUS=str(status), **{'FAIL_CHECKS': '', 'PINNED_RETRIES': '1', **extra_env})
+        result = subprocess.run(['bash',str(PINNED),'4','--',str(bindir/'writer')],
+                                env=env,text=True,capture_output=True,cwd=root)
+        return root, local, result
+
+    def test_failed_command_evidence_goes_to_the_shared_dir_not_tmp(self):
+        # #143: on a compute node TMPDIR/tmp is gone after the job; evidence must not live there.
+        shared = tempfile.TemporaryDirectory(prefix='shared fs ')
+        self.addCleanup(shared.cleanup)
+        for label, env, where in (
+            ('explicit', {'PINNED_EVIDENCE_DIR': str(Path(shared.name)/'explicit')}, Path(shared.name)/'explicit'),
+            ('slurm', {'SLURM_JOB_ID': '4242', 'SLURM_SUBMIT_DIR': shared.name},
+             Path(shared.name)/'failed-evidence'/'4242'),
+        ):
+            with self.subTest(label=label):
+                root, local, result = self._run_evidence(1, **env)
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertEqual(list(local.iterdir()), [], 'nothing may be left only on node-local tmp')
+                self.assertEqual(len(list(where.glob('pinned-stdout.*'))), 1)
+                self.assertEqual(len(list(where.glob('pinned-guard.*'))), 1)
+                self.assertIn(f'evidence retained at {where}/', result.stderr)
+                self.assertIn('sample=1', next(where.glob('pinned-stdout.*')).read_text())
+
+    def test_valid_run_removes_its_evidence(self):
+        shared = tempfile.TemporaryDirectory(prefix='shared fs ')
+        self.addCleanup(shared.cleanup)
+        where = Path(shared.name)/'ok'
+        root, local, result = self._run_evidence(0, PINNED_EVIDENCE_DIR=str(where))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(where.exists(), 'a valid run must not leave its evidence directory behind')
+
+    def test_rejected_attempt_is_archived_on_the_shared_dir(self):
+        shared = tempfile.TemporaryDirectory(prefix='shared fs ')
+        self.addCleanup(shared.cleanup)
+        where = Path(shared.name)/'ev'
+        root, local, result = self._run_evidence(0, PINNED_EVIDENCE_DIR=str(where), FAIL_CHECKS='2')
+        self.assertEqual(result.returncode, 75, result.stderr)
+        self.assertEqual(list(local.iterdir()), [])
+        archives = list(where.glob('pinned.rejected.*'))
+        self.assertEqual(len(archives), 1, result.stderr)
+        self.assertIn('cpu16 busy=0.20', (archives[0]/'guard.log').read_text())
+        self.assertIn('sample=1', (archives[0]/'command.stdout').read_text())
+
+    def test_unusable_evidence_dir_falls_back_without_dying(self):
+        root, local, result = self._run_evidence(0, PINNED_EVIDENCE_DIR='/proc/no-such-fs/ev', FAIL_CHECKS='2',
+                                                 PINNED_RETRIES='2')
+        self.assertIn('cannot create evidence dir', result.stderr)
+        self.assertEqual(result.returncode, 0, result.stderr)  # second attempt is valid
+
+    def test_unwritable_evidence_dir_falls_back(self):
+        import stat
+        shared = tempfile.TemporaryDirectory(prefix='shared fs ')
+        self.addCleanup(shared.cleanup)
+        ro = Path(shared.name)/'ro'
+        ro.mkdir()
+        ro.chmod(stat.S_IRUSR | stat.S_IXUSR)
+        self.addCleanup(ro.chmod, stat.S_IRWXU)
+        if os.access(ro, os.W_OK):
+            self.skipTest('running as a user that ignores directory permissions')
+        root, local, result = self._run_evidence(0, PINNED_EVIDENCE_DIR=str(ro))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('cannot create evidence dir', result.stderr)
 
 
 if __name__ == '__main__':
