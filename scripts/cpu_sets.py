@@ -100,6 +100,8 @@ def cmd_check(args):
                        f'derived {derived[t]["measured"]!r}/{derived[t]["observer"]!r}')
     for suite, runs in suites.items():
         for threads, sets in runs:
+            if len(threads) != len(sets):
+                bad.append(f'suite {suite}: {len(threads)} thread counts but {len(sets)} cpu_sets')
             for t, cpus in zip(threads, sets):
                 d = derived.get(t) or derive_row(t, domains)
                 if cpus != d['measured']:

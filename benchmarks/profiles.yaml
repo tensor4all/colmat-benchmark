@@ -89,8 +89,9 @@ profiles:
       the fewest that give the thread count (scripts/cpu_sets.py derives and checks them from
       /sys/devices/system/cpu/*/cache/index3/shared_cpu_list): 1T is one CPU of one domain, 16T is
       4 domains (NUMA node 0), 32T 8 domains (nodes 0-1), 64T 16 domains (socket 0), 128T all 32.
-      So each row measures that many threads over that many private 16 MiB L3 caches, and the
-      cache available per thread is constant at 4 MiB, not a shared L3. Boost and governor cannot
+      So the 16T-and-above rows measure that many threads over that many private 16 MiB L3
+      caches, 4 MiB per thread, not a shared L3; 1T is one thread on a whole 16 MiB domain whose
+      three peers are kept idle. Boost and governor cannot
       be read on the compute node and are recorded as unrecorded.
     cpu: AMD EPYC 7702
     logical_cpus: 128

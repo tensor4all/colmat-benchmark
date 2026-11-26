@@ -40,6 +40,20 @@ class CpuSetsTest(unittest.TestCase):
             fake_sysfs(t, 4)
             self.assertEqual(cpu_sets.main(['check', 'ohtaka-cpu', '--sysfs-root', t]), 0)
 
+    def test_a_suite_that_lost_a_row_is_a_mismatch(self):
+        import yaml
+        real = cpu_sets.declared
+        def lost(profile):
+            rows, suites = real(profile)
+            return rows, {'x': [([16, 32, 64, 128], ['0-15', '0-31'])]}
+        with tempfile.TemporaryDirectory() as t:
+            fake_sysfs(t, 4)
+            cpu_sets.declared = lost
+            try:
+                self.assertEqual(cpu_sets.main(['check', 'ohtaka-cpu', '--sysfs-root', t]), 1)
+            finally:
+                cpu_sets.declared = real
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -75,7 +75,7 @@ class PinnedTest(unittest.TestCase):
                 csv = root/'effective output.csv'
                 ignored = root/'ignored.csv'
                 ignored.write_text('unchanged')
-                env = dict(os.environ, PATH=str(bindir)+os.pathsep+os.environ['PATH'],
+                env = dict({k: v for k, v in os.environ.items() if not k.startswith(('SLURM_', 'PINNED_'))}, PATH=str(bindir)+os.pathsep+os.environ['PATH'],
                            SIM_ROOT=str(root),TMPDIR=str(scratch),FAIL_CHECKS=failures,
                            REAL_CP=shutil.which('cp'),REAL_MKTEMP=shutil.which('mktemp'),
                            PINNED_RETRIES=str(retries),PINNED_WAIT='0',PINNED_IDLE_SECONDS='0',
@@ -125,8 +125,8 @@ class PinnedTest(unittest.TestCase):
         local.mkdir()
         env = {k: v for k, v in os.environ.items() if not k.startswith(('SLURM_', 'PINNED_'))}
         env.update(PATH=str(bindir)+os.pathsep+os.environ['PATH'], SIM_ROOT=str(root),
-                   TMPDIR=str(local), FAIL_CHECKS='', PINNED_RETRIES='1', PINNED_WAIT='0',
-                   PINNED_IDLE_SECONDS='0', COMMAND_STATUS=str(status), **extra_env)
+                   TMPDIR=str(local), PINNED_RETRIES='1', PINNED_WAIT='0',
+                   PINNED_IDLE_SECONDS='0', COMMAND_STATUS=str(status), **{'FAIL_CHECKS': '', **extra_env})
         result = subprocess.run(['bash',str(PINNED),'4','--',str(bindir/'writer')],
                                 env=env,text=True,capture_output=True,cwd=root)
         return root, local, result
@@ -156,6 +156,18 @@ class PinnedTest(unittest.TestCase):
         root, local, result = self._run_evidence(0, PINNED_EVIDENCE_DIR=str(where))
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(list(where.iterdir()), [])
+
+    def test_rejected_attempt_is_archived_on_the_shared_dir(self):
+        shared = tempfile.TemporaryDirectory(prefix='shared fs ')
+        self.addCleanup(shared.cleanup)
+        where = Path(shared.name)/'ev'
+        root, local, result = self._run_evidence(0, PINNED_EVIDENCE_DIR=str(where), FAIL_CHECKS='2')
+        self.assertEqual(result.returncode, 75, result.stderr)
+        self.assertEqual(list(local.iterdir()), [])
+        archives = list(where.glob('pinned.rejected.*'))
+        self.assertEqual(len(archives), 1, result.stderr)
+        self.assertIn('cpu16 busy=0.20', (archives[0]/'guard.log').read_text())
+        self.assertIn('sample=1', (archives[0]/'command.stdout').read_text())
 
 
 if __name__ == '__main__':

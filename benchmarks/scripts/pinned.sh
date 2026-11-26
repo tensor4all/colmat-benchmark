@@ -17,7 +17,9 @@
 # longer exist. The directory is $PINNED_EVIDENCE_DIR if set, else
 # $SLURM_SUBMIT_DIR/failed-evidence/$SLURM_JOB_ID inside a Slurm job, else $TMPDIR (or /tmp).
 # Writing there directly (not copying from an EXIT trap) means a SIGKILL, a wall-time kill or a
-# node failure still leaves the files. A valid run deletes them; a failed one keeps them.
+# node failure still leaves the files. A valid run deletes them; a failed one keeps them. A
+# rejected attempt (busy after the run) is archived beside $PINNED_CSV when that is declared, else
+# in the evidence directory, so the "no valid run" outcome is on the shared filesystem too.
 #
 # Container mode (#99): with BENCH_CONTAINER=<name> the measured command runs *inside* that
 # running container as `docker exec <name> taskset -c CPUS COMMAND...` instead of under a
@@ -98,7 +100,9 @@ for attempt in $(seq 1 "$retries"); do
         exit 0
     fi
     echo "pinned.sh: cpus $cpus busy after run (attempt $attempt); rejecting it" >&2
-    archive=$(mktemp -d "${PINNED_CSV:-${TMPDIR:-/tmp}/pinned}.rejected.XXXXXX")
+    archive_base=${PINNED_CSV:-}
+    if [[ -z $archive_base ]]; then archive_base=${evidence:+$evidence/pinned}; fi
+    archive=$(mktemp -d "${archive_base:-${TMPDIR:-/tmp}/pinned}.rejected.XXXXXX")
     echo "pinned.sh: rejected attempt $attempt archived at $archive" >&2
     cp -- "$tmp" "$archive/command.stdout"
     if [[ -n ${PINNED_CSV:-} ]]; then
