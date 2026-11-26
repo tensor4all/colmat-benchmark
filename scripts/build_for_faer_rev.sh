@@ -113,7 +113,16 @@ up_ref="$(git -C "$UPSTREAM_DIR" describe --tags --exact-match 2>/dev/null || gi
 # Keyed by the fork revision and the vendor as well as the dirty state: the two arms are different
 # feature sets, and a shared target directory would have the second build replace the first binary
 # while the manifest still named the first.
-target="$PROJECT_DIR/target/faer-rev/${fork_rev:0:12}-${VENDOR}${suffix}"
+# Extra features of the measured library, for a paired comparison of one fork revision with and
+# without a compile-time feature (colmat-rs#39: `x86-v4`, AVX-512 for pulp's dispatch). Comma
+# separated colmat feature names; empty by default, so an ordinary run is unchanged. The features
+# are part of the build's identity: they key the target directory and are recorded in
+# `FAER_FORK_FEATURES`, so the manifest of each arm says which one it is.
+FORK_EXTRA="${FBENCH_FORK_EXTRA_FEATURES:-}"
+[[ "$FORK_EXTRA" =~ ^[A-Za-z0-9_,-]*$ ]] || { echo "ERROR: FBENCH_FORK_EXTRA_FEATURES='$FORK_EXTRA' is not a comma-separated feature list" >&2; exit 2; }
+extra_key=""
+[[ -n "$FORK_EXTRA" ]] && extra_key="-${FORK_EXTRA//,/+}"
+target="$PROJECT_DIR/target/faer-rev/${fork_rev:0:12}-${VENDOR}${extra_key}${suffix}"
 profile_flag=(); subdir=debug
 if [[ "$PROFILE" == release ]]; then profile_flag=(--release); subdir=release; fi
 
@@ -248,6 +257,10 @@ fi
 # build turns the defaults off and names only the features its detection found. That path is
 # untested end to end -- a 0.24-style checkout also lacks `colmat/threadteam`, which
 # `fork-team` names -- and is tracked in #61.
+if [[ -n "$FORK_EXTRA" ]]; then
+    IFS=, read -ra extra_list <<< "$FORK_EXTRA"
+    for f in "${extra_list[@]}"; do FEATURES="${FEATURES:+$FEATURES,}colmat/$f"; done
+fi
 NO_DEFAULT=()
 if [[ "$FORK_API" != "parshape" || "$TEAM_API" != "threadteam" ]]; then
     NO_DEFAULT=(--no-default-features)
@@ -312,7 +325,7 @@ lock_sha="$(sha256sum "$target/Cargo.lock.resolved" | cut -d' ' -f1)"
     printf 'FAER_FORK_DIRTY=%q\n' "$fork_dirty"
     printf 'FAER_FORK_DIR=%q\n' "$FORK_DIR"
     printf 'FAER_FORK_VERSION=%q\n' "$fork_version"
-    printf 'FAER_FORK_FEATURES=%q\n' "$(features_of colmat)"
+    printf 'FAER_FORK_FEATURES=%q\n' "$(features_of colmat)${FORK_EXTRA:+,$FORK_EXTRA}"
     printf 'FAER_UPSTREAM_REV=%q\n' "$up_rev"
     printf 'FAER_UPSTREAM_DIRTY=%q\n' "$up_dirty"
     printf 'FAER_UPSTREAM_DIR=%q\n' "$UPSTREAM_DIR"
