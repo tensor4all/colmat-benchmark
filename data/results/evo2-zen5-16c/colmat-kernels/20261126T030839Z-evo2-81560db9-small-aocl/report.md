@@ -1,0 +1,5398 @@
+# `colmat-kernels` on `evo2-zen5-16c`
+
+- colmat (fork, measured) commit: `81560db94498478e8dd65153739e208391e434b6`
+- colmat version: `0.34.0`
+- upstream faer commit: `0539947ffb757a739d7e703a7d2fa0c792a909c1`
+- upstream faer ref/version: `faer-v0.24.4` / `0.24.4`
+- features: `std, rayon`
+- colmat / faer rows: `colmat` (the provider in the measured revision; see library and upstream above)
+- harness commit: `5ee382265b3ed6081be88d113019fdd3797cac5b`
+- toolkit commit: `b1302a25e837d7ab9070005fcb9afdc5e18afd37`
+- measured binary SHA-256: `b0a783c7c4d311a008da25e35f94a920930c8c9b634ac3ed613f81652ca7c441`
+- hardware profile: `evo2-zen5-16c`
+- host role: `measurement` — published dataset host
+- timestamp: `2026-11-26T06:14:58.173559Z`
+- timing policy: v2, median of 5 reps, priming 250 ms (time-based, identical on every row)
+- guards: idle window 3 s, max busy 5.0% including SMT siblings, 3 attempts
+- command: `scripts/record_run.py evo2-zen5-16c colmat-kernels --vendor aocl --engines colmat,lapack-aocl --threads 1,4,8 --reps 5 --aa 6 --prime-ms 250 --label evo2-81560db9-small-aocl`
+- harness environment: `FBENCH_ORDER` unset, `FBENCH_PROFILE=evo2-zen5-16c`
+- raw data: `data/results/evo2-zen5-16c/colmat-kernels/20261126T030839Z-evo2-81560db9-small-aocl/`
+
+## What was measured
+
+- **Workload** — Direct calls into one colmat revision and its upstream faer baseline: square and rectangular dense matrices, C (row-major) and F (column-major) order, `f64` and `c64`. A shape is `N` for square, `MxN` for rectangular, or `MxKxN` for `gemm`, which is a three-index operation and cannot be written as two. Sizes are the matrix dimensions, not a memory budget, so a case name says exactly what was factored. `gemm` measures `linalg::matmul::matmul` into a caller-prepared destination with `Accum::Replace`; there is no operator path, so one shape is one work.
+  Source: The fork's own public API (`faer/src/linalg`): `matmul`, the QR factor and composite, `upgrade_householder_factor`, the block/sequence Householder apply, LU and full-pivot LU, Cholesky, triangular solve, solve, thin SVD, singular values and the symmetric/nonsymmetric eigensolvers. Inputs are seeded from the case, so `verify` and `run` measure the same matrices and a rerun is reproducible.
+  Known blind spot: Only the colmat and faer entry points are measured. tlinalg's packing, batch loop and lane policy, tenferro's tensor construction and dtype dispatch, and the small-`m` decode-projection shapes are other repositories' rows (tlinalg-benchmark, tenferro-benchmark).
+  Known blind spot: No row allocates inside its timed `run`: the vendor row calls LAPACKE's `_work` entry points with a workspace the op allocated in `prepare`, and the colmat and faer rows call their in-place/`*_into` routes on a prepared matrix, prepared rights and a `MemStack` sized by the library's own `*_scratch`. A vendored driver family is measured column-major only, because LAPACKE's row-major path allocates a transposed copy and transposes in and out of it inside the call in every `_work` variant; a C-order cell of such a family is recorded `skipped` with that reason rather than charged a conversion the colmat row does not pay. `gemm` keeps both orders (CBLAS's row-major entry point moves no data).
+  Known blind spot: The owning colmat/faer routes (`PartialPivLu::new`, `Llt::new`, `qr`, `gesdd`/`syevd` wrappers, `partial_piv_lu().solve()`) allocate their outputs and their scratch inside the timed call. They are kept, as the call a user makes, but labelled `api-inclusive` and published as a separate secondary table: an `api-inclusive` row is never divided against a vendor row, whose route is the prepared one.
+  Known blind spot: A library's own allocation inside a timed call is not visible to the harness's allocator probe when it happens in C: LAPACKE's non-`_work` wrappers reach libc `malloc` through `LAPACKE_malloc`. That route is not used by this harness (the probe would not see it), so the `_work` entry points are enforced by construction and by the column-major rule, not by the probe.
+  Known blind spot: `gemm` covers the tall class's two Householder legs (a 16-wide basis and a 240-column target over 4096 rows: the reduction and the write-back) beside a vendor `?gemm` on the same leg. A single leg beside a vendor gemm is a diagnostic reference, not the equivalent implementation of the whole update, and the row is labelled accordingly.
+  Known blind spot: `householder_apply` measures block apply and the one-block sequence form as two distinct rows, labelled with basis width min(m,n) and target width n. QR fixture preparation is outside timing. Independently varied basis/target widths and multi-panel sequences are not covered.
+  Known blind spot: A copy a library makes inside its own call is that library's cost, and it is never divided against a vendor row: on a row-major matrix the fork's LU factors into a column-major copy it allocates (`lu/partial_pivoting/factor.rs:396-418`), and a row-major cell of a vendored driver family is a `skipped` cell, so no vendor ratio is formed there. Allocation performed inside the measured call stays inside the clock, and no _primary_ row does it. The fork's two row splits allocate their partial buffers inside the public call and the public scratch function does not expose them; that is the fork's cost, charged to the fork, and the owning routes that pay it are published as `api-inclusive` rows rather than divided against a vendor row.
+  Known blind spot: `cholesky`, `eigh`, `solve` and `triangular_solve` are measured on square shapes only: the matrix they factor or solve with is square by definition (self-adjoint for the first two, a triangular factor for the last). `lu` and `full_piv_lu` are not gated that way -- they take the declared rectangular shapes too, with `min(m, n)` pivots and a trapezoidal `L` or `U`, which is what `dgetrf` does as well -- so a rectangular LU cell is measured in both orders beside its square one.
+  Known blind spot: `f32`/`c32` are declared and measured as of `docs/harness-dtype-axis.md`; the vendor arm has a route for `gemm` in those two dtypes and reports the LAPACK families as skipped for them. The large regime's 1024 shapes, BLIS, sparse, iterative and GPU arms are later declarations, not machinery built now.
+  Known blind spot: A vendor arm records the library it linked. OpenBLAS and AOCL report the kernel their runtime dispatched to (AOCL for BLIS and libflame separately); MKL names no kernel and no processor count, so its manifest leaves both empty rather than inferring them.
+  Known blind spot: Known limitation: Coverage is the declared grid: f64/c64/f32/c32 at 1/4/8T for the small suite, f64/c64 at 4/8T for the large suite's 1024/1536 + boundary tier; the adoption-only 2048/3072/4096 tiers are not measured.
+- **Rows** — one row per engine in every table below:
+  - `colmat` — The measured library: the tensor4all fork (`colmat`, `[lib] name = "colmat"`) at the checkout the harness linked by path. This is the row the campaign exists for; the fork's three perf experiments and the two correctness changes land here.
+    Identity: the fork revision in this run's manifest (`library.commit`), pinned by `pins/colmat.rev`
+    Caveat: The fork crate is `colmat` (`[lib] name = "colmat"`); the upstream baseline is `faer` (`faer_upstream = { package = "faer" }`). They are distinct Rust crate identities, but their `Mat`, `Par` and trait types are not interchangeable: every adapter is written per arm, and shared transitive dependencies can unify Cargo features, so both arms declare equivalent feature sets and the resolved lock is recorded. The twelve-family campaign measures 81560db9, colmat-rs main at the merge of #296 (t4a-private-gemm-x86 0.1.30); no tag names it. The zen5-cpu, ohtaka and keyaki recordings were taken at 93da6217, the 2026-11-17 head, which lacks the 46 colmat-rs merges in between (the LU look-ahead #239 among them). The gemm-crate bump itself is expected to be numerically inert here: colmat-rs#296 found all 112 result fingerprints bit-identical between 0.1.28 and 0.1.30, and its one new path (the packed AVX2 driver) does not engage on AMD Zen5 or on AVX-512 hosts.
+    As measured: `colmat` (the provider in the measured revision; see library and upstream above)
+  - `lapack-aocl` — The same calls against AMD AOCL, the vendor-native LAPACK stack on AMD hosts: LAPACKE from AOCL-LAPACK (`libflame`), CBLAS from the threaded AOCL-BLAS (`libblis-mt`), linked from the versioned tree `AOCL_ROOT` names and loaded through the rpath the build records. One binary links one vendor library, so this row is measured by its own build of the harness and recorded as its own run. Measured on AMD profiles only.
+    Identity: the AOCL build recorded in this run's manifest (`providers[aocl]`)
+    Caveat: One AOCL call is governed by three per-thread counts (OpenMP, BLIS, libflame); the harness sets the budget through OpenMP and refuses the cell unless all three read back equal to it, before each row and after its timed loop. The manifest records both libraries' versions, the files the loader mapped, and the dispatched kernels (`blis=<config>, flame=<isa>`). Threading is vendor-owned, as for OpenBLAS and MKL.
+    As measured: linked shared; aocl 5.2.0; kernel dispatched to `blis=zen5, flame=avx512`; openmp threading; config `AOCL-BLAS 5.2.0 Build 20251223; AOCL-LAPACK 5.2.0 Build 20251223, supports LAPACK 3.12.0; mapped=/opt/AMD/aocl/5.2.0/gcc/lib_LP64/libaoclutils.so:/opt/AMD/aocl/5.2.0/gcc/lib_LP64/libblis-mt.so.5.2.0:/opt/AMD/aocl/5.2.0/gcc/lib_LP64/libflame.so:/usr/lib/x86_64-linux-gnu/libgomp.so.1.0.0`
+
+## Hardware
+
+- CPU: `AMD Ryzen AI MAX+ 395`
+- logical CPUs: `32`
+- L3: `64 MiB (2 instances)`
+- L3 domains: `0-7,16-23: 32 MiB shared; 8-15,24-31: 32 MiB shared`
+- OS / arch: `Linux 7.0.0-42-generic` / `x86_64`
+- hostname: `EVO-X2`
+- CPU sets: 1T -> `0`, 4T -> `0-3`, 8T -> `0-7`
+
+Every timed cell matches a successful verification census, including operation variants.
+Each cell is median of process medians ± sample SD of those medians; W is the median
+within-process sample SD. All values are milliseconds. These are descriptive spreads,
+not confidence intervals. The between-process spread includes the rotating-order schedule.
+Each process retains 5 chronological calls; 6 complete process sets are recorded.
+Spread guide (computed from this run's own rows): per-engine between-start range median 1.39%, worst 343395.34% among cells of 1 us or more (a sub-microsecond row is timer and scheduler jitter, not kernel time); 475 of 5340 engine cells exceed 5% and carry `!`; median within-process relative SD 0.42%. A cell whose `±`, `!` or `p` is as large as the difference you are reading is not evidence of a regression.
+The `vs colmat` column is the rotation-averaged ratio
+exp(mean over starts of log(engine median / colmat median)),
+with the per-start ratios beside it: `R > 1`
+means the engine was slower than that first-declared row in that start. It removes a
+row-position
+effect only under one position effect shared by the engines and stable across starts,
+and only where every declared engine has a measured row (`*` marks a cell where one has
+no row, so no ratio there is position-balanced). `!` marks a cell where some engine's own
+per-start median range exceeds 5% of its median, and `p` a balanced cell whose estimated
+position-effect ratio exceeds 1.05. Flagged cells are retained, not discarded; the
+between-start variation can exceed the difference being compared.
+The `vs` columns mark only differences larger than the spread this run recorded for those
+two rows (combined between-start SD, floored at 5%), larger than the sum of the two rows' `±`
+and larger than each row's `W`, always with the measured library as the subject:
+`🔵 <row> X faster than <row>` / `🔴 <row> X slower than <row>` (the subject is the first column of the table, the compared row is named in
+the cell, not only in the column header), `·` inside the band or within the rows' `±`, `?` a row's
+`W` is as large as the difference (not evidence either way; rerun the cell), `(marginal: …)` a
+verdict whose largest spread is at least 60% of its difference, `-` that row is not
+measured in this arm. `notes` carries the cell warnings (`*` a declared row has no measurement,
+`!` between-start range over 5%, `p` position effect over 5%, dispatch-dominated means the
+row is under 20 us so 4T/8T pay thread-region start-up). Per-start ratios and every
+chronological sample are in the run directory named at the top of this page (`run*.csv`).
+These describe the recorded revisions; they are not a regression claim.
+
+## gemm-small, f64, c order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/32x32x32/b1` | 0.00096 ± 1.16905e-05 (W 2.90852e-05) | 0.000875 ± 1.60208e-05 (W 3.26083e-05) | 🔴 colmat 1.10× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `gemm/64x64x64/b1` | 0.00626 ± 8.60939e-05 (W 3.60331e-05) | 0.00575 ± 1.3721e-05 (W 4.01813e-05) | 🔴 colmat 1.09× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `gemm/96x96x96/b1` | 0.0198645 ± 0.000188022 (W 6.01539e-05) | 0.01907 ± 4.6907e-05 (W 4.51348e-05) | · | dispatch-dominated (row under 20 us) |
+
+## gemm-small, f64, c order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/32x32x32/b1` | 0.00087 ± 2.63944e-05 (W 3.22038e-05) | 0.000845 ± 8.16497e-06 (W 3.33586e-05) | · | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `gemm/64x64x64/b1` | 0.00235 ± 3.94968e-05 (W 4.10754e-05) | 0.003365 ± 0.000107966 (W 0.000121399) | 🔵 colmat 1.43× faster than `lapack-aocl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `gemm/96x96x96/b1` | 0.0058445 ± 4.77661e-05 (W 6.05124e-05) | 0.00677 ± 6.9264e-05 (W 9.66352e-05) | 🔵 colmat 1.16× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+
+## gemm-small, f64, c order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/32x32x32/b1` | 0.000935 ± 2.78687e-05 (W 2.45387e-05) | 0.00088 ± 1.22474e-05 (W 3.01889e-05) | 🔴 colmat 1.06× slower than `lapack-aocl` (marginal: spread 0.73 of the difference) | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `gemm/64x64x64/b1` | 0.001785 ± 2.28035e-05 (W 4.72147e-05) | 0.003145 ± 9.15068e-05 (W 0.000126704) | 🔵 colmat 1.76× faster than `lapack-aocl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `gemm/96x96x96/b1` | 0.00363 ± 4.26224e-05 (W 5.53498e-05) | 0.00488 ± 4e-05 (W 7.32413e-05) | 🔵 colmat 1.34× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+
+## gemm-small, f64, f order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/32x32x32/b1` | 0.00095 ± 5.16398e-06 (W 2.33896e-05) | 0.00089 ± 1.32916e-05 (W 3.06242e-05) | 🔴 colmat 1.07× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `gemm/64x64x64/b1` | 0.0062095 ± 6.65445e-05 (W 4.24981e-05) | 0.005745 ± 2.7206e-05 (W 3.71766e-05) | 🔴 colmat 1.08× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `gemm/96x96x96/b1` | 0.0196795 ± 7.48262e-05 (W 6.93495e-05) | 0.0190795 ± 0.000100168 (W 6.70709e-05) | · | dispatch-dominated (row under 20 us) |
+
+## gemm-small, f64, f order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/32x32x32/b1` | 0.00087 ± 5.81091e-05 (W 5.05326e-05) | 0.000845 ± 2.13698e-05 (W 3.94966e-05) | · | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `gemm/64x64x64/b1` | 0.002385 ± 4.03505e-05 (W 4.36383e-05) | 0.003375 ± 3.97073e-05 (W 0.000106237) | 🔵 colmat 1.42× faster than `lapack-aocl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `gemm/96x96x96/b1` | 0.005825 ± 5.01996e-05 (W 3.30649e-05) | 0.0066595 ± 4.72895e-05 (W 0.0001336) | 🔵 colmat 1.14× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+
+## gemm-small, f64, f order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/32x32x32/b1` | 0.00094 ± 2.94958e-05 (W 4.26777e-05) | 0.00089 ± 2.13698e-05 (W 2.97704e-05) | · | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `gemm/64x64x64/b1` | 0.00178 ± 2.31661e-05 (W 3.58109e-05) | 0.003065 ± 4.95648e-05 (W 6.72414e-05) | 🔵 colmat 1.72× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `gemm/96x96x96/b1` | 0.00344 ± 3.45471e-05 (W 3.41621e-05) | 0.00481 ± 0.000111535 (W 6.74429e-05) | 🔵 colmat 1.40× faster than `lapack-aocl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+
+## gemm-small, c64, c order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/32x32x32/b1` | 0.00326 ± 1.8619e-05 (W 3.61374e-05) | 0.002985 ± 3.40588e-05 (W 3.64627e-05) | 🔴 colmat 1.09× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `gemm/64x64x64/b1` | 0.023244 ± 0.000105516 (W 4.58285e-05) | 0.0233895 ± 0.000107964 (W 7.36994e-05) | · |  |
+| `gemm/96x96x96/b1` | 0.076812 ± 0.00143248 (W 0.00010532) | 0.075544 ± 0.000152098 (W 0.000643219) | · |  |
+
+## gemm-small, c64, c order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/32x32x32/b1` | 0.00154 ± 4.99216e-05 (W 5.51834e-05) | 0.002505 ± 5.01996e-05 (W 0.000100796) | 🔵 colmat 1.63× faster than `lapack-aocl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `gemm/64x64x64/b1` | 0.006845 ± 7.50111e-05 (W 4.51576e-05) | 0.007795 ± 3.63341e-05 (W 0.000114552) | 🔵 colmat 1.14× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `gemm/96x96x96/b1` | 0.0203995 ± 5.3755e-05 (W 6.6713e-05) | 0.0214195 ± 7.31136e-05 (W 5.82422e-05) | · |  |
+
+## gemm-small, c64, c order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/32x32x32/b1` | 0.001445 ± 1.78885e-05 (W 3.49912e-05) | 0.0026 ± 7.78246e-05 (W 9.85791e-05) | 🔵 colmat 1.80× faster than `lapack-aocl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `gemm/64x64x64/b1` | 0.004015 ± 4.4364e-05 (W 3.56911e-05) | 0.005585 ± 7.46771e-05 (W 8.23298e-05) | 🔵 colmat 1.39× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `gemm/96x96x96/b1` | 0.010935 ± 3.3116e-05 (W 6.74809e-05) | 0.0125695 ± 0.000110789 (W 9.78929e-05) | 🔵 colmat 1.15× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+
+## gemm-small, c64, f order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/32x32x32/b1` | 0.00325 ± 5.47564e-05 (W 3.47085e-05) | 0.002975 ± 1.47196e-05 (W 3.0932e-05) | 🔴 colmat 1.09× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `gemm/64x64x64/b1` | 0.023249 ± 7.56847e-05 (W 4.45774e-05) | 0.023449 ± 0.000102027 (W 5.41834e-05) | · |  |
+| `gemm/96x96x96/b1` | 0.0767525 ± 0.000125257 (W 0.00057573) | 0.0751225 ± 0.000255653 (W 0.00029091) | · |  |
+
+## gemm-small, c64, f order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/32x32x32/b1` | 0.00154 ± 2.80476e-05 (W 4.32425e-05) | 0.0024995 ± 2.33274e-05 (W 5.46959e-05) | 🔵 colmat 1.62× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `gemm/64x64x64/b1` | 0.0068495 ± 5.46275e-05 (W 4.523e-05) | 0.00756 ± 9.69957e-05 (W 8.79403e-05) | 🔵 colmat 1.10× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `gemm/96x96x96/b1` | 0.020359 ± 6.90237e-05 (W 5.3992e-05) | 0.021435 ± 0.000125021 (W 0.00058945) | 🔵 colmat 1.05× faster than `lapack-aocl` |  |
+
+## gemm-small, c64, f order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/32x32x32/b1` | 0.001335 ± 4.53505e-05 (W 1.61852e-05) | 0.00262 ± 3.67296 (W 8.39866e-05) | · | `!` between-start range over 5%; `p` position effect over 5%; dispatch-dominated (row under 20 us) |
+| `gemm/64x64x64/b1` | 0.0041995 ± 4.44927e-05 (W 2.3262e-05) | 0.0055695 ± 0.000131363 (W 6.57161e-05) | 🔵 colmat 1.33× faster than `lapack-aocl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `gemm/96x96x96/b1` | 0.0110445 ± 4.133e-05 (W 4.91955e-05) | 0.01254 ± 8.25601e-05 (W 0.000114058) | 🔵 colmat 1.14× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+
+## gemm-small, f32, c order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/32x32x32/b1` | 0.00055 ± 7.22265e-06 (W 2.83719e-05) | 0.0013 ± 1.63299e-05 (W 4.08473e-05) | 🔵 colmat 2.36× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `gemm/64x64x64/b1` | 0.00303 ± 7.52773e-06 (W 3.459e-05) | 0.00374 ± 2.33809e-05 (W 4.39443e-05) | 🔵 colmat 1.23× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `gemm/96x96x96/b1` | 0.0097745 ± 5.10842e-05 (W 3.56272e-05) | 0.0103495 ± 1.68216e-05 (W 5.1435e-05) | 🔵 colmat 1.06× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+
+## gemm-small, f32, c order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/32x32x32/b1` | 0.0006 ± 7.52773e-06 (W 2.91895e-05) | 0.001735 ± 5.89067e-05 (W 9.69786e-05) | 🔵 colmat 2.89× faster than `lapack-aocl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `gemm/64x64x64/b1` | 0.001685 ± 7.4027e-05 (W 8.39047e-05) | 0.00307 ± 3.01109e-05 (W 4.40294e-05) | 🔵 colmat 1.82× faster than `lapack-aocl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `gemm/96x96x96/b1` | 0.003135 ± 2.94873e-05 (W 4.51271e-05) | 0.00479 ± 4.70776e-05 (W 8.47925e-05) | 🔵 colmat 1.53× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+
+## gemm-small, f32, c order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/32x32x32/b1` | 0.00062 ± 7.52773e-06 (W 3.41592e-05) | 0.0021845 ± 5.25753e-05 (W 9.20516e-05) | 🔵 colmat 3.52× faster than `lapack-aocl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `gemm/64x64x64/b1` | 0.001755 ± 3.54495e-05 (W 6.934e-05) | 0.002915 ± 0.000118617 (W 0.000105695) | 🔵 colmat 1.66× faster than `lapack-aocl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `gemm/96x96x96/b1` | 0.002905 ± 7.45654e-05 (W 4.16924e-05) | 0.00375 ± 3.71035e-05 (W 6.58783e-05) | 🔵 colmat 1.29× faster than `lapack-aocl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+
+## gemm-small, f32, f order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/32x32x32/b1` | 0.000535 ± 5.47723e-06 (W 2.95706e-05) | 0.00131 ± 1.73253e-05 (W 3.76228e-05) | 🔵 colmat 2.45× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `gemm/64x64x64/b1` | 0.0030245 ± 3.78968e-05 (W 2.81998e-05) | 0.00373 ± 2.25832e-05 (W 4.35816e-05) | 🔵 colmat 1.23× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `gemm/96x96x96/b1` | 0.0097495 ± 2.23047e-05 (W 3.32248e-05) | 0.0103695 ± 2.65255e-05 (W 4.04225e-05) | 🔵 colmat 1.06× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+
+## gemm-small, f32, f order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/32x32x32/b1` | 0.00061 ± 1.0328e-05 (W 2.76484e-05) | 0.001765 ± 6.97854e-05 (W 8.92303e-05) | 🔵 colmat 2.89× faster than `lapack-aocl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `gemm/64x64x64/b1` | 0.00175 ± 4.80625e-05 (W 0.000107242) | 0.00309 ± 3.09839e-05 (W 0.000100968) | 🔵 colmat 1.77× faster than `lapack-aocl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `gemm/96x96x96/b1` | 0.00323 ± 3.65605e-05 (W 6.32126e-05) | 0.0047795 ± 4.18605e-05 (W 9.855e-05) | 🔵 colmat 1.48× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+
+## gemm-small, f32, f order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/32x32x32/b1` | 0.000625 ± 8.16497e-06 (W 2.86356e-05) | 0.0022495 ± 9.35316e-05 (W 8.00831e-05) | 🔵 colmat 3.60× faster than `lapack-aocl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `gemm/64x64x64/b1` | 0.00139 ± 1.41421e-05 (W 2.4043e-05) | 0.0030245 ± 0.000175669 (W 0.000204814) | 🔵 colmat 2.18× faster than `lapack-aocl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `gemm/96x96x96/b1` | 0.002325 ± 2.74985e-05 (W 4.23316e-05) | 0.0037 ± 3.28634e-05 (W 7.73251e-05) | 🔵 colmat 1.59× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+
+## gemm-small, c32, c order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/32x32x32/b1` | 0.0016195 ± 1.79889e-05 (W 2.90943e-05) | 0.001675 ± 1.04881e-05 (W 3.51217e-05) | · | dispatch-dominated (row under 20 us) |
+| `gemm/64x64x64/b1` | 0.01211 ± 9.3339e-05 (W 4.48723e-05) | 0.011209 ± 0.000118204 (W 3.73001e-05) | 🔴 colmat 1.08× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `gemm/96x96x96/b1` | 0.038394 ± 2.94262e-05 (W 4.10719e-05) | 0.0387585 ± 0.00017525 (W 4.86372e-05) | · |  |
+
+## gemm-small, c32, c order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/32x32x32/b1` | 0.00114 ± 2.60768e-05 (W 2.98043e-05) | 0.00208 ± 4.28952e-05 (W 7.42609e-05) | 🔵 colmat 1.82× faster than `lapack-aocl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `gemm/64x64x64/b1` | 0.003735 ± 4.9295e-05 (W 6.00238e-05) | 0.00455 ± 4.84424e-05 (W 0.000122852) | 🔵 colmat 1.22× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `gemm/96x96x96/b1` | 0.010475 ± 6.647e-05 (W 5.40896e-05) | 0.0112695 ± 3.90931e-05 (W 9.87264e-05) | 🔵 colmat 1.08× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+
+## gemm-small, c32, c order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/32x32x32/b1` | 0.0012395 ± 4.45889e-05 (W 4.51063e-05) | 0.00247 ± 0.000108019 (W 0.000101907) | 🔵 colmat 1.99× faster than `lapack-aocl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `gemm/64x64x64/b1` | 0.00275 ± 4.85798e-05 (W 5.0874e-05) | 0.00368 ± 3.48807e-05 (W 9.38006e-05) | 🔵 colmat 1.34× faster than `lapack-aocl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `gemm/96x96x96/b1` | 0.0058345 ± 3.0533e-05 (W 4.31045e-05) | 0.007175 ± 0.000103084 (W 7.35017e-05) | 🔵 colmat 1.23× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+
+## gemm-small, c32, f order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/32x32x32/b1` | 0.001615 ± 1.16905e-05 (W 2.97688e-05) | 0.0017 ± 7.52773e-06 (W 3.3689e-05) | 🔵 colmat 1.05× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `gemm/64x64x64/b1` | 0.01209 ± 5.78057e-05 (W 3.16274e-05) | 0.01121 ± 7.67898e-05 (W 4.40515e-05) | 🔴 colmat 1.08× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `gemm/96x96x96/b1` | 0.038389 ± 5.50324e-05 (W 5.2471e-05) | 0.0387135 ± 0.000136955 (W 0.000766954) | · |  |
+
+## gemm-small, c32, f order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/32x32x32/b1` | 0.001095 ± 3.97073e-05 (W 3.30026e-05) | 0.00207 ± 4.53505e-05 (W 6.88067e-05) | 🔵 colmat 1.89× faster than `lapack-aocl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `gemm/64x64x64/b1` | 0.003725 ± 3.39116e-05 (W 3.80633e-05) | 0.00458 ± 7.14609e-05 (W 0.0001206) | 🔵 colmat 1.23× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `gemm/96x96x96/b1` | 0.010505 ± 5.5776e-05 (W 5.26549e-05) | 0.0112795 ± 9.74898e-05 (W 8.64078e-05) | 🔵 colmat 1.07× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+
+## gemm-small, c32, f order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/32x32x32/b1` | 0.00115 ± 3.6697e-05 (W 3.03203e-05) | 0.0024 ± 5.98888e-05 (W 6.28458e-05) | 🔵 colmat 2.09× faster than `lapack-aocl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `gemm/64x64x64/b1` | 0.002555 ± 5.11534e-05 (W 4.42255e-05) | 0.0036845 ± 5.85505e-05 (W 9.45533e-05) | 🔵 colmat 1.44× faster than `lapack-aocl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `gemm/96x96x96/b1` | 0.00606 ± 2.08846e-05 (W 5.39238e-05) | 0.007035 ± 3.73117e-05 (W 8.63462e-05) | 🔵 colmat 1.16× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+
+## gemm-mid, f64, c order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/128x128x128/b1` | 0.047578 ± 0.000209655 (W 0.000141548) | 0.0486685 ± 0.000204273 (W 9.72546e-05) | · |  |
+| `gemm/192x192x192/b1` | 0.158647 ± 0.000460527 (W 0.00108756) | 0.163804 ± 0.00087834 (W 0.00158167) | · |  |
+| `gemm/256x256x256/b1` | 0.3769 ± 0.00218024 (W 0.00143303) | 0.390269 ± 0.00791617 (W 0.00239841) | · | `!` between-start range over 5% |
+| `gemm/384x384x384/b1` | 1.24721 ± 0.00886384 (W 0.0020451) | 1.51875 ± 0.0140196 (W 0.00441624) | 🔵 colmat 1.22× faster than `lapack-aocl` |  |
+| `gemm/512x512x512/b1` | 2.92111 ± 0.00650262 (W 0.00141709) | 5.27483 ± 0.851288 (W 0.0258451) | 🔵 colmat 1.81× faster than `lapack-aocl` | `!` between-start range over 5%; `p` position effect over 5% |
+| `gemm/768x768x768/b1` | 10.0127 ± 0.0327136 (W 0.00918123) | 11.1574 ± 0.846023 (W 0.0237449) | 🔵 colmat 1.11× faster than `lapack-aocl` (marginal: spread 0.77 of the difference) | `!` between-start range over 5% |
+
+## gemm-mid, f64, c order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/128x128x128/b1` | 0.013745 ± 4.22169e-05 (W 6.26015e-05) | 0.0136145 ± 5.19246e-05 (W 0.000110977) | · | dispatch-dominated (row under 20 us) |
+| `gemm/192x192x192/b1` | 0.041714 ± 0.000169264 (W 0.000101742) | 0.039708 ± 0.000153042 (W 0.000202361) | · |  |
+| `gemm/256x256x256/b1` | 0.0976215 ± 0.000496889 (W 0.000347442) | 0.0993775 ± 0.00283836 (W 0.000502946) | · | `!` between-start range over 5% |
+| `gemm/384x384x384/b1` | 0.321247 ± 0.00721122 (W 0.00142839) | 0.314889 ± 0.00590459 (W 0.00195143) | · | `!` between-start range over 5% |
+| `gemm/512x512x512/b1` | 0.77859 ± 0.00285604 (W 0.00323212) | 1.34954 ± 0.189317 (W 0.0143582) | 🔵 colmat 1.73× faster than `lapack-aocl` | `!` between-start range over 5%; `p` position effect over 5% |
+| `gemm/768x768x768/b1` | 2.58369 ± 0.00852514 (W 0.0089527) | 2.98748 ± 0.218122 (W 0.00604397) | 🔵 colmat 1.16× faster than `lapack-aocl` | `!` between-start range over 5% |
+
+## gemm-mid, f64, c order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/128x128x128/b1` | 0.007215 ± 2.6538e-05 (W 5.45048e-05) | 0.0087595 ± 7.5756e-05 (W 0.00010183) | 🔵 colmat 1.21× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `gemm/192x192x192/b1` | 0.0207995 ± 3.35882e-05 (W 4.79535e-05) | 0.021574 ± 0.000722975 (W 0.000513106) | · | `!` between-start range over 5% |
+| `gemm/256x256x256/b1` | 0.0518985 ± 0.000302999 (W 0.000246448) | 0.052013 ± 0.00414916 (W 0.000575207) | · | `!` between-start range over 5% |
+| `gemm/384x384x384/b1` | 0.161415 ± 0.000924522 (W 0.00176078) | 0.167027 ± 0.00338875 (W 0.00181222) | · | `!` between-start range over 5% |
+| `gemm/512x512x512/b1` | 0.414065 ± 0.00340852 (W 0.00379158) | 0.824702 ± 0.0666461 (W 0.00713791) | 🔵 colmat 1.99× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `gemm/768x768x768/b1` | 1.33072 ± 0.00545613 (W 0.00532987) | 1.37049 ± 0.0830891 (W 0.00463815) | · | `!` between-start range over 5% |
+
+## gemm-mid, f64, f order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/128x128x128/b1` | 0.047534 ± 0.000259909 (W 0.000124313) | 0.048684 ± 0.000194969 (W 0.000111196) | · |  |
+| `gemm/192x192x192/b1` | 0.158936 ± 0.000164828 (W 0.00121007) | 0.164101 ± 0.000509579 (W 0.00121725) | · |  |
+| `gemm/256x256x256/b1` | 0.379103 ± 0.00224784 (W 0.00185136) | 0.391459 ± 0.00708267 (W 0.0024656) | · |  |
+| `gemm/384x384x384/b1` | 1.24191 ± 0.00449361 (W 0.00187112) | 1.52121 ± 0.0465609 (W 0.00465968) | 🔵 colmat 1.22× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `gemm/512x512x512/b1` | 2.92504 ± 0.00602791 (W 0.00167159) | 5.94458 ± 0.0847276 (W 0.330914) | 🔵 colmat 2.03× faster than `lapack-aocl` |  |
+| `gemm/768x768x768/b1` | 10.0099 ± 0.0500523 (W 0.00815481) | 11.0776 ± 0.490661 (W 0.0236156) | 🔵 colmat 1.11× faster than `lapack-aocl` | `!` between-start range over 5% |
+
+## gemm-mid, f64, f order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/128x128x128/b1` | 0.0137245 ± 4.49696e-05 (W 7.17967e-05) | 0.01359 ± 0.000156389 (W 0.000130394) | · | dispatch-dominated (row under 20 us) |
+| `gemm/192x192x192/b1` | 0.0416735 ± 7.44027e-05 (W 0.000133047) | 0.039668 ± 9.14587e-05 (W 0.000137244) | · |  |
+| `gemm/256x256x256/b1` | 0.097487 ± 0.000805714 (W 0.000441245) | 0.100352 ± 0.0034781 (W 0.00136246) | · | `!` between-start range over 5% |
+| `gemm/384x384x384/b1` | 0.318242 ± 0.00287865 (W 0.00124279) | 0.31592 ± 0.00278958 (W 0.00232389) | · |  |
+| `gemm/512x512x512/b1` | 0.77727 ± 0.00327834 (W 0.00303775) | 1.50811 ± 0.136563 (W 0.0207995) | 🔵 colmat 1.94× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `gemm/768x768x768/b1` | 2.58725 ± 0.0108842 (W 0.00742605) | 2.63361 ± 0.159243 (W 0.00676836) | · | `!` between-start range over 5% |
+
+## gemm-mid, f64, f order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/128x128x128/b1` | 0.007935 ± 3.34664e-05 (W 3.38476e-05) | 0.0087745 ± 0.00011737 (W 0.000128588) | 🔵 colmat 1.11× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `gemm/192x192x192/b1` | 0.022434 ± 8.03337e-05 (W 4.6248e-05) | 0.021559 ± 5.95169e-05 (W 0.000142482) | · |  |
+| `gemm/256x256x256/b1` | 0.052078 ± 0.000574927 (W 0.000338613) | 0.0529175 ± 0.00139284 (W 0.000199143) | · | `!` between-start range over 5% |
+| `gemm/384x384x384/b1` | 0.166096 ± 0.00236213 (W 0.00131361) | 0.170859 ± 0.00318889 (W 0.00107431) | · |  |
+| `gemm/512x512x512/b1` | 0.414309 ± 0.00165772 (W 0.00370287) | 0.76506 ± 0.0705396 (W 0.0136723) | 🔵 colmat 1.85× faster than `lapack-aocl` | `!` between-start range over 5%; `p` position effect over 5% |
+| `gemm/768x768x768/b1` | 1.33098 ± 0.00417403 (W 0.00791736) | 1.55581 ± 0.0938106 (W 0.00486859) | 🔵 colmat 1.17× faster than `lapack-aocl` | `!` between-start range over 5% |
+
+## gemm-mid, c64, c order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/128x128x128/b1` | 0.184169 ± 0.000813807 (W 0.00120301) | 0.179143 ± 0.000482924 (W 0.00140405) | · |  |
+| `gemm/192x192x192/b1` | 0.609967 ± 0.00273468 (W 0.00189869) | 0.605679 ± 0.0063771 (W 0.00190497) | · |  |
+| `gemm/256x256x256/b1` | 1.45669 ± 0.00883036 (W 0.00261433) | 1.89384 ± 0.0070922 (W 0.00280274) | 🔵 colmat 1.30× faster than `lapack-aocl` |  |
+| `gemm/384x384x384/b1` | 4.82625 ± 0.0081033 (W 0.00306849) | 5.37566 ± 0.0336301 (W 0.00481204) | 🔵 colmat 1.11× faster than `lapack-aocl` |  |
+| `gemm/512x512x512/b1` | 11.4514 ± 0.020158 (W 0.00947926) | 14.9382 ± 0.110362 (W 0.010789) | 🔵 colmat 1.30× faster than `lapack-aocl` |  |
+| `gemm/768x768x768/b1` | 39.3629 ± 0.0539374 (W 0.0278151) | 50.5481 ± 0.428643 (W 0.0432529) | 🔵 colmat 1.28× faster than `lapack-aocl` |  |
+
+## gemm-mid, c64, c order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/128x128x128/b1` | 0.046488 ± 0.000176593 (W 6.40961e-05) | 0.0494735 ± 0.000114367 (W 0.00024306) | 🔵 colmat 1.06× faster than `lapack-aocl` |  |
+| `gemm/192x192x192/b1` | 0.155437 ± 0.000630112 (W 0.000339806) | 0.165202 ± 0.000595285 (W 0.00145072) | 🔵 colmat 1.06× faster than `lapack-aocl` |  |
+| `gemm/256x256x256/b1` | 0.375692 ± 0.00498378 (W 0.00168703) | 0.479551 ± 0.0034548 (W 0.00255225) | 🔵 colmat 1.28× faster than `lapack-aocl` |  |
+| `gemm/384x384x384/b1` | 1.22692 ± 0.00218348 (W 0.00346861) | 1.32402 ± 0.00304004 (W 0.00297239) | 🔵 colmat 1.08× faster than `lapack-aocl` |  |
+| `gemm/512x512x512/b1` | 2.89514 ± 0.00738486 (W 0.00398401) | 3.71085 ± 0.017886 (W 0.00767888) | 🔵 colmat 1.28× faster than `lapack-aocl` |  |
+| `gemm/768x768x768/b1` | 9.87818 ± 0.0237643 (W 0.0138261) | 12.5912 ± 0.0579146 (W 0.0108201) | 🔵 colmat 1.27× faster than `lapack-aocl` |  |
+
+## gemm-mid, c64, c order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/128x128x128/b1` | 0.024889 ± 7.30034e-05 (W 6.18632e-05) | 0.028659 ± 0.000150054 (W 0.000164327) | 🔵 colmat 1.15× faster than `lapack-aocl` |  |
+| `gemm/192x192x192/b1` | 0.077778 ± 0.000476067 (W 0.00085989) | 0.0844685 ± 0.00121189 (W 0.00133196) | 🔵 colmat 1.09× faster than `lapack-aocl` |  |
+| `gemm/256x256x256/b1` | 0.185663 ± 0.000432447 (W 0.00138045) | 0.253248 ± 0.000955827 (W 0.00283355) | 🔵 colmat 1.36× faster than `lapack-aocl` |  |
+| `gemm/384x384x384/b1` | 0.626225 ± 0.00231068 (W 0.00236582) | 0.675944 ± 0.00333319 (W 0.00283844) | 🔵 colmat 1.08× faster than `lapack-aocl` |  |
+| `gemm/512x512x512/b1` | 1.48863 ± 0.00146609 (W 0.00567204) | 1.93286 ± 0.0224396 (W 0.00474657) | 🔵 colmat 1.30× faster than `lapack-aocl` |  |
+| `gemm/768x768x768/b1` | 4.99062 ± 0.00531113 (W 0.00561453) | 6.39719 ± 0.0476187 (W 0.00556517) | 🔵 colmat 1.28× faster than `lapack-aocl` |  |
+
+## gemm-mid, c64, f order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/128x128x128/b1` | 0.185017 ± 0.00128736 (W 0.00137997) | 0.179799 ± 0.00109129 (W 0.0010772) | · |  |
+| `gemm/192x192x192/b1` | 0.609575 ± 0.00221361 (W 0.00154346) | 0.60787 ± 0.0109598 (W 0.00158271) | · |  |
+| `gemm/256x256x256/b1` | 1.45799 ± 0.00397855 (W 0.00176607) | 1.88926 ± 0.00592521 (W 0.00240646) | 🔵 colmat 1.30× faster than `lapack-aocl` |  |
+| `gemm/384x384x384/b1` | 4.83096 ± 0.00470793 (W 0.00531242) | 5.34218 ± 0.0180782 (W 0.00520185) | 🔵 colmat 1.11× faster than `lapack-aocl` |  |
+| `gemm/512x512x512/b1` | 11.4394 ± 0.0152301 (W 0.00567522) | 14.7363 ± 0.08563 (W 0.0172617) | 🔵 colmat 1.29× faster than `lapack-aocl` |  |
+| `gemm/768x768x768/b1` | 39.3184 ± 0.0476218 (W 0.0244981) | 50.3051 ± 0.526954 (W 0.0304833) | 🔵 colmat 1.28× faster than `lapack-aocl` |  |
+
+## gemm-mid, c64, f order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/128x128x128/b1` | 0.0465435 ± 0.000185107 (W 0.000145344) | 0.049679 ± 0.000188201 (W 0.000140216) | 🔵 colmat 1.07× faster than `lapack-aocl` |  |
+| `gemm/192x192x192/b1` | 0.15554 ± 0.00117389 (W 0.000972757) | 0.164661 ± 0.000958407 (W 0.00125798) | 🔵 colmat 1.06× faster than `lapack-aocl` |  |
+| `gemm/256x256x256/b1` | 0.369973 ± 0.00378966 (W 0.00169808) | 0.479301 ± 0.00456023 (W 0.00255622) | 🔵 colmat 1.30× faster than `lapack-aocl` |  |
+| `gemm/384x384x384/b1` | 1.22713 ± 0.0011217 (W 0.00279602) | 1.32133 ± 0.00459961 (W 0.00317737) | 🔵 colmat 1.08× faster than `lapack-aocl` |  |
+| `gemm/512x512x512/b1` | 2.89837 ± 0.00505673 (W 0.00319821) | 3.68186 ± 0.0178201 (W 0.00749976) | 🔵 colmat 1.27× faster than `lapack-aocl` |  |
+| `gemm/768x768x768/b1` | 9.88485 ± 0.0182678 (W 0.0111075) | 12.5097 ± 0.0526836 (W 0.00892088) | 🔵 colmat 1.27× faster than `lapack-aocl` |  |
+
+## gemm-mid, c64, f order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/128x128x128/b1` | 0.024244 ± 9.33809e-05 (W 5.20073e-05) | 0.028284 ± 0.000252439 (W 0.00016728) | 🔵 colmat 1.17× faster than `lapack-aocl` |  |
+| `gemm/192x192x192/b1` | 0.0794585 ± 0.000568744 (W 0.000287441) | 0.084477 ± 0.00052586 (W 0.000954555) | 🔵 colmat 1.06× faster than `lapack-aocl` |  |
+| `gemm/256x256x256/b1` | 0.195299 ± 0.000629309 (W 0.00148591) | 0.250366 ± 0.00232937 (W 0.00203744) | 🔵 colmat 1.28× faster than `lapack-aocl` |  |
+| `gemm/384x384x384/b1` | 0.623676 ± 0.00291265 (W 0.00285932) | 0.670192 ± 0.00378529 (W 0.00231767) | 🔵 colmat 1.07× faster than `lapack-aocl` |  |
+| `gemm/512x512x512/b1` | 1.48859 ± 0.00246709 (W 0.00397327) | 1.90569 ± 0.00945552 (W 0.00512777) | 🔵 colmat 1.28× faster than `lapack-aocl` |  |
+| `gemm/768x768x768/b1` | 4.98946 ± 0.00203417 (W 0.00769035) | 6.33836 ± 0.0185842 (W 0.010862) | 🔵 colmat 1.27× faster than `lapack-aocl` |  |
+
+## gemm-mid, f32, c order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/128x128x128/b1` | 0.0242945 ± 9.63341e-05 (W 8.7241e-05) | 0.024564 ± 7.41907e-05 (W 0.000175065) | · |  |
+| `gemm/192x192x192/b1` | 0.076951 ± 0.000194603 (W 0.000582471) | 0.077247 ± 0.000282721 (W 0.00090706) | · |  |
+| `gemm/256x256x256/b1` | 0.184617 ± 0.000343739 (W 0.0014197) | 0.187918 ± 0.00064405 (W 0.00117842) | · |  |
+| `gemm/384x384x384/b1` | 0.615643 ± 0.0025934 (W 0.00184789) | 0.617798 ± 0.000820971 (W 0.00166741) | · |  |
+| `gemm/512x512x512/b1` | 1.44925 ± 0.00130783 (W 0.0017624) | 1.45262 ± 0.00152473 (W 0.00213528) | · |  |
+| `gemm/768x768x768/b1` | 4.95213 ± 0.0387994 (W 0.0031404) | 5.13446 ± 0.0291664 (W 0.00487934) | · |  |
+
+## gemm-mid, f32, c order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/128x128x128/b1` | 0.006485 ± 4.46785e-05 (W 4.69826e-05) | 0.00775 ± 5.21552e-05 (W 7.27246e-05) | 🔵 colmat 1.20× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `gemm/192x192x192/b1` | 0.020885 ± 4.44406e-05 (W 5.97944e-05) | 0.027364 ± 6.31741e-05 (W 0.00012681) | 🔵 colmat 1.31× faster than `lapack-aocl` |  |
+| `gemm/256x256x256/b1` | 0.050144 ± 0.00014607 (W 0.000222014) | 0.047903 ± 0.000105831 (W 0.00016994) | · |  |
+| `gemm/384x384x384/b1` | 0.15718 ± 0.000535274 (W 0.000265409) | 0.153394 ± 0.000808071 (W 0.000983427) | · |  |
+| `gemm/512x512x512/b1` | 0.371521 ± 0.00210853 (W 0.00148143) | 0.509338 ± 0.0161789 (W 0.00247072) | 🔵 colmat 1.37× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `gemm/768x768x768/b1` | 1.28124 ± 0.00405938 (W 0.00721707) | 1.33234 ± 0.00794352 (W 0.00368741) | · |  |
+
+## gemm-mid, f32, c order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/128x128x128/b1` | 0.00445 ± 2.87518e-05 (W 6.97063e-05) | 0.00542 ± 7.11805e-05 (W 0.000124776) | 🔵 colmat 1.22× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `gemm/192x192x192/b1` | 0.01123 ± 5.204e-05 (W 5.96668e-05) | 0.0152095 ± 9.74216e-05 (W 0.000131299) | 🔵 colmat 1.35× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `gemm/256x256x256/b1` | 0.0252935 ± 0.00013427 (W 8.85366e-05) | 0.0256395 ± 0.000129059 (W 0.000154396) | · |  |
+| `gemm/384x384x384/b1` | 0.078963 ± 0.00027489 (W 0.000124204) | 0.0784825 ± 0.000356818 (W 0.000760361) | · |  |
+| `gemm/512x512x512/b1` | 0.195521 ± 0.000790632 (W 0.00127054) | 0.254515 ± 0.0124826 (W 0.00223645) | 🔵 colmat 1.30× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `gemm/768x768x768/b1` | 0.680405 ± 0.00294512 (W 0.00472958) | 0.638063 ± 0.00842977 (W 0.00251357) | 🔴 colmat 1.07× slower than `lapack-aocl` |  |
+
+## gemm-mid, f32, f order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/128x128x128/b1` | 0.024254 ± 8.95411e-05 (W 0.000104865) | 0.0246085 ± 1.40143e-05 (W 5.5826e-05) | · |  |
+| `gemm/192x192x192/b1` | 0.076997 ± 0.000214483 (W 0.000377543) | 0.0772625 ± 7.57348e-05 (W 0.000119543) | · |  |
+| `gemm/256x256x256/b1` | 0.184578 ± 0.000381772 (W 0.00123028) | 0.187158 ± 0.000910985 (W 0.00150784) | · |  |
+| `gemm/384x384x384/b1` | 0.616902 ± 0.00373219 (W 0.00206042) | 0.618189 ± 0.0013225 (W 0.00212457) | · |  |
+| `gemm/512x512x512/b1` | 1.44902 ± 0.00591374 (W 0.0023923) | 1.45163 ± 0.0020163 (W 0.00210898) | · |  |
+| `gemm/768x768x768/b1` | 4.97841 ± 0.0629093 (W 0.00326349) | 5.1383 ± 0.0238766 (W 0.00372888) | · |  |
+
+## gemm-mid, f32, f order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/128x128x128/b1` | 0.0065445 ± 3.9365e-05 (W 4.88392e-05) | 0.0075045 ± 7.30226e-05 (W 7.95916e-05) | 🔵 colmat 1.15× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `gemm/192x192x192/b1` | 0.0208045 ± 8.27778e-05 (W 4.5147e-05) | 0.0273245 ± 6.00455e-05 (W 0.000154361) | 🔵 colmat 1.31× faster than `lapack-aocl` |  |
+| `gemm/256x256x256/b1` | 0.050259 ± 0.000104261 (W 0.000164032) | 0.0480475 ± 0.000148094 (W 0.00105212) | · |  |
+| `gemm/384x384x384/b1` | 0.156822 ± 0.000273669 (W 0.000595437) | 0.154395 ± 0.000747031 (W 0.000496061) | · |  |
+| `gemm/512x512x512/b1` | 0.371244 ± 0.00329957 (W 0.0013334) | 0.511485 ± 0.0191548 (W 0.00209952) | 🔵 colmat 1.38× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `gemm/768x768x768/b1` | 1.28269 ± 0.00403427 (W 0.00503384) | 1.339 ± 0.00751374 (W 0.00361211) | · |  |
+
+## gemm-mid, f32, f order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/128x128x128/b1` | 0.00406 ± 5.05585e-05 (W 2.58162e-05) | 0.00548 ± 0.000123126 (W 0.000111896) | 🔵 colmat 1.35× faster than `lapack-aocl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `gemm/192x192x192/b1` | 0.01135 ± 6.87915e-05 (W 3.51166e-05) | 0.015275 ± 7.38478e-05 (W 0.000128267) | 🔵 colmat 1.35× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `gemm/256x256x256/b1` | 0.0265985 ± 5.88232e-05 (W 0.000103506) | 0.025619 ± 5.571e-05 (W 0.000121266) | · |  |
+| `gemm/384x384x384/b1` | 0.081037 ± 0.000462144 (W 0.00111222) | 0.078328 ± 0.000259748 (W 0.0015338) | · |  |
+| `gemm/512x512x512/b1` | 0.192364 ± 0.00118963 (W 0.00185892) | 0.258168 ± 0.00524813 (W 0.00197006) | 🔵 colmat 1.34× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `gemm/768x768x768/b1` | 0.680131 ± 0.00274755 (W 0.00476537) | 0.638843 ± 0.0102196 (W 0.00315119) | 🔴 colmat 1.06× slower than `lapack-aocl` |  |
+
+## gemm-mid, c32, c order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/128x128x128/b1` | 0.090112 ± 0.000221562 (W 0.0010429) | 0.092868 ± 0.000333234 (W 0.000327346) | · |  |
+| `gemm/192x192x192/b1` | 0.303401 ± 0.000682105 (W 0.00166699) | 0.301805 ± 0.000978796 (W 0.00160089) | · |  |
+| `gemm/256x256x256/b1` | 0.731121 ± 0.00680743 (W 0.00174351) | 0.723642 ± 0.0131966 (W 0.00178876) | · |  |
+| `gemm/384x384x384/b1` | 2.41158 ± 0.00165103 (W 0.00188821) | 2.40666 ± 0.00268592 (W 0.00197067) | · |  |
+| `gemm/512x512x512/b1` | 5.68948 ± 0.00678283 (W 0.00447467) | 8.89715 ± 0.0996694 (W 0.0485892) | 🔵 colmat 1.56× faster than `lapack-aocl` |  |
+| `gemm/768x768x768/b1` | 19.4598 ± 0.0132829 (W 0.0111067) | 19.6162 ± 0.2466 (W 0.0109209) | · |  |
+
+## gemm-mid, c32, c order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/128x128x128/b1` | 0.024454 ± 7.22957e-05 (W 5.71744e-05) | 0.0250945 ± 0.000118148 (W 9.81138e-05) | · |  |
+| `gemm/192x192x192/b1` | 0.077093 ± 0.000283974 (W 0.00010762) | 0.0767785 ± 0.000154652 (W 0.000692736) | · |  |
+| `gemm/256x256x256/b1` | 0.182299 ± 0.000662891 (W 0.00132326) | 0.185877 ± 0.00423686 (W 0.00125332) | · | `!` between-start range over 5% |
+| `gemm/384x384x384/b1` | 0.611293 ± 0.00234529 (W 0.00182415) | 0.610592 ± 0.000964565 (W 0.00203797) | · |  |
+| `gemm/512x512x512/b1` | 1.46972 ± 0.000981468 (W 0.00426117) | 2.33074 ± 0.0236373 (W 0.0183383) | 🔵 colmat 1.59× faster than `lapack-aocl` |  |
+| `gemm/768x768x768/b1` | 4.91719 ± 0.00464485 (W 0.00692661) | 5.0506 ± 0.0357739 (W 0.00730561) | · |  |
+
+## gemm-mid, c32, c order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/128x128x128/b1` | 0.0124895 ± 4.49029e-05 (W 4.70977e-05) | 0.014075 ± 0.000361868 (W 0.000177238) | 🔵 colmat 1.13× faster than `lapack-aocl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `gemm/192x192x192/b1` | 0.0392685 ± 7.68002e-05 (W 4.41955e-05) | 0.0401345 ± 0.000176301 (W 0.000137246) | · |  |
+| `gemm/256x256x256/b1` | 0.095877 ± 0.000389505 (W 0.000286915) | 0.093406 ± 0.00157755 (W 0.00114065) | · |  |
+| `gemm/384x384x384/b1` | 0.304971 ± 0.00106266 (W 0.00162906) | 0.310574 ± 0.00961784 (W 0.00194234) | · | `!` between-start range over 5% |
+| `gemm/512x512x512/b1` | 0.757118 ± 0.00212958 (W 0.00176516) | 1.75741 ± 0.01789 (W 0.0315315) | 🔵 colmat 2.32× faster than `lapack-aocl` |  |
+| `gemm/768x768x768/b1` | 2.48823 ± 0.00269257 (W 0.00650972) | 2.63831 ± 0.0158332 (W 0.0113569) | 🔵 colmat 1.06× faster than `lapack-aocl` |  |
+
+## gemm-mid, c32, f order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/128x128x128/b1` | 0.0902935 ± 0.000404804 (W 0.0004903) | 0.092936 ± 0.000353274 (W 0.000322167) | · |  |
+| `gemm/192x192x192/b1` | 0.303056 ± 0.000714851 (W 0.00171438) | 0.300619 ± 0.00137507 (W 0.00133076) | · |  |
+| `gemm/256x256x256/b1` | 0.728945 ± 0.00794881 (W 0.00186204) | 0.722983 ± 0.00285958 (W 0.00223136) | · |  |
+| `gemm/384x384x384/b1` | 2.41118 ± 0.00127698 (W 0.00262414) | 2.40849 ± 0.00798479 (W 0.00277707) | · |  |
+| `gemm/512x512x512/b1` | 5.69446 ± 0.00945429 (W 0.00742419) | 8.84567 ± 0.646775 (W 0.0165318) | 🔵 colmat 1.55× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `gemm/768x768x768/b1` | 19.4248 ± 0.0354927 (W 0.00992123) | 19.5963 ± 0.218136 (W 0.0215935) | · |  |
+
+## gemm-mid, c32, f order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/128x128x128/b1` | 0.024449 ± 5.30676e-05 (W 6.59355e-05) | 0.0251345 ± 5.37054e-05 (W 0.000486163) | · |  |
+| `gemm/192x192x192/b1` | 0.076887 ± 0.000187899 (W 9.32843e-05) | 0.076968 ± 0.000268163 (W 0.000863842) | · |  |
+| `gemm/256x256x256/b1` | 0.181451 ± 0.000824267 (W 0.00150374) | 0.184343 ± 0.00469251 (W 0.00124922) | · | `!` between-start range over 5% |
+| `gemm/384x384x384/b1` | 0.611503 ± 0.00317873 (W 0.00179018) | 0.609 ± 0.00206479 (W 0.00210414) | · |  |
+| `gemm/512x512x512/b1` | 1.46643 ± 0.00366853 (W 0.00478052) | 2.31968 ± 0.254844 (W 0.0339583) | 🔵 colmat 1.58× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `gemm/768x768x768/b1` | 4.91592 ± 0.0040322 (W 0.00722762) | 5.03815 ± 0.0437384 (W 0.00536625) | · |  |
+
+## gemm-mid, c32, f order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/128x128x128/b1` | 0.0130945 ± 6.99354e-05 (W 4.64689e-05) | 0.014114 ± 0.000102692 (W 0.000141483) | 🔵 colmat 1.08× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `gemm/192x192x192/b1` | 0.039483 ± 9.89781e-05 (W 4.5183e-05) | 0.040139 ± 0.000187 (W 0.000163691) | · |  |
+| `gemm/256x256x256/b1` | 0.0933415 ± 0.000631461 (W 0.000210885) | 0.0924825 ± 0.00199031 (W 0.000708079) | · | `!` between-start range over 5% |
+| `gemm/384x384x384/b1` | 0.309978 ± 0.00214712 (W 0.00256613) | 0.309339 ± 0.00160744 (W 0.00153631) | · |  |
+| `gemm/512x512x512/b1` | 0.75659 ± 0.00120426 (W 0.0029272) | 1.70768 ± 0.0281359 (W 0.0285888) | 🔵 colmat 2.26× faster than `lapack-aocl` |  |
+| `gemm/768x768x768/b1` | 2.48749 ± 0.0033468 (W 0.00681163) | 2.62759 ± 0.00647475 (W 0.0123063) | 🔵 colmat 1.06× faster than `lapack-aocl` |  |
+
+## gemm-tall, f64, c order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/16x4096x240/b1` | 0.526119 ± 0.00390402 (W 0.00240473) | 0.36348 ± 0.00265256 (W 0.00215788) | 🔴 colmat 1.45× slower than `lapack-aocl` |  |
+| `gemm/4096x16x240/b1` | 0.497943 ± 0.00898892 (W 0.00377598) | 0.561816 ± 0.0115015 (W 0.0105287) | 🔵 colmat 1.13× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `gemm/4096x64x64/b1` | 0.380885 ± 0.00517022 (W 0.00200133) | 0.384176 ± 0.00239935 (W 0.00182823) | · |  |
+
+## gemm-tall, f64, c order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/16x4096x240/b1` | 0.132645 ± 0.000336144 (W 0.000582337) | 0.112538 ± 0.00045202 (W 0.00179061) | 🔴 colmat 1.18× slower than `lapack-aocl` |  |
+| `gemm/4096x16x240/b1` | 0.144632 ± 0.00286361 (W 0.00885634) | 0.184489 ± 0.00253366 (W 0.00695468) | 🔵 colmat 1.28× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `gemm/4096x64x64/b1` | 0.0975415 ± 0.0015019 (W 0.000240763) | 0.097333 ± 0.000761485 (W 0.000673663) | · |  |
+
+## gemm-tall, f64, c order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/16x4096x240/b1` | 0.068583 ± 0.000696207 (W 0.00143487) | 0.0731525 ± 0.00447041 (W 0.000945097) | · | `!` between-start range over 5% |
+| `gemm/4096x16x240/b1` | 0.137725 ± 0.000717029 (W 0.0232445) | 0.139116 ± 0.00131848 (W 0.00130009) | · |  |
+| `gemm/4096x64x64/b1` | 0.049668 ± 0.000283617 (W 0.000193866) | 0.0504985 ± 0.000403681 (W 0.000263753) | · |  |
+
+## gemm-tall, f64, f order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/16x4096x240/b1` | 0.344646 ± 0.00491778 (W 0.00207251) | 0.369354 ± 0.00135087 (W 0.00190589) | 🔵 colmat 1.07× faster than `lapack-aocl` |  |
+| `gemm/4096x16x240/b1` | 0.512822 ± 0.002376 (W 0.00391188) | 0.568359 ± 0.00374183 (W 0.00304158) | 🔵 colmat 1.11× faster than `lapack-aocl` |  |
+| `gemm/4096x64x64/b1` | 0.411521 ± 0.0012911 (W 0.00229522) | 0.513294 ± 0.0057517 (W 0.00423131) | 🔵 colmat 1.25× faster than `lapack-aocl` |  |
+
+## gemm-tall, f64, f order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/16x4096x240/b1` | 0.095711 ± 0.000607328 (W 0.000658469) | 0.0995115 ± 0.00418347 (W 0.00110528) | · | `!` between-start range over 5% |
+| `gemm/4096x16x240/b1` | 0.146587 ± 0.0071541 (W 0.0055402) | 0.18514 ± 0.00142887 (W 0.00254056) | 🔵 colmat 1.26× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `gemm/4096x64x64/b1` | 0.105336 ± 0.0011313 (W 0.000554021) | 0.114442 ± 0.00463384 (W 0.00127053) | 🔵 colmat 1.09× faster than `lapack-aocl` (marginal: spread 0.63 of the difference) | `!` between-start range over 5% |
+
+## gemm-tall, f64, f order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/16x4096x240/b1` | 0.052303 ± 0.000102739 (W 0.000295085) | 0.0555925 ± 0.000482396 (W 0.000393956) | 🔵 colmat 1.06× faster than `lapack-aocl` |  |
+| `gemm/4096x16x240/b1` | 0.138845 ± 0.00814446 (W 0.00149913) | 0.145093 ± 0.00590612 (W 0.00238782) | · | `!` between-start range over 5% |
+| `gemm/4096x64x64/b1` | 0.0521925 ± 0.000363765 (W 0.000599167) | 0.0597635 ± 0.000724083 (W 0.000231479) | 🔵 colmat 1.15× faster than `lapack-aocl` |  |
+
+## gemm-tall, c64, c order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/16x4096x240/b1` | 1.47831 ± 0.0926401 (W 0.00286622) | 1.43234 ± 0.00662621 (W 0.00254781) | · | `!` between-start range over 5% |
+| `gemm/4096x16x240/b1` | 1.59042 ± 0.00993765 (W 0.00257077) | 1.44789 ± 0.00365415 (W 0.00365143) | 🔴 colmat 1.10× slower than `lapack-aocl` |  |
+| `gemm/4096x64x64/b1` | 1.4798 ± 0.00920691 (W 0.00235787) | 1.52762 ± 0.00928459 (W 0.00175492) | · |  |
+
+## gemm-tall, c64, c order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/16x4096x240/b1` | 0.386022 ± 0.00165045 (W 0.00211847) | 0.395918 ± 0.00542685 (W 0.00174308) | · |  |
+| `gemm/4096x16x240/b1` | 0.408127 ± 0.00118519 (W 0.00278184) | 0.365548 ± 0.00325553 (W 0.00279076) | 🔴 colmat 1.12× slower than `lapack-aocl` |  |
+| `gemm/4096x64x64/b1` | 0.374231 ± 0.00154229 (W 0.00174352) | 0.372702 ± 0.00322454 (W 0.0017021) | · |  |
+
+## gemm-tall, c64, c order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/16x4096x240/b1` | 0.214378 ± 0.00324066 (W 0.00158827) | 0.246439 ± 0.0037387 (W 0.00207253) | 🔵 colmat 1.15× faster than `lapack-aocl` |  |
+| `gemm/4096x16x240/b1` | 0.294842 ± 0.0385834 (W 0.0246025) | 0.28011 ± 0.0156462 (W 0.00604644) | · | `!` between-start range over 5%; `p` position effect over 5% |
+| `gemm/4096x64x64/b1` | 0.187447 ± 0.000874704 (W 0.00196468) | 0.191974 ± 0.000648668 (W 0.00116852) | · |  |
+
+## gemm-tall, c64, f order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/16x4096x240/b1` | 1.33958 ± 0.00118494 (W 0.00241998) | 1.54126 ± 0.0247529 (W 0.00198788) | 🔵 colmat 1.15× faster than `lapack-aocl` |  |
+| `gemm/4096x16x240/b1` | 1.59433 ± 0.00376494 (W 0.00535787) | 1.75264 ± 0.0483356 (W 0.004003) | 🔵 colmat 1.10× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `gemm/4096x64x64/b1` | 1.50359 ± 0.00359065 (W 0.0017442) | 1.72471 ± 0.012931 (W 0.00285607) | 🔵 colmat 1.15× faster than `lapack-aocl` |  |
+
+## gemm-tall, c64, f order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/16x4096x240/b1` | 0.341332 ± 0.000408822 (W 0.00173977) | 0.388603 ± 0.00867639 (W 0.00185003) | 🔵 colmat 1.14× faster than `lapack-aocl` |  |
+| `gemm/4096x16x240/b1` | 0.408086 ± 0.0027016 (W 0.00364985) | 0.457363 ± 0.0125183 (W 0.00289073) | 🔵 colmat 1.12× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `gemm/4096x64x64/b1` | 0.379592 ± 0.00523048 (W 0.00175688) | 0.435047 ± 0.00537748 (W 0.00240141) | 🔵 colmat 1.15× faster than `lapack-aocl` |  |
+
+## gemm-tall, c64, f order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/16x4096x240/b1` | 0.186571 ± 0.000532638 (W 0.00222025) | 0.213452 ± 0.0061724 (W 0.00133249) | 🔵 colmat 1.14× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `gemm/4096x16x240/b1` | 0.276985 ± 0.0214056 (W 0.00550793) | 0.33928 ± 0.0034113 (W 0.00336761) | 🔵 colmat 1.22× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `gemm/4096x64x64/b1` | 0.1943 ± 0.00112677 (W 0.00196756) | 0.219782 ± 0.00267013 (W 0.00135133) | 🔵 colmat 1.13× faster than `lapack-aocl` |  |
+
+## gemm-tall, f32, c order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/16x4096x240/b1` | 0.229792 ± 0.0046833 (W 0.00143165) | 0.193451 ± 0.000650386 (W 0.00146336) | 🔴 colmat 1.19× slower than `lapack-aocl` | `!` between-start range over 5% |
+| `gemm/4096x16x240/b1` | 0.193439 ± 0.00298155 (W 0.001764) | 0.189105 ± 0.000910532 (W 0.00147633) | · |  |
+| `gemm/4096x64x64/b1` | 0.183626 ± 0.00174053 (W 0.00132251) | 0.183555 ± 0.000624904 (W 0.00152861) | · |  |
+
+## gemm-tall, f32, c order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/16x4096x240/b1` | 0.0637235 ± 0.000555584 (W 0.000252329) | 0.0584985 ± 0.0053364 (W 0.000191164) | · | `!` between-start range over 5% |
+| `gemm/4096x16x240/b1` | 0.049328 ± 0.00037242 (W 0.000141967) | 0.0497485 ± 0.000320748 (W 0.000443906) | · |  |
+| `gemm/4096x64x64/b1` | 0.046289 ± 0.000171523 (W 0.000165747) | 0.0474735 ± 0.000103844 (W 0.00130037) | · |  |
+
+## gemm-tall, f32, c order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/16x4096x240/b1` | 0.036499 ± 0.000193313 (W 0.000296897) | 0.054319 ± 0.000361484 (W 0.00020646) | 🔵 colmat 1.49× faster than `lapack-aocl` |  |
+| `gemm/4096x16x240/b1` | 0.026454 ± 0.000403462 (W 0.000147873) | 0.029379 ± 0.00049385 (W 0.000320606) | 🔵 colmat 1.11× faster than `lapack-aocl` |  |
+| `gemm/4096x64x64/b1` | 0.0241995 ± 0.000326892 (W 0.000186957) | 0.0252295 ± 8.36909e-05 (W 0.000131609) | · |  |
+
+## gemm-tall, f32, f order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/16x4096x240/b1` | 0.332491 ± 0.000585114 (W 0.00146868) | 0.247608 ± 0.000858081 (W 0.00122798) | 🔴 colmat 1.34× slower than `lapack-aocl` |  |
+| `gemm/4096x16x240/b1` | 0.215403 ± 0.000139253 (W 0.00150612) | 0.432744 ± 0.00647896 (W 0.0036751) | 🔵 colmat 2.01× faster than `lapack-aocl` |  |
+| `gemm/4096x64x64/b1` | 0.205319 ± 0.00189523 (W 0.00206023) | 0.224636 ± 0.0015294 (W 0.00189971) | 🔵 colmat 1.09× faster than `lapack-aocl` |  |
+
+## gemm-tall, f32, f order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/16x4096x240/b1` | 0.084168 ± 0.000102338 (W 0.000103705) | 0.12514 ± 0.000311111 (W 0.00100232) | 🔵 colmat 1.49× faster than `lapack-aocl` |  |
+| `gemm/4096x16x240/b1` | 0.057603 ± 0.000640313 (W 0.000195118) | 0.121757 ± 0.00105796 (W 0.00156827) | 🔵 colmat 2.11× faster than `lapack-aocl` |  |
+| `gemm/4096x64x64/b1` | 0.053399 ± 0.00119547 (W 0.000226852) | 0.0600425 ± 0.00386801 (W 0.000355777) | 🔵 colmat 1.12× faster than `lapack-aocl` (marginal: spread 0.76 of the difference) | `!` between-start range over 5%; `p` position effect over 5% |
+
+## gemm-tall, f32, f order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/16x4096x240/b1` | 0.045179 ± 0.000171699 (W 6.11095e-05) | 0.0642525 ± 0.000328826 (W 0.000242159) | 🔵 colmat 1.42× faster than `lapack-aocl` |  |
+| `gemm/4096x16x240/b1` | 0.029059 ± 0.00449935 (W 0.000453483) | 0.060088 ± 4.85701 (W 0.000861276) | · | `!` between-start range over 5%; `p` position effect over 5% |
+| `gemm/4096x64x64/b1` | 0.0275095 ± 0.00086539 (W 0.000162152) | 0.0319435 ± 0.00279432 (W 0.000373661) | 🔵 colmat 1.16× faster than `lapack-aocl` (marginal: spread 0.83 of the difference) | `!` between-start range over 5% |
+
+## gemm-tall, c32, c order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/16x4096x240/b1` | 0.75666 ± 0.00342052 (W 0.00195946) | 0.67911 ± 0.000517588 (W 0.00177229) | 🔴 colmat 1.11× slower than `lapack-aocl` |  |
+| `gemm/4096x16x240/b1` | 0.79709 ± 0.00519143 (W 0.00166699) | 0.72918 ± 0.00136633 (W 0.00186793) | 🔴 colmat 1.09× slower than `lapack-aocl` |  |
+| `gemm/4096x64x64/b1` | 0.762825 ± 0.00113631 (W 0.00164184) | 0.721815 ± 0.00241764 (W 0.00161563) | 🔴 colmat 1.06× slower than `lapack-aocl` |  |
+
+## gemm-tall, c32, c order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/16x4096x240/b1` | 0.207773 ± 0.000744107 (W 0.00141498) | 0.207243 ± 0.00128557 (W 0.00159271) | · |  |
+| `gemm/4096x16x240/b1` | 0.206019 ± 0.000704938 (W 0.00189157) | 0.191557 ± 0.000884837 (W 0.00134779) | 🔴 colmat 1.08× slower than `lapack-aocl` |  |
+| `gemm/4096x64x64/b1` | 0.193433 ± 0.0013264 (W 0.00126897) | 0.184618 ± 0.00120146 (W 0.00105511) | · |  |
+
+## gemm-tall, c32, c order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/16x4096x240/b1` | 0.101402 ± 0.000744561 (W 0.000985056) | 0.10783 ± 0.000887591 (W 0.00125392) | 🔵 colmat 1.06× faster than `lapack-aocl` |  |
+| `gemm/4096x16x240/b1` | 0.162312 ± 0.00727355 (W 0.00264663) | 0.176636 ± 0.00530652 (W 0.00503368) | 🔵 colmat 1.09× faster than `lapack-aocl` (marginal: spread 0.88 of the difference) | `!` between-start range over 5% |
+| `gemm/4096x64x64/b1` | 0.0971525 ± 0.000297373 (W 0.000176153) | 0.093873 ± 0.00285176 (W 0.000634347) | · | `!` between-start range over 5% |
+
+## gemm-tall, c32, f order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/16x4096x240/b1` | 0.790045 ± 0.00105694 (W 0.0022639) | 0.678099 ± 0.00131793 (W 0.00171548) | 🔴 colmat 1.17× slower than `lapack-aocl` |  |
+| `gemm/4096x16x240/b1` | 0.792492 ± 0.00127651 (W 0.00206573) | 0.855038 ± 0.00595475 (W 0.00407802) | 🔵 colmat 1.08× faster than `lapack-aocl` |  |
+| `gemm/4096x64x64/b1` | 0.753484 ± 0.00396194 (W 0.0015797) | 0.88142 ± 0.00722097 (W 0.00306266) | 🔵 colmat 1.17× faster than `lapack-aocl` |  |
+
+## gemm-tall, c32, f order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/16x4096x240/b1` | 0.200556 ± 0.000665047 (W 0.00151721) | 0.173353 ± 0.000267619 (W 0.00155037) | 🔴 colmat 1.16× slower than `lapack-aocl` |  |
+| `gemm/4096x16x240/b1` | 0.202678 ± 0.000426619 (W 0.00196051) | 0.231358 ± 0.00307956 (W 0.00284646) | 🔵 colmat 1.14× faster than `lapack-aocl` |  |
+| `gemm/4096x64x64/b1` | 0.193309 ± 0.0011417 (W 0.00142247) | 0.224507 ± 0.000912578 (W 0.0017125) | 🔵 colmat 1.16× faster than `lapack-aocl` |  |
+
+## gemm-tall, c32, f order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/16x4096x240/b1` | 0.108592 ± 0.000140776 (W 0.00140774) | 0.094052 ± 0.000391809 (W 0.000199588) | 🔴 colmat 1.15× slower than `lapack-aocl` |  |
+| `gemm/4096x16x240/b1` | 0.141036 ± 0.0170079 (W 0.00136778) | 0.167324 ± 0.00892112 (W 0.00535099) | 🔵 colmat 1.19× faster than `lapack-aocl` (marginal: spread 0.99 of the difference) | `!` between-start range over 5% |
+| `gemm/4096x64x64/b1` | 0.0948335 ± 0.00174746 (W 9.53767e-05) | 0.11713 ± 4.84228 (W 0.0021944) | · | `!` between-start range over 5%; `p` position effect over 5% |
+
+## gemm-wide, f64, c order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/64x64x4096/b1` | 0.412274 ± 0.00230633 (W 0.00184606) | 0.51598 ± 0.00492197 (W 0.0060404) | 🔵 colmat 1.25× faster than `lapack-aocl` |  |
+
+## gemm-wide, f64, c order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/64x64x4096/b1` | 0.106025 ± 0.000699246 (W 0.000498861) | 0.114333 ± 0.00121305 (W 0.00103006) | 🔵 colmat 1.08× faster than `lapack-aocl` |  |
+
+## gemm-wide, f64, c order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/64x64x4096/b1` | 0.052394 ± 0.000348493 (W 0.000116369) | 0.0598725 ± 0.000668323 (W 0.000191752) | 🔵 colmat 1.14× faster than `lapack-aocl` |  |
+
+## gemm-wide, f64, f order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/64x64x4096/b1` | 0.381827 ± 0.000874573 (W 0.00136235) | 0.38275 ± 0.00521048 (W 0.00149479) | · |  |
+
+## gemm-wide, f64, f order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/64x64x4096/b1` | 0.097596 ± 0.00164894 (W 0.000957146) | 0.098196 ± 0.000795025 (W 0.00146976) | · |  |
+
+## gemm-wide, f64, f order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/64x64x4096/b1` | 0.0496685 ± 0.000525453 (W 0.000218322) | 0.0505835 ± 0.000404915 (W 0.000288782) | · |  |
+
+## gemm-wide, c64, c order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/64x64x4096/b1` | 1.49898 ± 0.00437486 (W 0.00178171) | 1.72511 ± 0.00671856 (W 0.00347351) | 🔵 colmat 1.15× faster than `lapack-aocl` |  |
+
+## gemm-wide, c64, c order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/64x64x4096/b1` | 0.379644 ± 0.00224641 (W 0.00205977) | 0.435228 ± 0.00144142 (W 0.00244996) | 🔵 colmat 1.15× faster than `lapack-aocl` |  |
+
+## gemm-wide, c64, c order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/64x64x4096/b1` | 0.193111 ± 0.000649094 (W 0.0015764) | 0.221157 ± 0.000698595 (W 0.00188695) | 🔵 colmat 1.15× faster than `lapack-aocl` |  |
+
+## gemm-wide, c64, f order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/64x64x4096/b1` | 1.47327 ± 0.00365903 (W 0.00254332) | 1.51217 ± 0.00488467 (W 0.00347722) | · |  |
+
+## gemm-wide, c64, f order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/64x64x4096/b1` | 0.375402 ± 0.00159016 (W 0.00180885) | 0.372299 ± 0.00421645 (W 0.00202345) | · |  |
+
+## gemm-wide, c64, f order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/64x64x4096/b1` | 0.187608 ± 0.000337256 (W 0.00194134) | 0.190943 ± 0.00084712 (W 0.00175714) | · |  |
+
+## gemm-wide, f32, c order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/64x64x4096/b1` | 0.204095 ± 0.000736258 (W 0.00170587) | 0.223952 ± 0.00112198 (W 0.00157775) | 🔵 colmat 1.10× faster than `lapack-aocl` |  |
+
+## gemm-wide, f32, c order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/64x64x4096/b1` | 0.0517575 ± 0.00075582 (W 0.000104515) | 0.059058 ± 0.00114223 (W 0.000324564) | 🔵 colmat 1.14× faster than `lapack-aocl` | `!` between-start range over 5% |
+
+## gemm-wide, f32, c order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/64x64x4096/b1` | 0.028454 ± 0.000622053 (W 0.000124399) | 0.031559 ± 0.000494187 (W 0.000334418) | 🔵 colmat 1.11× faster than `lapack-aocl` | `!` between-start range over 5% |
+
+## gemm-wide, f32, f order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/64x64x4096/b1` | 0.183305 ± 0.00102696 (W 0.00147871) | 0.183511 ± 0.000194536 (W 0.00135423) | · |  |
+
+## gemm-wide, f32, f order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/64x64x4096/b1` | 0.046224 ± 0.000180792 (W 6.24761e-05) | 0.0474235 ± 9.7729e-05 (W 0.000153386) | · |  |
+
+## gemm-wide, f32, f order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/64x64x4096/b1` | 0.0242345 ± 0.000312146 (W 0.000141771) | 0.0252745 ± 0.000118159 (W 0.000128554) | · |  |
+
+## gemm-wide, c32, c order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/64x64x4096/b1` | 0.751944 ± 0.00344874 (W 0.00171755) | 0.883076 ± 0.00253361 (W 0.00338223) | 🔵 colmat 1.17× faster than `lapack-aocl` |  |
+
+## gemm-wide, c32, c order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/64x64x4096/b1` | 0.193452 ± 0.000796348 (W 0.00129028) | 0.224316 ± 0.000906996 (W 0.00133621) | 🔵 colmat 1.16× faster than `lapack-aocl` |  |
+
+## gemm-wide, c32, c order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/64x64x4096/b1` | 0.0948465 ± 0.000547376 (W 0.000362264) | 0.116812 ± 0.000494036 (W 0.0013778) | 🔵 colmat 1.23× faster than `lapack-aocl` |  |
+
+## gemm-wide, c32, f order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/64x64x4096/b1` | 0.762974 ± 0.00292312 (W 0.00177358) | 0.723361 ± 0.00500623 (W 0.001594) | 🔴 colmat 1.05× slower than `lapack-aocl` |  |
+
+## gemm-wide, c32, f order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/64x64x4096/b1` | 0.19215 ± 0.00183904 (W 0.00148546) | 0.182611 ± 0.0016003 (W 0.00140553) | 🔴 colmat 1.05× slower than `lapack-aocl` |  |
+
+## gemm-wide, c32, f order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `gemm/64x64x4096/b1` | 0.097112 ± 0.000214249 (W 0.000684177) | 0.093077 ± 0.000340023 (W 0.000315356) | · |  |
+
+## linalg-small, f64, c order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `cholesky/n32/b1` | 0.002575 ± 9.75705e-05 (W 2.77065e-05) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n32/b1 [api-inclusive]` | 0.0021895 ± 9.49324e-05 (W 3.4046e-05) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n64/b1` | 0.008484 ± 0.000202831 (W 3.1377e-05) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n64/b1 [api-inclusive]` | 0.0076745 ± 0.000193172 (W 4.86929e-05) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n96/b1` | 0.017289 ± 0.00034771 (W 7.10684e-05) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n96/b1 [api-inclusive]` | 0.016179 ± 0.000245003 (W 6.55739e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `eigh/n32/b1` | 0.066953 ± 0.000480723 (W 9.35996e-05) | - | - | `*` one row has no measurement here |
+| `eigh/n32/b1 [api-inclusive]` | 0.067658 ± 0.000211995 (W 0.00144901) | - | - | `*` one row has no measurement here |
+| `eigh/n64/b1` | 0.280693 ± 0.000749768 (W 0.00170043) | - | - | `*` one row has no measurement here |
+| `eigh/n64/b1 [api-inclusive]` | 0.281229 ± 0.00118026 (W 0.00121245) | - | - | `*` one row has no measurement here |
+| `eigh/n96/b1` | 0.679372 ± 0.00244591 (W 0.00142592) | - | - | `*` one row has no measurement here |
+| `eigh/n96/b1 [api-inclusive]` | 0.690389 ± 0.00237748 (W 0.0040486) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n32/b1` | 0.007845 ± 0.000148527 (W 7.02904e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n32/b1 [api-inclusive]` | 0.010139 ± 3.76599e-05 (W 6.62303e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n64/b1` | 0.0323635 ± 7.89067e-05 (W 0.000120761) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n64/b1 [api-inclusive]` | 0.039559 ± 0.000136528 (W 0.000127502) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n96/b1` | 0.0872465 ± 0.00161857 (W 0.000554287) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n96/b1 [api-inclusive]` | 0.107471 ± 0.000767761 (W 0.0012217) | - | - | `*` one row has no measurement here |
+| `householder_apply/n32/b1 [block(basis=32,target=32)]` | 0.0045495 ± 5.31052e-05 (W 5.30054e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n32/b1 [sequence(basis=32,target=32)]` | 0.004585 ± 4.72881e-05 (W 4.63107e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n64/b1 [block(basis=64,target=64)]` | 0.0193745 ± 0.000143072 (W 8.09649e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n64/b1 [sequence(basis=64,target=64)]` | 0.019409 ± 0.000179155 (W 6.30918e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n96/b1 [block(basis=96,target=96)]` | 0.0537485 ± 0.000173548 (W 0.00065067) | - | - | `*` one row has no measurement here |
+| `householder_apply/n96/b1 [sequence(basis=96,target=96)]` | 0.053768 ± 0.000143215 (W 0.000663031) | - | - | `*` one row has no measurement here |
+| `lu/n32/b1` | 0.00435 ± 3.93277e-05 (W 2.92502e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n32/b1 [api-inclusive]` | 0.00573 ± 4.3407e-05 (W 5.48014e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n64/b1` | 0.01473 ± 8.10689e-05 (W 8.442e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n64/b1 [api-inclusive]` | 0.019054 ± 7.98223e-05 (W 0.000189659) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n96/b1` | 0.0324185 ± 0.000106806 (W 8.96471e-05) | - | - | `*` one row has no measurement here |
+| `lu/n96/b1 [api-inclusive]` | 0.047783 ± 0.000895176 (W 0.00136194) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr/n32/b1` | 0.020194 ± 0.00018371 (W 0.000130453) | - | - | `*` one row has no measurement here |
+| `qr/n32/b1 [api-inclusive]` | 0.013734 ± 0.000109515 (W 7.10097e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `qr/n64/b1` | 0.0665835 ± 0.000844542 (W 0.000158869) | - | - | `*` one row has no measurement here |
+| `qr/n64/b1 [api-inclusive]` | 0.048694 ± 0.000151396 (W 0.000120932) | - | - | `*` one row has no measurement here |
+| `qr/n96/b1` | 0.133751 ± 0.000952133 (W 0.000558183) | - | - | `*` one row has no measurement here |
+| `qr/n96/b1 [api-inclusive]` | 0.13745 ± 0.000799356 (W 0.00156727) | - | - | `*` one row has no measurement here |
+| `qr_factor/n32/b1` | 0.0121 ± 3.94749e-05 (W 8.8669e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `qr_factor/n64/b1` | 0.0433385 ± 0.000128547 (W 0.00011229) | - | - | `*` one row has no measurement here |
+| `qr_factor/n96/b1` | 0.084203 ± 0.000291179 (W 0.000135907) | - | - | `*` one row has no measurement here |
+| `solve/n32/b1` | 0.004455 ± 3.18852e-05 (W 2.41425e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n32/b1 [api-inclusive]` | 0.00644 ± 3.81663e-05 (W 4.44684e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n64/b1` | 0.013629 ± 4.14922e-05 (W 6.31066e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n64/b1 [api-inclusive]` | 0.01949 ± 0.000135751 (W 5.86564e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n96/b1` | 0.028399 ± 0.000172616 (W 0.000100763) | - | - | `*` one row has no measurement here |
+| `solve/n96/b1 [api-inclusive]` | 0.0471835 ± 0.000154122 (W 0.00182194) | - | - | `*` one row has no measurement here |
+| `svd_thin/n32/b1` | 0.102458 ± 0.00181648 (W 0.000637466) | - | - | `*` one row has no measurement here |
+| `svd_thin/n32/b1 [api-inclusive]` | 0.103561 ± 0.000436832 (W 0.00118813) | - | - | `*` one row has no measurement here |
+| `svd_thin/n64/b1` | 0.425007 ± 0.00344005 (W 0.0018867) | - | - | `*` one row has no measurement here |
+| `svd_thin/n64/b1 [api-inclusive]` | 0.42559 ± 0.0033089 (W 0.001612) | - | - | `*` one row has no measurement here |
+| `svd_thin/n96/b1` | 0.973409 ± 0.00252174 (W 0.00125245) | - | - | `*` one row has no measurement here |
+| `svd_thin/n96/b1 [api-inclusive]` | 0.974822 ± 0.00210569 (W 0.00133832) | - | - | `*` one row has no measurement here |
+| `svd_values/n32/b1` | 0.0388335 ± 0.000268144 (W 8.51389e-05) | - | - | `*` one row has no measurement here |
+| `svd_values/n32/b1 [api-inclusive]` | 0.0390335 ± 0.000247391 (W 0.000140208) | - | - | `*` one row has no measurement here |
+| `svd_values/n64/b1` | 0.138286 ± 0.00083306 (W 0.000547915) | - | - | `*` one row has no measurement here |
+| `svd_values/n64/b1 [api-inclusive]` | 0.138411 ± 0.000259302 (W 0.000287107) | - | - | `*` one row has no measurement here |
+| `svd_values/n96/b1` | 0.315766 ± 0.000977072 (W 0.00148982) | - | - | `*` one row has no measurement here |
+| `svd_values/n96/b1 [api-inclusive]` | 0.317155 ± 0.000780776 (W 0.00193701) | - | - | `*` one row has no measurement here |
+| `triangular_solve/n32/b1` | 0.000485 ± 5.47723e-06 (W 2.42561e-05) | 0.00062 ± 0 (W 2.69128e-05) | 🔵 colmat 1.28× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n64/b1` | 0.00104 ± 1.60208e-05 (W 2.17942e-05) | 0.00118 ± 7.52773e-06 (W 2.58663e-05) | 🔵 colmat 1.13× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n96/b1` | 0.001795 ± 1.37659e-05 (W 3.15332e-05) | 0.001765 ± 5.47723e-06 (W 2.22553e-05) | · | dispatch-dominated (row under 20 us) |
+
+## linalg-small, f64, c order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `cholesky/n32/b1` | 0.00275 ± 3.3116e-05 (W 2.53383e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `cholesky/n32/b1 [api-inclusive]` | 0.002335 ± 1.47196e-05 (W 2.91565e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `cholesky/n64/b1` | 0.008785 ± 0.000190022 (W 4.06535e-05) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n64/b1 [api-inclusive]` | 0.0078995 ± 0.000214663 (W 4.72625e-05) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n96/b1` | 0.0195445 ± 0.000501239 (W 0.000157388) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n96/b1 [api-inclusive]` | 0.0183345 ± 0.000280974 (W 0.000119366) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `eigh/n32/b1` | 0.046079 ± 0.000367139 (W 0.000203875) | - | - | `*` one row has no measurement here |
+| `eigh/n32/b1 [api-inclusive]` | 0.046488 ± 0.000124869 (W 0.00015234) | - | - | `*` one row has no measurement here |
+| `eigh/n64/b1` | 0.144411 ± 0.000441558 (W 0.000314172) | - | - | `*` one row has no measurement here |
+| `eigh/n64/b1 [api-inclusive]` | 0.152169 ± 0.00171447 (W 0.00189304) | - | - | `*` one row has no measurement here |
+| `eigh/n96/b1` | 0.332466 ± 0.00100206 (W 0.00134446) | - | - | `*` one row has no measurement here |
+| `eigh/n96/b1 [api-inclusive]` | 0.334589 ± 0.00147172 (W 0.00144767) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n32/b1` | 0.00885 ± 8.61974e-05 (W 5.44355e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n32/b1 [api-inclusive]` | 0.0114845 ± 0.00012462 (W 6.59811e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n64/b1` | 0.0354985 ± 0.000504793 (W 8.39014e-05) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n64/b1 [api-inclusive]` | 0.041913 ± 0.000147188 (W 0.000169189) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n96/b1` | 0.0914675 ± 0.000712667 (W 0.000558863) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n96/b1 [api-inclusive]` | 0.109596 ± 0.00117618 (W 0.00118878) | - | - | `*` one row has no measurement here |
+| `householder_apply/n32/b1 [block(basis=32,target=32)]` | 0.004555 ± 0.00027269 (W 0.000202549) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `householder_apply/n32/b1 [sequence(basis=32,target=32)]` | 0.00465 ± 7.38693e-05 (W 0.000144489) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n64/b1 [block(basis=64,target=64)]` | 0.01353 ± 0.00015795 (W 0.000378998) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n64/b1 [sequence(basis=64,target=64)]` | 0.013449 ± 0.00017729 (W 0.000230855) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n96/b1 [block(basis=96,target=96)]` | 0.026559 ± 0.00041083 (W 0.000336509) | - | - | `*` one row has no measurement here |
+| `householder_apply/n96/b1 [sequence(basis=96,target=96)]` | 0.026374 ± 0.000279395 (W 0.000377403) | - | - | `*` one row has no measurement here |
+| `lu/n32/b1` | 0.004445 ± 3.04658e-05 (W 4.09687e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n32/b1 [api-inclusive]` | 0.005785 ± 4.66065e-05 (W 5.41832e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n64/b1` | 0.018554 ± 0.00038638 (W 0.000449166) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `lu/n64/b1 [api-inclusive]` | 0.0198595 ± 0.000172407 (W 0.000140174) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n96/b1` | 0.041543 ± 0.000627473 (W 0.000640274) | - | - | `*` one row has no measurement here |
+| `lu/n96/b1 [api-inclusive]` | 0.0460485 ± 0.000218895 (W 0.000460541) | - | - | `*` one row has no measurement here |
+| `qr/n32/b1` | 0.021104 ± 0.00020084 (W 0.000136075) | - | - | `*` one row has no measurement here |
+| `qr/n32/b1 [api-inclusive]` | 0.0136745 ± 0.000149007 (W 5.1711e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `qr/n64/b1` | 0.050483 ± 0.000442919 (W 0.00063647) | - | - | `*` one row has no measurement here |
+| `qr/n64/b1 [api-inclusive]` | 0.046523 ± 0.000211207 (W 0.000181288) | - | - | `*` one row has no measurement here |
+| `qr/n96/b1` | 0.108002 ± 0.000524538 (W 0.000699381) | - | - | `*` one row has no measurement here |
+| `qr/n96/b1 [api-inclusive]` | 0.122913 ± 0.000917953 (W 0.00118731) | - | - | `*` one row has no measurement here |
+| `qr_factor/n32/b1` | 0.0129395 ± 0.000110786 (W 0.000134502) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `qr_factor/n64/b1` | 0.025414 ± 0.000207942 (W 0.000202235) | - | - | `*` one row has no measurement here |
+| `qr_factor/n96/b1` | 0.061963 ± 0.00017801 (W 0.000227508) | - | - | `*` one row has no measurement here |
+| `solve/n32/b1` | 0.00502 ± 3.08912e-05 (W 3.51055e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n32/b1 [api-inclusive]` | 0.00675 ± 4.57894e-05 (W 5.15179e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n64/b1` | 0.018114 ± 0.00034022 (W 0.000425236) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `solve/n64/b1 [api-inclusive]` | 0.021779 ± 0.000183609 (W 9.99412e-05) | - | - | `*` one row has no measurement here |
+| `solve/n96/b1` | 0.0336035 ± 0.000241846 (W 0.000464159) | - | - | `*` one row has no measurement here |
+| `solve/n96/b1 [api-inclusive]` | 0.0496685 ± 0.000780466 (W 0.00161333) | - | - | `*` one row has no measurement here |
+| `svd_thin/n32/b1` | 0.103051 ± 0.000473304 (W 0.000129425) | - | - | `*` one row has no measurement here |
+| `svd_thin/n32/b1 [api-inclusive]` | 0.103627 ± 0.000371368 (W 0.00025945) | - | - | `*` one row has no measurement here |
+| `svd_thin/n64/b1` | 0.358496 ± 0.00108289 (W 0.00150017) | - | - | `*` one row has no measurement here |
+| `svd_thin/n64/b1 [api-inclusive]` | 0.360076 ± 0.00350995 (W 0.00177602) | - | - | `*` one row has no measurement here |
+| `svd_thin/n96/b1` | 0.735701 ± 0.00205601 (W 0.0015453) | - | - | `*` one row has no measurement here |
+| `svd_thin/n96/b1 [api-inclusive]` | 0.738527 ± 0.00228879 (W 0.0015546) | - | - | `*` one row has no measurement here |
+| `svd_values/n32/b1` | 0.0396435 ± 0.000380818 (W 7.68437e-05) | - | - | `*` one row has no measurement here |
+| `svd_values/n32/b1 [api-inclusive]` | 0.039814 ± 0.000150944 (W 0.000148021) | - | - | `*` one row has no measurement here |
+| `svd_values/n64/b1` | 0.142921 ± 0.000572816 (W 0.000231335) | - | - | `*` one row has no measurement here |
+| `svd_values/n64/b1 [api-inclusive]` | 0.14321 ± 0.000815436 (W 0.000304002) | - | - | `*` one row has no measurement here |
+| `svd_values/n96/b1` | 0.34303 ± 0.00122821 (W 0.00079012) | - | - | `*` one row has no measurement here |
+| `svd_values/n96/b1 [api-inclusive]` | 0.34252 ± 0.000897994 (W 0.00114068) | - | - | `*` one row has no measurement here |
+| `triangular_solve/n32/b1` | 0.00063 ± 4.08248e-06 (W 1.63605e-05) | 0.00062 ± 5.16398e-06 (W 2.16795e-05) | · | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n64/b1` | 0.00142 ± 4.50185e-05 (W 2.33391e-05) | 0.001185 ± 5.47723e-06 (W 2.15486e-05) | 🔴 colmat 1.20× slower than `lapack-aocl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `triangular_solve/n96/b1` | 0.00243 ± 2.60768e-05 (W 3.06281e-05) | 0.00178 ± 0 (W 2.18377e-05) | 🔴 colmat 1.37× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+
+## linalg-small, f64, c order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `cholesky/n32/b1` | 0.00276 ± 9.68848e-05 (W 2.36603e-05) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n32/b1 [api-inclusive]` | 0.002365 ± 0.000109316 (W 2.7923e-05) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n64/b1` | 0.0086645 ± 0.000292415 (W 5.1023e-05) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n64/b1 [api-inclusive]` | 0.0077145 ± 0.000237325 (W 6.52523e-05) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n96/b1` | 0.018889 ± 0.000427489 (W 7.00069e-05) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n96/b1 [api-inclusive]` | 0.01847 ± 0.000320066 (W 8.81588e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `eigh/n32/b1` | 0.0429775 ± 0.000106977 (W 0.000208334) | - | - | `*` one row has no measurement here |
+| `eigh/n32/b1 [api-inclusive]` | 0.043264 ± 0.000279938 (W 0.000195863) | - | - | `*` one row has no measurement here |
+| `eigh/n64/b1` | 0.122381 ± 0.00038069 (W 0.00081413) | - | - | `*` one row has no measurement here |
+| `eigh/n64/b1 [api-inclusive]` | 0.131402 ± 0.000884693 (W 0.00169039) | - | - | `*` one row has no measurement here |
+| `eigh/n96/b1` | 0.264065 ± 0.000869879 (W 0.00157049) | - | - | `*` one row has no measurement here |
+| `eigh/n96/b1 [api-inclusive]` | 0.264631 ± 0.00157093 (W 0.00167583) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n32/b1` | 0.0089045 ± 0.000133949 (W 7.13776e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n32/b1 [api-inclusive]` | 0.01137 ± 8.65273e-05 (W 6.93849e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n64/b1` | 0.0346185 ± 0.000173504 (W 7.79475e-05) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n64/b1 [api-inclusive]` | 0.0419135 ± 0.000114818 (W 0.000139092) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n96/b1` | 0.091824 ± 0.000484031 (W 0.000790522) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n96/b1 [api-inclusive]` | 0.114019 ± 0.00055326 (W 0.00141708) | - | - | `*` one row has no measurement here |
+| `householder_apply/n32/b1 [block(basis=32,target=32)]` | 0.00416 ± 0.00010572 (W 0.000150463) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `householder_apply/n32/b1 [sequence(basis=32,target=32)]` | 0.004085 ± 0.000106097 (W 0.000157485) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `householder_apply/n64/b1 [block(basis=64,target=64)]` | 0.011169 ± 0.000251576 (W 0.000247188) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `householder_apply/n64/b1 [sequence(basis=64,target=64)]` | 0.0112345 ± 0.000258194 (W 0.000284858) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `householder_apply/n96/b1 [block(basis=96,target=96)]` | 0.0210445 ± 0.000208942 (W 0.000463557) | - | - | `*` one row has no measurement here |
+| `householder_apply/n96/b1 [sequence(basis=96,target=96)]` | 0.0199795 ± 0.000218835 (W 0.000285563) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n32/b1` | 0.00443 ± 3.75002e-05 (W 3.94523e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n32/b1 [api-inclusive]` | 0.0058095 ± 5.18475e-05 (W 5.0149e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n64/b1` | 0.0200385 ± 0.000611759 (W 0.000531763) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `lu/n64/b1 [api-inclusive]` | 0.0199995 ± 0.00012253 (W 0.000138375) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n96/b1` | 0.0424475 ± 0.000474341 (W 0.000918083) | - | - | `*` one row has no measurement here |
+| `lu/n96/b1 [api-inclusive]` | 0.0474975 ± 0.000811731 (W 0.000952677) | - | - | `*` one row has no measurement here |
+| `qr/n32/b1` | 0.020994 ± 9.57935e-05 (W 9.50588e-05) | - | - | `*` one row has no measurement here |
+| `qr/n32/b1 [api-inclusive]` | 0.0137195 ± 7.45493e-05 (W 6.38026e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `qr/n64/b1` | 0.052103 ± 0.000218742 (W 0.000461318) | - | - | `*` one row has no measurement here |
+| `qr/n64/b1 [api-inclusive]` | 0.046688 ± 0.000150348 (W 0.00019139) | - | - | `*` one row has no measurement here |
+| `qr/n96/b1` | 0.108412 ± 0.000577374 (W 0.000848113) | - | - | `*` one row has no measurement here |
+| `qr/n96/b1 [api-inclusive]` | 0.123079 ± 0.000434604 (W 0.00116776) | - | - | `*` one row has no measurement here |
+| `qr_factor/n32/b1` | 0.0129545 ± 0.000122802 (W 8.14677e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `qr_factor/n64/b1` | 0.0259685 ± 0.000212236 (W 0.000145871) | - | - | `*` one row has no measurement here |
+| `qr_factor/n96/b1` | 0.058662 ± 0.000214981 (W 0.00012125) | - | - | `*` one row has no measurement here |
+| `solve/n32/b1` | 0.0049195 ± 4.67778e-05 (W 3.55688e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n32/b1 [api-inclusive]` | 0.0067445 ± 1.83348e-05 (W 2.83051e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n64/b1` | 0.0174345 ± 0.000348297 (W 0.000370896) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `solve/n64/b1 [api-inclusive]` | 0.021744 ± 0.000138131 (W 0.000166121) | - | - | `*` one row has no measurement here |
+| `solve/n96/b1` | 0.0342335 ± 0.000429249 (W 0.000396882) | - | - | `*` one row has no measurement here |
+| `solve/n96/b1 [api-inclusive]` | 0.0511775 ± 0.00146425 (W 0.00175139) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_thin/n32/b1` | 0.10313 ± 0.000183603 (W 0.000140895) | - | - | `*` one row has no measurement here |
+| `svd_thin/n32/b1 [api-inclusive]` | 0.103529 ± 0.00081777 (W 0.000989566) | - | - | `*` one row has no measurement here |
+| `svd_thin/n64/b1` | 0.35802 ± 0.00143711 (W 0.00175549) | - | - | `*` one row has no measurement here |
+| `svd_thin/n64/b1 [api-inclusive]` | 0.359535 ± 0.00264916 (W 0.00157231) | - | - | `*` one row has no measurement here |
+| `svd_thin/n96/b1` | 0.743092 ± 0.00362477 (W 0.00272236) | - | - | `*` one row has no measurement here |
+| `svd_thin/n96/b1 [api-inclusive]` | 0.748954 ± 0.00313857 (W 0.00249104) | - | - | `*` one row has no measurement here |
+| `svd_values/n32/b1` | 0.039793 ± 0.00021116 (W 0.000105877) | - | - | `*` one row has no measurement here |
+| `svd_values/n32/b1 [api-inclusive]` | 0.039773 ± 0.000358843 (W 9.53411e-05) | - | - | `*` one row has no measurement here |
+| `svd_values/n64/b1` | 0.147336 ± 0.000785731 (W 0.00030369) | - | - | `*` one row has no measurement here |
+| `svd_values/n64/b1 [api-inclusive]` | 0.143315 ± 0.000580703 (W 0.00105355) | - | - | `*` one row has no measurement here |
+| `svd_values/n96/b1` | 0.35376 ± 0.00120869 (W 0.00179212) | - | - | `*` one row has no measurement here |
+| `svd_values/n96/b1 [api-inclusive]` | 0.358781 ± 0.000659561 (W 0.00143841) | - | - | `*` one row has no measurement here |
+| `triangular_solve/n32/b1` | 0.00064 ± 1.41421e-05 (W 2.18211e-05) | 0.00062 ± 0 (W 2.31177e-05) | · | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `triangular_solve/n64/b1` | 0.001385 ± 3.55903e-05 (W 1.39354e-05) | 0.00117 ± 5.16398e-06 (W 2.78789e-05) | 🔴 colmat 1.18× slower than `lapack-aocl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `triangular_solve/n96/b1` | 0.002275 ± 5.3193e-05 (W 2.31632e-05) | 0.00176 ± 5.16398e-06 (W 2.13354e-05) | 🔴 colmat 1.29× slower than `lapack-aocl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+
+## linalg-small, f64, f order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `cholesky/n32/b1` | 0.00188 ± 8.04156e-05 (W 1.18883e-05) | 0.001775 ± 6.47045e-05 (W 4.73489e-05) | · | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n32/b1 [api-inclusive]` | 0.00235 ± 7.84007e-05 (W 2.01505e-05) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n64/b1` | 0.006025 ± 0.000187308 (W 1.7556e-05) | 0.009435 ± 0.000864515 (W 0.000484572) | 🔵 colmat 1.57× faster than `lapack-aocl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n64/b1 [api-inclusive]` | 0.0073745 ± 0.000193464 (W 5.08547e-05) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n96/b1` | 0.0136495 ± 0.00031421 (W 3.61992e-05) | 0.016609 ± 0.000109287 (W 8.04773e-05) | 🔵 colmat 1.22× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `cholesky/n96/b1 [api-inclusive]` | 0.016445 ± 0.000331427 (W 7.02599e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `eigh/n32/b1` | 0.067193 ± 0.000130066 (W 0.000140482) | 0.0712575 ± 0.000203908 (W 0.000476744) | 🔵 colmat 1.06× faster than `lapack-aocl` |  |
+| `eigh/n32/b1 [api-inclusive]` | 0.0676435 ± 0.0001911 (W 0.000625694) | - | - | `*` one row has no measurement here |
+| `eigh/n64/b1` | 0.280207 ± 0.00024277 (W 0.00148554) | 0.47573 ± 0.00203225 (W 0.00196827) | 🔵 colmat 1.70× faster than `lapack-aocl` |  |
+| `eigh/n64/b1 [api-inclusive]` | 0.280607 ± 0.00116459 (W 0.00127541) | - | - | `*` one row has no measurement here |
+| `eigh/n96/b1` | 0.679635 ± 0.00122079 (W 0.00187896) | 0.571903 ± 0.00135664 (W 0.00180285) | 🔴 colmat 1.19× slower than `lapack-aocl` |  |
+| `eigh/n96/b1 [api-inclusive]` | 0.690653 ± 0.00181885 (W 0.00329584) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n32/b1` | 0.008025 ± 3.82971e-05 (W 6.0827e-05) | 0.0227695 ± 0.00013725 (W 4.05442e-05) | 🔵 colmat 2.84× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n32/b1 [api-inclusive]` | 0.00886 ± 5.55713e-05 (W 4.41086e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n64/b1` | 0.032844 ± 0.000123581 (W 6.64332e-05) | 0.153396 ± 0.000263646 (W 0.00103251) | 🔵 colmat 4.67× faster than `lapack-aocl` |  |
+| `full_piv_lu/n64/b1 [api-inclusive]` | 0.0348285 ± 5.45543e-05 (W 9.47783e-05) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n96/b1` | 0.0887935 ± 0.000914735 (W 0.000814614) | 0.49731 ± 0.00049338 (W 0.00159344) | 🔵 colmat 5.60× faster than `lapack-aocl` |  |
+| `full_piv_lu/n96/b1 [api-inclusive]` | 0.097198 ± 0.00073742 (W 0.00160425) | - | - | `*` one row has no measurement here |
+| `householder_apply/n32/b1 [block(basis=32,target=32)]` | 0.00457 ± 4.1491e-05 (W 3.3309e-05) | 0.0141545 ± 5.91631e-05 (W 6.61316e-05) | 🔵 colmat 3.10× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `householder_apply/n32/b1 [sequence(basis=32,target=32)]` | 0.005515 ± 2.83578e-05 (W 1.93416e-05) | 0.006555 ± 7.74866e-05 (W 2.91914e-05) | 🔵 colmat 1.19× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `householder_apply/n64/b1 [block(basis=64,target=64)]` | 0.019854 ± 0.000161668 (W 9.39026e-05) | 0.030764 ± 8.57292e-05 (W 0.0001076) | 🔵 colmat 1.55× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `householder_apply/n64/b1 [sequence(basis=64,target=64)]` | 0.0196495 ± 0.000151615 (W 5.81493e-05) | 0.0539685 ± 0.000227694 (W 0.000107783) | 🔵 colmat 2.75× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `householder_apply/n96/b1 [block(basis=96,target=96)]` | 0.0555935 ± 0.000264422 (W 0.000641008) | 0.0582835 ± 0.000161739 (W 0.000153618) | · |  |
+| `householder_apply/n96/b1 [sequence(basis=96,target=96)]` | 0.054678 ± 0.000258948 (W 0.000197381) | 0.0950925 ± 0.00011798 (W 0.00138522) | 🔵 colmat 1.74× faster than `lapack-aocl` |  |
+| `lu/n32/b1` | 0.0034 ± 2.2286e-05 (W 4.02444e-05) | 0.0028345 ± 3.18774e-05 (W 5.56718e-05) | 🔴 colmat 1.20× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `lu/n32/b1 [api-inclusive]` | 0.004449 ± 4.49251e-05 (W 7.12285e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n64/b1` | 0.012749 ± 8.18633e-05 (W 0.000138937) | 0.018619 ± 0.000276695 (W 6.29718e-05) | 🔵 colmat 1.46× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `lu/n64/b1 [api-inclusive]` | 0.0148295 ± 0.000153228 (W 0.000143815) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n96/b1` | 0.028254 ± 0.000148666 (W 0.000240963) | 0.047559 ± 0.000186741 (W 0.000214057) | 🔵 colmat 1.68× faster than `lapack-aocl` |  |
+| `lu/n96/b1 [api-inclusive]` | 0.0376535 ± 0.000629127 (W 0.00158457) | - | - | `*` one row has no measurement here |
+| `qr/n32/b1` | 0.010959 ± 3.62422e-05 (W 3.8708e-05) | 0.011265 ± 0.000107525 (W 5.6576e-05) | · | dispatch-dominated (row under 20 us) |
+| `qr/n32/b1 [api-inclusive]` | 0.01248 ± 6.49731e-05 (W 6.19412e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `qr/n64/b1` | 0.040849 ± 0.000136378 (W 9.35992e-05) | 0.0790625 ± 0.00040823 (W 0.000174489) | 🔵 colmat 1.94× faster than `lapack-aocl` |  |
+| `qr/n64/b1 [api-inclusive]` | 0.043579 ± 0.000101877 (W 0.000130179) | - | - | `*` one row has no measurement here |
+| `qr/n96/b1` | 0.102792 ± 0.00032443 (W 0.00129248) | 0.170619 ± 0.000689656 (W 0.00143883) | 🔵 colmat 1.66× faster than `lapack-aocl` |  |
+| `qr/n96/b1 [api-inclusive]` | 0.126439 ± 0.000614552 (W 0.00231014) | - | - | `*` one row has no measurement here |
+| `qr_factor/n32/b1` | 0.005405 ± 5.91326e-05 (W 4.19009e-05) | 0.004645 ± 4.49463e-05 (W 3.0033e-05) | 🔴 colmat 1.16× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `qr_factor/n64/b1` | 0.019964 ± 0.000468345 (W 4.55236e-05) | 0.0251695 ± 0.000359689 (W 8.6749e-05) | 🔵 colmat 1.26× faster than `lapack-aocl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `qr_factor/n96/b1` | 0.0503535 ± 0.000487231 (W 0.000518287) | 0.075472 ± 0.000703695 (W 0.000600179) | 🔵 colmat 1.50× faster than `lapack-aocl` |  |
+| `solve/n32/b1` | 0.00387 ± 4.02078e-05 (W 2.61432e-05) | 0.0031145 ± 3.97513e-05 (W 3.57788e-05) | 🔴 colmat 1.24× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `solve/n32/b1 [api-inclusive]` | 0.0050095 ± 1.98057e-05 (W 3.54772e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n64/b1` | 0.012709 ± 6.61738e-05 (W 5.39964e-05) | 0.016115 ± 0.000130336 (W 5.09812e-05) | 🔵 colmat 1.27× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `solve/n64/b1 [api-inclusive]` | 0.0150395 ± 8.20985e-05 (W 6.17548e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n96/b1` | 0.0278085 ± 0.000169805 (W 9.57328e-05) | 0.042039 ± 0.000161272 (W 0.000107139) | 🔵 colmat 1.51× faster than `lapack-aocl` |  |
+| `solve/n96/b1 [api-inclusive]` | 0.0383735 ± 0.000405478 (W 0.00164014) | - | - | `*` one row has no measurement here |
+| `svd_thin/n32/b1` | 0.103682 ± 0.000457733 (W 0.000570005) | 0.111652 ± 0.000197426 (W 0.000560257) | 🔵 colmat 1.08× faster than `lapack-aocl` |  |
+| `svd_thin/n32/b1 [api-inclusive]` | 0.104831 ± 0.00159136 (W 0.00124827) | - | - | `*` one row has no measurement here |
+| `svd_thin/n64/b1` | 0.434761 ± 0.00330829 (W 0.00128554) | 0.407356 ± 0.00147145 (W 0.00186246) | 🔴 colmat 1.07× slower than `lapack-aocl` |  |
+| `svd_thin/n64/b1 [api-inclusive]` | 0.433883 ± 0.00375463 (W 0.00198395) | - | - | `*` one row has no measurement here |
+| `svd_thin/n96/b1` | 0.984668 ± 0.00143531 (W 0.00152225) | 0.867006 ± 0.00240127 (W 0.00197151) | 🔴 colmat 1.14× slower than `lapack-aocl` |  |
+| `svd_thin/n96/b1 [api-inclusive]` | 0.988776 ± 0.00195695 (W 0.0010098) | - | - | `*` one row has no measurement here |
+| `svd_values/n32/b1` | 0.0386685 ± 0.000207713 (W 0.000116936) | 0.078777 ± 0.000263524 (W 0.000356577) | 🔵 colmat 2.04× faster than `lapack-aocl` |  |
+| `svd_values/n32/b1 [api-inclusive]` | 0.0389435 ± 0.000260528 (W 0.000119068) | - | - | `*` one row has no measurement here |
+| `svd_values/n64/b1` | 0.140301 ± 0.000447074 (W 0.00122588) | 0.143165 ± 0.000412429 (W 0.00107484) | · |  |
+| `svd_values/n64/b1 [api-inclusive]` | 0.140231 ± 0.000261155 (W 0.000643136) | - | - | `*` one row has no measurement here |
+| `svd_values/n96/b1` | 0.32257 ± 0.00105743 (W 0.0012334) | 0.345142 ± 0.0029021 (W 0.00158124) | 🔵 colmat 1.07× faster than `lapack-aocl` |  |
+| `svd_values/n96/b1 [api-inclusive]` | 0.322798 ± 0.000801999 (W 0.00189096) | - | - | `*` one row has no measurement here |
+| `triangular_solve/n32/b1` | 0.00054 ± 8.16497e-06 (W 3.02434e-05) | 0.00051 ± 5.16398e-06 (W 1.89443e-05) | `?` not evidence vs `lapack-aocl`: a row's `W` is as large as the difference (rerun) | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n64/b1` | 0.00117 ± 8.94427e-06 (W 2.46849e-05) | 0.00094 ± 1.50555e-05 (W 2.21348e-05) | 🔴 colmat 1.24× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n96/b1` | 0.00196 ± 5.16398e-06 (W 3.71942e-05) | 0.001415 ± 1.60208e-05 (W 1.78885e-05) | 🔴 colmat 1.39× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+
+## linalg-small, f64, f order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `cholesky/n32/b1` | 0.001845 ± 0.000204296 (W 1.84628e-05) | 0.00176 ± 0.0001216 (W 3.53528e-05) | · | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n32/b1 [api-inclusive]` | 0.002225 ± 0.000108336 (W 3.14285e-05) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n64/b1` | 0.00665 ± 0.000314134 (W 3.43165e-05) | 0.008485 ± 0.00078754 (W 0.000107811) | 🔵 colmat 1.28× faster than `lapack-aocl` (marginal: spread 0.60 of the difference) | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n64/b1 [api-inclusive]` | 0.0079045 ± 0.000188705 (W 5.21845e-05) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n96/b1` | 0.0153745 ± 0.000319416 (W 6.51006e-05) | 0.017304 ± 0.000500578 (W 8.46295e-05) | 🔵 colmat 1.13× faster than `lapack-aocl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n96/b1 [api-inclusive]` | 0.018325 ± 0.000217529 (W 0.000100302) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `eigh/n32/b1` | 0.045948 ± 0.000100117 (W 0.000147739) | 0.0715975 ± 0.00019708 (W 0.000104956) | 🔵 colmat 1.56× faster than `lapack-aocl` |  |
+| `eigh/n32/b1 [api-inclusive]` | 0.046373 ± 0.000115037 (W 0.000186558) | - | - | `*` one row has no measurement here |
+| `eigh/n64/b1` | 0.144511 ± 0.000661631 (W 0.000442434) | 0.644463 ± 0.0201162 (W 0.00786315) | 🔵 colmat 4.46× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `eigh/n64/b1 [api-inclusive]` | 0.152157 ± 0.00167136 (W 0.00151261) | - | - | `*` one row has no measurement here |
+| `eigh/n96/b1` | 0.332335 ± 0.00167315 (W 0.0015486) | 0.604326 ± 0.0343294 (W 0.00307521) | 🔵 colmat 1.82× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `eigh/n96/b1 [api-inclusive]` | 0.333942 ± 0.00076716 (W 0.00159314) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n32/b1` | 0.0090995 ± 0.000165567 (W 4.55064e-05) | 0.022674 ± 0.000102076 (W 5.10201e-05) | 🔵 colmat 2.49× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n32/b1 [api-inclusive]` | 0.010055 ± 6.98296e-05 (W 8.25623e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n64/b1` | 0.0360245 ± 0.000246333 (W 9.95719e-05) | 0.153089 ± 0.000419599 (W 0.00143221) | 🔵 colmat 4.25× faster than `lapack-aocl` |  |
+| `full_piv_lu/n64/b1 [api-inclusive]` | 0.037349 ± 0.000147961 (W 0.000111971) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n96/b1` | 0.0929075 ± 0.00544104 (W 0.000797745) | 0.498728 ± 0.00296657 (W 0.00173708) | 🔵 colmat 5.37× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `full_piv_lu/n96/b1 [api-inclusive]` | 0.100592 ± 0.000295358 (W 0.00157587) | - | - | `*` one row has no measurement here |
+| `householder_apply/n32/b1 [block(basis=32,target=32)]` | 0.004405 ± 7.69166e-05 (W 0.000158162) | 0.0141645 ± 5.69119e-05 (W 6.42243e-05) | 🔵 colmat 3.22× faster than `lapack-aocl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `householder_apply/n32/b1 [sequence(basis=32,target=32)]` | 0.00427 ± 8.5557e-05 (W 0.000116039) | 0.00656 ± 8.89944e-05 (W 3.60435e-05) | 🔵 colmat 1.54× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `householder_apply/n64/b1 [block(basis=64,target=64)]` | 0.01241 ± 0.000123735 (W 0.000141657) | 0.038959 ± 0.00130656 (W 0.00082285) | 🔵 colmat 3.14× faster than `lapack-aocl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `householder_apply/n64/b1 [sequence(basis=64,target=64)]` | 0.012504 ± 5.24176e-05 (W 0.000173289) | 0.067628 ± 0.00111594 (W 0.00151257) | 🔵 colmat 5.41× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `householder_apply/n96/b1 [block(basis=96,target=96)]` | 0.024904 ± 0.000198671 (W 0.000248048) | 0.0493535 ± 0.000766065 (W 0.00190405) | 🔵 colmat 1.98× faster than `lapack-aocl` |  |
+| `householder_apply/n96/b1 [sequence(basis=96,target=96)]` | 0.0248345 ± 0.000243241 (W 0.000261618) | 0.120276 ± 0.00197106 (W 0.00351153) | 🔵 colmat 4.84× faster than `lapack-aocl` |  |
+| `lu/n32/b1` | 0.00348 ± 2.40312e-05 (W 4.02654e-05) | 0.0028795 ± 5.68873e-05 (W 4.49081e-05) | 🔴 colmat 1.21× slower than `lapack-aocl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `lu/n32/b1 [api-inclusive]` | 0.0045545 ± 3.54255e-05 (W 5.93028e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n64/b1` | 0.0136245 ± 0.000194519 (W 0.000147425) | 0.0179495 ± 0.000181874 (W 4.82373e-05) | 🔵 colmat 1.32× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `lu/n64/b1 [api-inclusive]` | 0.0157645 ± 0.000176092 (W 0.000136649) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n96/b1` | 0.025759 ± 0.000206445 (W 0.000243238) | 0.0456035 ± 0.00131606 (W 0.000542144) | 🔵 colmat 1.77× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `lu/n96/b1 [api-inclusive]` | 0.0362285 ± 0.000416649 (W 0.00151168) | - | - | `*` one row has no measurement here |
+| `qr/n32/b1` | 0.010975 ± 5.77018e-05 (W 4.73568e-05) | 0.0113295 ± 0.000131738 (W 5.42217e-05) | · | dispatch-dominated (row under 20 us) |
+| `qr/n32/b1 [api-inclusive]` | 0.012414 ± 5.54644e-05 (W 5.69547e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `qr/n64/b1` | 0.038244 ± 0.00012706 (W 0.000140483) | 0.092907 ± 0.00243447 (W 0.00176028) | 🔵 colmat 2.43× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `qr/n64/b1 [api-inclusive]` | 0.041874 ± 0.00016471 (W 0.000179659) | - | - | `*` one row has no measurement here |
+| `qr/n96/b1` | 0.085057 ± 0.000377233 (W 0.000203625) | 0.199497 ± 6.47737 (W 0.0035964) | · | `!` between-start range over 5%; `p` position effect over 5% |
+| `qr/n96/b1 [api-inclusive]` | 0.112777 ± 0.000642933 (W 0.00103446) | - | - | `*` one row has no measurement here |
+| `qr_factor/n32/b1` | 0.00539 ± 3.42953e-05 (W 4.08768e-05) | 0.00474 ± 8.1904e-05 (W 2.82927e-05) | 🔴 colmat 1.14× slower than `lapack-aocl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `qr_factor/n64/b1` | 0.019835 ± 7.64219e-05 (W 7.17542e-05) | 0.025269 ± 0.000437717 (W 8.93876e-05) | 🔵 colmat 1.27× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `qr_factor/n96/b1` | 0.0500935 ± 0.000184891 (W 8.16191e-05) | 0.0751975 ± 0.00127529 (W 0.000137212) | 🔵 colmat 1.50× faster than `lapack-aocl` |  |
+| `solve/n32/b1` | 0.0043095 ± 2.73788e-05 (W 4.52897e-05) | 0.00317 ± 2.66114e-05 (W 5.82262e-05) | 🔴 colmat 1.36× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `solve/n32/b1 [api-inclusive]` | 0.0053595 ± 3.7881e-05 (W 3.4848e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n64/b1` | 0.0149395 ± 7.8279e-05 (W 0.000100903) | 0.0171145 ± 0.000489542 (W 5.59495e-05) | 🔵 colmat 1.15× faster than `lapack-aocl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `solve/n64/b1 [api-inclusive]` | 0.0169295 ± 9.24785e-05 (W 0.000104382) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n96/b1` | 0.028299 ± 0.000147513 (W 0.000169683) | 0.0423385 ± 0.000669704 (W 0.000130908) | 🔵 colmat 1.50× faster than `lapack-aocl` |  |
+| `solve/n96/b1 [api-inclusive]` | 0.039494 ± 0.000156826 (W 0.00153395) | - | - | `*` one row has no measurement here |
+| `svd_thin/n32/b1` | 0.104882 ± 0.000249754 (W 0.000139303) | 0.111287 ± 0.000248622 (W 0.00147011) | 🔵 colmat 1.06× faster than `lapack-aocl` |  |
+| `svd_thin/n32/b1 [api-inclusive]` | 0.104986 ± 0.000405922 (W 0.000160487) | - | - | `*` one row has no measurement here |
+| `svd_thin/n64/b1` | 0.360633 ± 0.00915586 (W 0.00147112) | 0.417519 ± 3.95902 (W 0.00325157) | · | `!` between-start range over 5%; `p` position effect over 5% |
+| `svd_thin/n64/b1 [api-inclusive]` | 0.361164 ± 0.000736778 (W 0.0013239) | - | - | `*` one row has no measurement here |
+| `svd_thin/n96/b1` | 0.74366 ± 0.00239895 (W 0.0015682) | 0.854564 ± 7.60656 (W 0.00330823) | · | `!` between-start range over 5%; `p` position effect over 5% |
+| `svd_thin/n96/b1 [api-inclusive]` | 0.745869 ± 0.003154 (W 0.00232166) | - | - | `*` one row has no measurement here |
+| `svd_values/n32/b1` | 0.039389 ± 0.000137841 (W 8.12213e-05) | 0.078777 ± 0.000448933 (W 6.51141e-05) | 🔵 colmat 2.00× faster than `lapack-aocl` |  |
+| `svd_values/n32/b1 [api-inclusive]` | 0.039878 ± 0.000420346 (W 0.00011451) | - | - | `*` one row has no measurement here |
+| `svd_values/n64/b1` | 0.145315 ± 0.000337256 (W 0.000297039) | 0.142969 ± 0.00111 (W 0.00121124) | · |  |
+| `svd_values/n64/b1 [api-inclusive]` | 0.145172 ± 0.000520924 (W 0.000564419) | - | - | `*` one row has no measurement here |
+| `svd_values/n96/b1` | 0.35045 ± 0.00190553 (W 0.00127738) | 0.344841 ± 0.00279076 (W 0.00169174) | · |  |
+| `svd_values/n96/b1 [api-inclusive]` | 0.350527 ± 0.00247442 (W 0.00124029) | - | - | `*` one row has no measurement here |
+| `triangular_solve/n32/b1` | 0.00063 ± 7.52773e-06 (W 1.97224e-05) | 0.000505 ± 1.54919e-05 (W 1.90285e-05) | 🔴 colmat 1.25× slower than `lapack-aocl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `triangular_solve/n64/b1` | 0.001515 ± 8.16497e-06 (W 1.81597e-05) | 0.00094 ± 4.08248e-06 (W 1.85301e-05) | 🔴 colmat 1.61× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n96/b1` | 0.00264 ± 2.50333e-05 (W 2.69128e-05) | 0.00144 ± 7.52773e-06 (W 1.81134e-05) | 🔴 colmat 1.83× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+
+## linalg-small, f64, f order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `cholesky/n32/b1` | 0.001645 ± 0.000201561 (W 1.70269e-05) | 0.00178 ± 0.000151129 (W 4.66369e-05) | · | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n32/b1 [api-inclusive]` | 0.002165 ± 7.96032e-05 (W 2.63072e-05) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n64/b1` | 0.00651 ± 0.000159754 (W 3.1788e-05) | 0.00901 ± 0.000540311 (W 0.000242688) | 🔵 colmat 1.38× faster than `lapack-aocl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n64/b1 [api-inclusive]` | 0.0078895 ± 0.000125879 (W 4.30734e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `cholesky/n96/b1` | 0.0149995 ± 0.000320411 (W 7.2038e-05) | 0.016859 ± 0.000156498 (W 7.78252e-05) | 🔵 colmat 1.12× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `cholesky/n96/b1 [api-inclusive]` | 0.018354 ± 0.00026257 (W 0.000110876) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `eigh/n32/b1` | 0.0430285 ± 0.000227681 (W 0.000185466) | 0.071861 ± 0.000388365 (W 0.000181831) | 🔵 colmat 1.67× faster than `lapack-aocl` |  |
+| `eigh/n32/b1 [api-inclusive]` | 0.043359 ± 0.000198931 (W 0.000246421) | - | - | `*` one row has no measurement here |
+| `eigh/n64/b1` | 0.122071 ± 0.000642819 (W 0.000828218) | 0.780491 ± 0.00892043 (W 0.0063496) | 🔵 colmat 6.39× faster than `lapack-aocl` |  |
+| `eigh/n64/b1 [api-inclusive]` | 0.132367 ± 0.00150327 (W 0.00290038) | - | - | `*` one row has no measurement here |
+| `eigh/n96/b1` | 0.262917 ± 0.00167831 (W 0.0018427) | 0.687281 ± 12.7686 (W 7.50366) | · | `!` between-start range over 5%; `p` position effect over 5% |
+| `eigh/n96/b1 [api-inclusive]` | 0.265115 ± 0.00381094 (W 0.00186679) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n32/b1` | 0.009205 ± 9.17833e-05 (W 5.62492e-05) | 0.0226445 ± 9.31481e-05 (W 5.23216e-05) | 🔵 colmat 2.46× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n32/b1 [api-inclusive]` | 0.01004 ± 3.50851e-05 (W 6.05363e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n64/b1` | 0.0350235 ± 0.000149184 (W 8.12996e-05) | 0.153209 ± 0.000807401 (W 0.00120924) | 🔵 colmat 4.37× faster than `lapack-aocl` |  |
+| `full_piv_lu/n64/b1 [api-inclusive]` | 0.0373995 ± 0.000270007 (W 0.000129202) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n96/b1` | 0.09264 ± 0.00095707 (W 0.000528484) | 0.498206 ± 0.00154229 (W 0.00201681) | 🔵 colmat 5.38× faster than `lapack-aocl` |  |
+| `full_piv_lu/n96/b1 [api-inclusive]` | 0.104541 ± 0.00101758 (W 0.00179492) | - | - | `*` one row has no measurement here |
+| `householder_apply/n32/b1 [block(basis=32,target=32)]` | 0.00404 ± 9.32559e-05 (W 5.46119e-05) | 0.0141595 ± 0.000119173 (W 5.54342e-05) | 🔵 colmat 3.50× faster than `lapack-aocl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `householder_apply/n32/b1 [sequence(basis=32,target=32)]` | 0.004065 ± 6.3692e-05 (W 6.24498e-05) | 0.0065395 ± 0.000104748 (W 4.04096e-05) | 🔵 colmat 1.61× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `householder_apply/n64/b1 [block(basis=64,target=64)]` | 0.0099995 ± 9.25109e-05 (W 0.000230575) | 0.047137 ± 6.49077 (W 0.00178346) | · | `!` between-start range over 5%; `p` position effect over 5%; dispatch-dominated (row under 20 us) |
+| `householder_apply/n64/b1 [sequence(basis=64,target=64)]` | 0.0097 ± 8.66849e-05 (W 0.000164611) | 0.104442 ± 0.0024996 (W 0.00381623) | 🔵 colmat 10.77× faster than `lapack-aocl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `householder_apply/n96/b1 [block(basis=96,target=96)]` | 0.018709 ± 0.000238143 (W 0.000131682) | 0.0597975 ± 0.00137902 (W 0.00190417) | 🔵 colmat 3.20× faster than `lapack-aocl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `householder_apply/n96/b1 [sequence(basis=96,target=96)]` | 0.018429 ± 9.92425e-05 (W 0.00013432) | 0.177646 ± 0.00282633 (W 0.0045475) | 🔵 colmat 9.64× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `lu/n32/b1` | 0.0035545 ± 3.7276e-05 (W 5.53309e-05) | 0.002845 ± 4.19524e-05 (W 5.5214e-05) | 🔴 colmat 1.25× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `lu/n32/b1 [api-inclusive]` | 0.0045595 ± 2.72305e-05 (W 7.6454e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n64/b1` | 0.0138945 ± 7.67437e-05 (W 0.000254397) | 0.017885 ± 0.000303848 (W 4.2465e-05) | 🔵 colmat 1.29× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `lu/n64/b1 [api-inclusive]` | 0.0157345 ± 0.000107936 (W 0.000157823) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n96/b1` | 0.025259 ± 0.000170089 (W 0.000236754) | 0.0457785 ± 0.000405518 (W 0.000129751) | 🔵 colmat 1.81× faster than `lapack-aocl` |  |
+| `lu/n96/b1 [api-inclusive]` | 0.0371635 ± 0.00087247 (W 0.00143099) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr/n32/b1` | 0.0109295 ± 1.07842e-05 (W 4.51141e-05) | 0.011315 ± 0.000124366 (W 6.62665e-05) | · | dispatch-dominated (row under 20 us) |
+| `qr/n32/b1 [api-inclusive]` | 0.0124245 ± 6.11144e-05 (W 7.16621e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `qr/n64/b1` | 0.038254 ± 0.000210999 (W 0.000168988) | 0.130697 ± 6.34345 (W 0.00567287) | · | `!` between-start range over 5%; `p` position effect over 5% |
+| `qr/n64/b1 [api-inclusive]` | 0.0420035 ± 0.000197882 (W 0.000189208) | - | - | `*` one row has no measurement here |
+| `qr/n96/b1` | 0.0835245 ± 0.00055293 (W 0.000796247) | 0.257802 ± 6.20704 (W 0.00646182) | · | `!` between-start range over 5%; `p` position effect over 5% |
+| `qr/n96/b1 [api-inclusive]` | 0.113476 ± 0.000888836 (W 0.00171638) | - | - | `*` one row has no measurement here |
+| `qr_factor/n32/b1` | 0.0054545 ± 4.60174e-05 (W 3.83754e-05) | 0.0047545 ± 0.000117577 (W 2.96214e-05) | 🔴 colmat 1.15× slower than `lapack-aocl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `qr_factor/n64/b1` | 0.0198295 ± 7.65768e-05 (W 5.46348e-05) | 0.026304 ± 0.000750574 (W 7.50752e-05) | 🔵 colmat 1.33× faster than `lapack-aocl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `qr_factor/n96/b1` | 0.050342 ± 0.000329477 (W 8.83442e-05) | 0.074543 ± 0.000487534 (W 0.000165021) | 🔵 colmat 1.48× faster than `lapack-aocl` |  |
+| `solve/n32/b1` | 0.0042445 ± 3.38566e-05 (W 4.37602e-05) | 0.00318 ± 2.19089e-05 (W 4.18828e-05) | 🔴 colmat 1.33× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `solve/n32/b1 [api-inclusive]` | 0.005405 ± 3.7276e-05 (W 3.72359e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n64/b1` | 0.014724 ± 0.000126858 (W 0.000181556) | 0.016859 ± 0.00030598 (W 5.64019e-05) | 🔵 colmat 1.15× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `solve/n64/b1 [api-inclusive]` | 0.0170295 ± 4.41165e-05 (W 8.71775e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n96/b1` | 0.0269635 ± 0.00015861 (W 0.000204258) | 0.0421575 ± 0.000260535 (W 0.000115927) | 🔵 colmat 1.56× faster than `lapack-aocl` |  |
+| `solve/n96/b1 [api-inclusive]` | 0.0403335 ± 0.000971652 (W 0.00149306) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_thin/n32/b1` | 0.104357 ± 0.0020391 (W 0.000111372) | 0.111614 ± 0.000565823 (W 0.00101325) | 🔵 colmat 1.07× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `svd_thin/n32/b1 [api-inclusive]` | 0.105004 ± 0.004232 (W 0.00022313) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_thin/n64/b1` | 0.364015 ± 0.0029655 (W 0.00178924) | 0.445288 ± 11.4452 (W 2.36987) | · | `!` between-start range over 5%; `p` position effect over 5% |
+| `svd_thin/n64/b1 [api-inclusive]` | 0.361245 ± 0.000958023 (W 0.0022486) | - | - | `*` one row has no measurement here |
+| `svd_thin/n96/b1` | 0.748525 ± 0.000849203 (W 0.00178778) | 0.898239 ± 7.5153 (W 0.227417) | · | `!` between-start range over 5%; `p` position effect over 5% |
+| `svd_thin/n96/b1 [api-inclusive]` | 0.753146 ± 0.0010767 (W 0.00205927) | - | - | `*` one row has no measurement here |
+| `svd_values/n32/b1` | 0.0395675 ± 0.000316304 (W 8.99935e-05) | 0.078136 ± 0.00041365 (W 4.50887e-05) | 🔵 colmat 1.97× faster than `lapack-aocl` |  |
+| `svd_values/n32/b1 [api-inclusive]` | 0.0397285 ± 0.000326415 (W 0.000106026) | - | - | `*` one row has no measurement here |
+| `svd_values/n64/b1` | 0.149485 ± 0.000435419 (W 0.000282342) | 0.142779 ± 0.000287722 (W 0.000132077) | · |  |
+| `svd_values/n64/b1 [api-inclusive]` | 0.14556 ± 0.00113132 (W 0.00074198) | - | - | `*` one row has no measurement here |
+| `svd_values/n96/b1` | 0.361054 ± 0.000880245 (W 0.00183578) | 0.345252 ± 0.00376732 (W 0.00150695) | · |  |
+| `svd_values/n96/b1 [api-inclusive]` | 0.36741 ± 0.00612521 (W 0.00135463) | - | - | `*` one row has no measurement here |
+| `triangular_solve/n32/b1` | 0.00065 ± 4.08248e-06 (W 2.11957e-05) | 0.000505 ± 5.47723e-06 (W 2.03682e-05) | 🔴 colmat 1.29× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n64/b1` | 0.00142 ± 4.08248e-06 (W 1.98186e-05) | 0.000935 ± 1.16905e-05 (W 1.78335e-05) | 🔴 colmat 1.52× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n96/b1` | 0.002345 ± 2.34521e-05 (W 3.50862e-05) | 0.00142 ± 5.16398e-06 (W 2.18629e-05) | 🔴 colmat 1.65× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+
+## linalg-small, c64, c order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `cholesky/n32/b1` | 0.00413 ± 9.77753e-05 (W 1.49991e-05) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n32/b1 [api-inclusive]` | 0.00351 ± 6.32456e-06 (W 3.83705e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `cholesky/n64/b1` | 0.0192995 ± 0.000167675 (W 0.000481128) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `cholesky/n64/b1 [api-inclusive]` | 0.0179495 ± 6.69848e-05 (W 7.28451e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `cholesky/n96/b1` | 0.047419 ± 0.000199428 (W 0.000531019) | - | - | `*` one row has no measurement here |
+| `cholesky/n96/b1 [api-inclusive]` | 0.046284 ± 0.00015056 (W 0.000134924) | - | - | `*` one row has no measurement here |
+| `eigh/n32/b1` | 0.0782115 ± 0.000127644 (W 0.00107299) | - | - | `*` one row has no measurement here |
+| `eigh/n32/b1 [api-inclusive]` | 0.0785475 ± 0.000282295 (W 0.000138055) | - | - | `*` one row has no measurement here |
+| `eigh/n64/b1` | 0.370827 ± 0.000456424 (W 0.00146248) | - | - | `*` one row has no measurement here |
+| `eigh/n64/b1 [api-inclusive]` | 0.371372 ± 0.000524068 (W 0.0013636) | - | - | `*` one row has no measurement here |
+| `eigh/n96/b1` | 0.910525 ± 0.00209363 (W 0.00139351) | - | - | `*` one row has no measurement here |
+| `eigh/n96/b1 [api-inclusive]` | 0.912239 ± 0.00228777 (W 0.0013) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n32/b1` | 0.01105 ± 5.37789e-05 (W 6.31189e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n32/b1 [api-inclusive]` | 0.014125 ± 0.000113563 (W 5.92763e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n64/b1` | 0.059203 ± 0.000263136 (W 0.000439584) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n64/b1 [api-inclusive]` | 0.067792 ± 0.000416121 (W 0.000120166) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n96/b1` | 0.175773 ± 0.00053896 (W 0.00112681) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n96/b1 [api-inclusive]` | 0.22643 ± 0.00171506 (W 0.00244281) | - | - | `*` one row has no measurement here |
+| `householder_apply/n32/b1 [block(basis=32,target=32)]` | 0.01399 ± 3.00378e-05 (W 8.36007e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n32/b1 [sequence(basis=32,target=32)]` | 0.0139795 ± 3.68728e-05 (W 5.33529e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n64/b1 [block(basis=64,target=64)]` | 0.0705525 ± 6.98742e-05 (W 0.000650729) | - | - | `*` one row has no measurement here |
+| `householder_apply/n64/b1 [sequence(basis=64,target=64)]` | 0.0706085 ± 8.79805e-05 (W 0.000632926) | - | - | `*` one row has no measurement here |
+| `householder_apply/n96/b1 [block(basis=96,target=96)]` | 0.196738 ± 0.00157667 (W 0.00122192) | - | - | `*` one row has no measurement here |
+| `householder_apply/n96/b1 [sequence(basis=96,target=96)]` | 0.196633 ± 0.000451987 (W 0.00100387) | - | - | `*` one row has no measurement here |
+| `lu/n32/b1` | 0.008474 ± 0.000100616 (W 5.74444e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n32/b1 [api-inclusive]` | 0.00996 ± 3.40588e-05 (W 4.46468e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n64/b1` | 0.032134 ± 0.000127044 (W 0.000101535) | - | - | `*` one row has no measurement here |
+| `lu/n64/b1 [api-inclusive]` | 0.0373035 ± 7.26492e-05 (W 7.46233e-05) | - | - | `*` one row has no measurement here |
+| `lu/n96/b1` | 0.075748 ± 0.000191121 (W 0.000431743) | - | - | `*` one row has no measurement here |
+| `lu/n96/b1 [api-inclusive]` | 0.119141 ± 0.000938552 (W 0.00183629) | - | - | `*` one row has no measurement here |
+| `qr/n32/b1` | 0.0447385 ± 0.000119695 (W 0.000267151) | - | - | `*` one row has no measurement here |
+| `qr/n32/b1 [api-inclusive]` | 0.023624 ± 9.70575e-05 (W 5.49564e-05) | - | - | `*` one row has no measurement here |
+| `qr/n64/b1` | 0.165191 ± 0.000660842 (W 0.00154753) | - | - | `*` one row has no measurement here |
+| `qr/n64/b1 [api-inclusive]` | 0.152481 ± 0.00167505 (W 0.00174204) | - | - | `*` one row has no measurement here |
+| `qr/n96/b1` | 0.351888 ± 0.000983138 (W 0.00175841) | - | - | `*` one row has no measurement here |
+| `qr/n96/b1 [api-inclusive]` | 0.389005 ± 0.00148131 (W 0.00270936) | - | - | `*` one row has no measurement here |
+| `qr_factor/n32/b1` | 0.023514 ± 0.000174408 (W 0.0002273) | - | - | `*` one row has no measurement here |
+| `qr_factor/n64/b1` | 0.0864475 ± 0.000475357 (W 0.000643136) | - | - | `*` one row has no measurement here |
+| `qr_factor/n96/b1` | 0.186084 ± 0.000566556 (W 0.00140059) | - | - | `*` one row has no measurement here |
+| `solve/n32/b1` | 0.0084995 ± 2.90568e-05 (W 5.00388e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n32/b1 [api-inclusive]` | 0.0107945 ± 0.000147647 (W 5.55191e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n64/b1` | 0.0302085 ± 5.4956e-05 (W 6.55715e-05) | - | - | `*` one row has no measurement here |
+| `solve/n64/b1 [api-inclusive]` | 0.039304 ± 0.000524596 (W 0.00012867) | - | - | `*` one row has no measurement here |
+| `solve/n96/b1` | 0.0714975 ± 0.000233377 (W 9.07535e-05) | - | - | `*` one row has no measurement here |
+| `solve/n96/b1 [api-inclusive]` | 0.123472 ± 0.00190461 (W 0.00184547) | - | - | `*` one row has no measurement here |
+| `svd_thin/n32/b1` | 0.131132 ± 0.00413803 (W 0.00100401) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_thin/n32/b1 [api-inclusive]` | 0.131135 ± 0.000490398 (W 0.0010518) | - | - | `*` one row has no measurement here |
+| `svd_thin/n64/b1` | 0.617648 ± 0.00137594 (W 0.00181888) | - | - | `*` one row has no measurement here |
+| `svd_thin/n64/b1 [api-inclusive]` | 0.617516 ± 0.0060679 (W 0.00154917) | - | - | `*` one row has no measurement here |
+| `svd_thin/n96/b1` | 1.44136 ± 0.00288718 (W 0.00275926) | - | - | `*` one row has no measurement here |
+| `svd_thin/n96/b1 [api-inclusive]` | 1.44498 ± 0.00274882 (W 0.00195566) | - | - | `*` one row has no measurement here |
+| `svd_values/n32/b1` | 0.0487185 ± 0.000149411 (W 0.000103983) | - | - | `*` one row has no measurement here |
+| `svd_values/n32/b1 [api-inclusive]` | 0.0489985 ± 0.000188183 (W 8.70444e-05) | - | - | `*` one row has no measurement here |
+| `svd_values/n64/b1` | 0.204664 ± 0.000591462 (W 0.00127266) | - | - | `*` one row has no measurement here |
+| `svd_values/n64/b1 [api-inclusive]` | 0.204812 ± 0.000435396 (W 0.00141944) | - | - | `*` one row has no measurement here |
+| `svd_values/n96/b1` | 0.527834 ± 0.0007549 (W 0.00148696) | - | - | `*` one row has no measurement here |
+| `svd_values/n96/b1 [api-inclusive]` | 0.527761 ± 0.000962712 (W 0.00134886) | - | - | `*` one row has no measurement here |
+| `triangular_solve/n32/b1` | 0.00075 ± 6.32456e-06 (W 1.62723e-05) | 0.000875 ± 1.5237e-05 (W 2.19138e-05) | 🔵 colmat 1.17× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n64/b1` | 0.001825 ± 8.16497e-06 (W 2.4268e-05) | 0.0018 ± 1.60208e-05 (W 1.17082e-05) | · | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n96/b1` | 0.0033445 ± 2.73038e-05 (W 2.50206e-05) | 0.00305 ± 1.09545e-05 (W 2.11286e-05) | 🔴 colmat 1.10× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+
+## linalg-small, c64, c order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `cholesky/n32/b1` | 0.00411 ± 7.91833e-05 (W 3.48545e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `cholesky/n32/b1 [api-inclusive]` | 0.003545 ± 1.64975e-05 (W 3.76791e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `cholesky/n64/b1` | 0.018424 ± 0.000369941 (W 0.00011398) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n64/b1 [api-inclusive]` | 0.0180245 ± 9.83579e-05 (W 0.00013269) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `cholesky/n96/b1` | 0.042124 ± 0.000145459 (W 0.000175833) | - | - | `*` one row has no measurement here |
+| `cholesky/n96/b1 [api-inclusive]` | 0.042979 ± 0.000279417 (W 0.000275838) | - | - | `*` one row has no measurement here |
+| `eigh/n32/b1` | 0.057853 ± 0.000245911 (W 0.000117485) | - | - | `*` one row has no measurement here |
+| `eigh/n32/b1 [api-inclusive]` | 0.058339 ± 0.000273901 (W 0.000122853) | - | - | `*` one row has no measurement here |
+| `eigh/n64/b1` | 0.20284 ± 0.00093667 (W 0.00115307) | - | - | `*` one row has no measurement here |
+| `eigh/n64/b1 [api-inclusive]` | 0.204384 ± 0.000765002 (W 0.00107824) | - | - | `*` one row has no measurement here |
+| `eigh/n96/b1` | 0.429083 ± 0.00335416 (W 0.00174826) | - | - | `*` one row has no measurement here |
+| `eigh/n96/b1 [api-inclusive]` | 0.434508 ± 0.00346339 (W 0.00191355) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n32/b1` | 0.0120545 ± 7.99935e-05 (W 5.45417e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n32/b1 [api-inclusive]` | 0.014819 ± 6.21528e-05 (W 8.27724e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n64/b1` | 0.0582535 ± 0.000776299 (W 0.000385093) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n64/b1 [api-inclusive]` | 0.067183 ± 0.000250401 (W 0.000354306) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n96/b1` | 0.13176 ± 0.00129258 (W 0.000924726) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n96/b1 [api-inclusive]` | 0.183489 ± 0.00201957 (W 0.00173162) | - | - | `*` one row has no measurement here |
+| `householder_apply/n32/b1 [block(basis=32,target=32)]` | 0.0099495 ± 6.28511e-05 (W 0.00017352) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n32/b1 [sequence(basis=32,target=32)]` | 0.00988 ± 9.33176e-05 (W 0.000205412) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n64/b1 [block(basis=64,target=64)]` | 0.037349 ± 0.000190862 (W 0.000232175) | - | - | `*` one row has no measurement here |
+| `householder_apply/n64/b1 [sequence(basis=64,target=64)]` | 0.037614 ± 0.0001805 (W 0.00040785) | - | - | `*` one row has no measurement here |
+| `householder_apply/n96/b1 [block(basis=96,target=96)]` | 0.080003 ± 0.000415337 (W 0.000985115) | - | - | `*` one row has no measurement here |
+| `householder_apply/n96/b1 [sequence(basis=96,target=96)]` | 0.0800625 ± 0.000244455 (W 0.000402526) | - | - | `*` one row has no measurement here |
+| `lu/n32/b1` | 0.008699 ± 4.8086e-05 (W 5.38023e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n32/b1 [api-inclusive]` | 0.0101695 ± 5.24938e-05 (W 7.00221e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n64/b1` | 0.0353635 ± 0.000230311 (W 0.00030521) | - | - | `*` one row has no measurement here |
+| `lu/n64/b1 [api-inclusive]` | 0.036739 ± 0.000259361 (W 0.000218819) | - | - | `*` one row has no measurement here |
+| `lu/n96/b1` | 0.077277 ± 0.000712436 (W 0.000695077) | - | - | `*` one row has no measurement here |
+| `lu/n96/b1 [api-inclusive]` | 0.109101 ± 0.000943531 (W 0.000863591) | - | - | `*` one row has no measurement here |
+| `qr/n32/b1` | 0.043639 ± 0.000261854 (W 0.000374048) | - | - | `*` one row has no measurement here |
+| `qr/n32/b1 [api-inclusive]` | 0.02349 ± 7.86401e-05 (W 8.03664e-05) | - | - | `*` one row has no measurement here |
+| `qr/n64/b1` | 0.10045 ± 0.00126394 (W 0.000442201) | - | - | `*` one row has no measurement here |
+| `qr/n64/b1 [api-inclusive]` | 0.116765 ± 0.000826173 (W 0.00147838) | - | - | `*` one row has no measurement here |
+| `qr/n96/b1` | 0.258808 ± 0.000574526 (W 0.00125704) | - | - | `*` one row has no measurement here |
+| `qr/n96/b1 [api-inclusive]` | 0.321999 ± 0.0022351 (W 0.00171164) | - | - | `*` one row has no measurement here |
+| `qr_factor/n32/b1` | 0.0234795 ± 0.00011476 (W 0.000275279) | - | - | `*` one row has no measurement here |
+| `qr_factor/n64/b1` | 0.0576535 ± 0.000178524 (W 9.32836e-05) | - | - | `*` one row has no measurement here |
+| `qr_factor/n96/b1` | 0.171998 ± 0.000335085 (W 0.000771283) | - | - | `*` one row has no measurement here |
+| `solve/n32/b1` | 0.0089595 ± 6.61828e-05 (W 4.60032e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n32/b1 [api-inclusive]` | 0.0112095 ± 4.53905e-05 (W 5.23006e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n64/b1` | 0.031964 ± 0.000206892 (W 0.000214352) | - | - | `*` one row has no measurement here |
+| `solve/n64/b1 [api-inclusive]` | 0.038404 ± 0.000207738 (W 0.000306078) | - | - | `*` one row has no measurement here |
+| `solve/n96/b1` | 0.0656185 ± 0.000303349 (W 0.00100699) | - | - | `*` one row has no measurement here |
+| `solve/n96/b1 [api-inclusive]` | 0.109635 ± 0.00147996 (W 0.00160109) | - | - | `*` one row has no measurement here |
+| `svd_thin/n32/b1` | 0.1299 ± 0.00687429 (W 0.000225331) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_thin/n32/b1 [api-inclusive]` | 0.130502 ± 0.000352042 (W 0.000243345) | - | - | `*` one row has no measurement here |
+| `svd_thin/n64/b1` | 0.478534 ± 0.00179516 (W 0.00146208) | - | - | `*` one row has no measurement here |
+| `svd_thin/n64/b1 [api-inclusive]` | 0.480455 ± 0.00204812 (W 0.00241158) | - | - | `*` one row has no measurement here |
+| `svd_thin/n96/b1` | 0.990992 ± 0.00400215 (W 0.00124539) | - | - | `*` one row has no measurement here |
+| `svd_thin/n96/b1 [api-inclusive]` | 0.996122 ± 0.00310773 (W 0.00252296) | - | - | `*` one row has no measurement here |
+| `svd_values/n32/b1` | 0.0495185 ± 0.00017706 (W 4.84245e-05) | - | - | `*` one row has no measurement here |
+| `svd_values/n32/b1 [api-inclusive]` | 0.0497085 ± 0.0001397 (W 7.00278e-05) | - | - | `*` one row has no measurement here |
+| `svd_values/n64/b1` | 0.211337 ± 0.000449809 (W 0.00114568) | - | - | `*` one row has no measurement here |
+| `svd_values/n64/b1 [api-inclusive]` | 0.211443 ± 0.000496656 (W 0.00115451) | - | - | `*` one row has no measurement here |
+| `svd_values/n96/b1` | 0.481648 ± 0.00207491 (W 0.00188707) | - | - | `*` one row has no measurement here |
+| `svd_values/n96/b1 [api-inclusive]` | 0.480186 ± 0.00198229 (W 0.00150803) | - | - | `*` one row has no measurement here |
+| `triangular_solve/n32/b1` | 0.0009145 ± 1.23396e-05 (W 1.93211e-05) | 0.00087 ± 1.60208e-05 (W 1.9315e-05) | · | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n64/b1` | 0.002205 ± 9.83192e-06 (W 2.44311e-05) | 0.0018 ± 5.16398e-06 (W 1.34647e-05) | 🔴 colmat 1.23× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n96/b1` | 0.003875 ± 3.06839e-05 (W 3.02917e-05) | 0.0030195 ± 2.12955e-05 (W 1.65397e-05) | 🔴 colmat 1.28× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+
+## linalg-small, c64, c order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `cholesky/n32/b1` | 0.004235 ± 0.000456494 (W 2.23484e-05) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n32/b1 [api-inclusive]` | 0.003515 ± 1.83485e-05 (W 3.14152e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `cholesky/n64/b1` | 0.0184245 ± 0.00017364 (W 9.00797e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `cholesky/n64/b1 [api-inclusive]` | 0.018039 ± 5.45176e-05 (W 0.000128284) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `cholesky/n96/b1` | 0.0430535 ± 0.000439227 (W 0.000316768) | - | - | `*` one row has no measurement here |
+| `cholesky/n96/b1 [api-inclusive]` | 0.043489 ± 0.000158676 (W 0.000188061) | - | - | `*` one row has no measurement here |
+| `eigh/n32/b1` | 0.054603 ± 0.000327283 (W 0.000254321) | - | - | `*` one row has no measurement here |
+| `eigh/n32/b1 [api-inclusive]` | 0.0549325 ± 0.000219082 (W 0.000177767) | - | - | `*` one row has no measurement here |
+| `eigh/n64/b1` | 0.174935 ± 0.000525761 (W 0.00173031) | - | - | `*` one row has no measurement here |
+| `eigh/n64/b1 [api-inclusive]` | 0.176835 ± 0.00065003 (W 0.00145317) | - | - | `*` one row has no measurement here |
+| `eigh/n96/b1` | 0.354841 ± 0.00206781 (W 0.00208032) | - | - | `*` one row has no measurement here |
+| `eigh/n96/b1 [api-inclusive]` | 0.360011 ± 0.00112758 (W 0.00212578) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n32/b1` | 0.011985 ± 0.000171411 (W 6.64849e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n32/b1 [api-inclusive]` | 0.0147645 ± 0.000242675 (W 8.72378e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n64/b1` | 0.059799 ± 0.000288007 (W 0.000387928) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n64/b1 [api-inclusive]` | 0.0695325 ± 0.000458001 (W 0.000396113) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n96/b1` | 0.127374 ± 0.000605108 (W 0.00102503) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n96/b1 [api-inclusive]` | 0.184351 ± 0.00117124 (W 0.00179539) | - | - | `*` one row has no measurement here |
+| `householder_apply/n32/b1 [block(basis=32,target=32)]` | 0.0076695 ± 0.000121911 (W 0.000217004) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n32/b1 [sequence(basis=32,target=32)]` | 0.0075545 ± 9.72331e-05 (W 0.000146622) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n64/b1 [block(basis=64,target=64)]` | 0.0241235 ± 0.000118499 (W 0.000371619) | - | - | `*` one row has no measurement here |
+| `householder_apply/n64/b1 [sequence(basis=64,target=64)]` | 0.0238395 ± 0.000196512 (W 0.000282059) | - | - | `*` one row has no measurement here |
+| `householder_apply/n96/b1 [block(basis=96,target=96)]` | 0.0494225 ± 0.00014631 (W 0.000284136) | - | - | `*` one row has no measurement here |
+| `householder_apply/n96/b1 [sequence(basis=96,target=96)]` | 0.049417 ± 0.000274729 (W 0.000376185) | - | - | `*` one row has no measurement here |
+| `lu/n32/b1` | 0.0086145 ± 3.83706e-05 (W 5.97728e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n32/b1 [api-inclusive]` | 0.010159 ± 5.22319e-05 (W 8.5127e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n64/b1` | 0.0369135 ± 0.000124283 (W 0.000337237) | - | - | `*` one row has no measurement here |
+| `lu/n64/b1 [api-inclusive]` | 0.036584 ± 0.000161295 (W 0.000556797) | - | - | `*` one row has no measurement here |
+| `lu/n96/b1` | 0.0831465 ± 0.000746434 (W 0.0010463) | - | - | `*` one row has no measurement here |
+| `lu/n96/b1 [api-inclusive]` | 0.109601 ± 0.000661686 (W 0.00199204) | - | - | `*` one row has no measurement here |
+| `qr/n32/b1` | 0.045083 ± 0.00020459 (W 0.00056939) | - | - | `*` one row has no measurement here |
+| `qr/n32/b1 [api-inclusive]` | 0.023499 ± 7.50211e-05 (W 7.76013e-05) | - | - | `*` one row has no measurement here |
+| `qr/n64/b1` | 0.0965025 ± 0.000682637 (W 0.000939807) | - | - | `*` one row has no measurement here |
+| `qr/n64/b1 [api-inclusive]` | 0.118802 ± 0.000714687 (W 0.00238835) | - | - | `*` one row has no measurement here |
+| `qr/n96/b1` | 0.229511 ± 0.000942907 (W 0.00183648) | - | - | `*` one row has no measurement here |
+| `qr/n96/b1 [api-inclusive]` | 0.302175 ± 0.00176906 (W 0.00215742) | - | - | `*` one row has no measurement here |
+| `qr_factor/n32/b1` | 0.0258085 ± 0.000460809 (W 0.000617485) | - | - | `*` one row has no measurement here |
+| `qr_factor/n64/b1` | 0.057767 ± 0.000542569 (W 0.000205705) | - | - | `*` one row has no measurement here |
+| `qr_factor/n96/b1` | 0.159815 ± 0.000564569 (W 0.00072999) | - | - | `*` one row has no measurement here |
+| `solve/n32/b1` | 0.0089545 ± 2.90218e-05 (W 4.34923e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n32/b1 [api-inclusive]` | 0.0112595 ± 2.69493e-05 (W 5.47744e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n64/b1` | 0.029799 ± 0.000208818 (W 0.000158013) | - | - | `*` one row has no measurement here |
+| `solve/n64/b1 [api-inclusive]` | 0.038034 ± 0.000264459 (W 0.000183734) | - | - | `*` one row has no measurement here |
+| `solve/n96/b1` | 0.0639225 ± 0.000345736 (W 0.000567122) | - | - | `*` one row has no measurement here |
+| `solve/n96/b1 [api-inclusive]` | 0.109304 ± 0.000918079 (W 0.0018985) | - | - | `*` one row has no measurement here |
+| `svd_thin/n32/b1` | 0.130517 ± 0.000503496 (W 0.00028891) | - | - | `*` one row has no measurement here |
+| `svd_thin/n32/b1 [api-inclusive]` | 0.13092 ± 0.000970469 (W 0.000318552) | - | - | `*` one row has no measurement here |
+| `svd_thin/n64/b1` | 0.476453 ± 0.00314571 (W 0.00193524) | - | - | `*` one row has no measurement here |
+| `svd_thin/n64/b1 [api-inclusive]` | 0.478193 ± 0.00165358 (W 0.00213113) | - | - | `*` one row has no measurement here |
+| `svd_thin/n96/b1` | 0.976087 ± 0.00368653 (W 0.00144459) | - | - | `*` one row has no measurement here |
+| `svd_thin/n96/b1 [api-inclusive]` | 0.980031 ± 0.00666492 (W 0.00198366) | - | - | `*` one row has no measurement here |
+| `svd_values/n32/b1` | 0.0503575 ± 0.000165255 (W 7.15044e-05) | - | - | `*` one row has no measurement here |
+| `svd_values/n32/b1 [api-inclusive]` | 0.0500635 ± 0.000269458 (W 7.90534e-05) | - | - | `*` one row has no measurement here |
+| `svd_values/n64/b1` | 0.217143 ± 0.000604336 (W 0.00127589) | - | - | `*` one row has no measurement here |
+| `svd_values/n64/b1 [api-inclusive]` | 0.218118 ± 0.000893732 (W 0.00151088) | - | - | `*` one row has no measurement here |
+| `svd_values/n96/b1` | 0.496733 ± 0.00147554 (W 0.0021827) | - | - | `*` one row has no measurement here |
+| `svd_values/n96/b1 [api-inclusive]` | 0.495729 ± 0.00193774 (W 0.00166321) | - | - | `*` one row has no measurement here |
+| `triangular_solve/n32/b1` | 0.00091 ± 6.32456e-06 (W 1.99859e-05) | 0.000865 ± 5.67157e-06 (W 1.99191e-05) | 🔴 colmat 1.05× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n64/b1` | 0.0021645 ± 1.84436e-05 (W 2.82793e-05) | 0.001795 ± 1.36626e-05 (W 1.54886e-05) | 🔴 colmat 1.21× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n96/b1` | 0.003845 ± 1.98032e-05 (W 2.16924e-05) | 0.003 ± 2.03019e-05 (W 2.47253e-05) | 🔴 colmat 1.28× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+
+## linalg-small, c64, f order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `cholesky/n32/b1` | 0.002955 ± 2.16025e-05 (W 1.83569e-05) | 0.028594 ± 0.00012707 (W 5.9142e-05) | 🔵 colmat 9.68× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `cholesky/n32/b1 [api-inclusive]` | 0.003525 ± 1.51658e-05 (W 3.09588e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `cholesky/n64/b1` | 0.0155245 ± 2.55923e-05 (W 3.34797e-05) | 0.0519885 ± 0.000228775 (W 8.90512e-05) | 🔵 colmat 3.35× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `cholesky/n64/b1 [api-inclusive]` | 0.017789 ± 6.5972e-05 (W 4.43423e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `cholesky/n96/b1` | 0.0414035 ± 0.000117233 (W 7.45578e-05) | 0.087862 ± 0.000678129 (W 0.000263928) | 🔵 colmat 2.12× faster than `lapack-aocl` |  |
+| `cholesky/n96/b1 [api-inclusive]` | 0.045783 ± 0.000117518 (W 0.000139836) | - | - | `*` one row has no measurement here |
+| `eigh/n32/b1` | 0.078492 ± 0.000527307 (W 0.000766528) | 0.0973975 ± 0.00057342 (W 0.000156878) | 🔵 colmat 1.24× faster than `lapack-aocl` |  |
+| `eigh/n32/b1 [api-inclusive]` | 0.079072 ± 0.00034151 (W 0.000191873) | - | - | `*` one row has no measurement here |
+| `eigh/n64/b1` | 0.370228 ± 0.000429958 (W 0.00155652) | 0.410362 ± 0.00239526 (W 0.00161127) | 🔵 colmat 1.11× faster than `lapack-aocl` |  |
+| `eigh/n64/b1 [api-inclusive]` | 0.372012 ± 0.00120447 (W 0.00131163) | - | - | `*` one row has no measurement here |
+| `eigh/n96/b1` | 0.91007 ± 0.000491558 (W 0.00224944) | 1.00882 ± 0.00132603 (W 0.000569588) | 🔵 colmat 1.11× faster than `lapack-aocl` |  |
+| `eigh/n96/b1 [api-inclusive]` | 0.9116 ± 0.00225122 (W 0.00118052) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n32/b1` | 0.0113295 ± 2.89528e-05 (W 4.84061e-05) | 0.107163 ± 0.00203292 (W 0.000615018) | 🔵 colmat 9.46× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n32/b1 [api-inclusive]` | 0.012709 ± 3.01579e-05 (W 4.80769e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n64/b1` | 0.0601125 ± 0.000222326 (W 0.000122072) | 1.80851 ± 0.00417781 (W 0.00267634) | 🔵 colmat 30.09× faster than `lapack-aocl` |  |
+| `full_piv_lu/n64/b1 [api-inclusive]` | 0.0639175 ± 0.000357033 (W 0.00012453) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n96/b1` | 0.178071 ± 0.00059297 (W 0.00136199) | 6.21132 ± 0.00753258 (W 0.00466828) | 🔵 colmat 34.88× faster than `lapack-aocl` |  |
+| `full_piv_lu/n96/b1 [api-inclusive]` | 0.215542 ± 0.00146029 (W 0.0018437) | - | - | `*` one row has no measurement here |
+| `householder_apply/n32/b1 [block(basis=32,target=32)]` | 0.01403 ± 4.9742e-05 (W 5.05768e-05) | 0.0230345 ± 0.000150048 (W 6.57407e-05) | 🔵 colmat 1.64× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `householder_apply/n32/b1 [sequence(basis=32,target=32)]` | 0.010955 ± 0.000111116 (W 2.85647e-05) | 0.0109895 ± 4.468e-05 (W 2.96053e-05) | · | dispatch-dominated (row under 20 us) |
+| `householder_apply/n64/b1 [block(basis=64,target=64)]` | 0.069938 ± 0.000172699 (W 9.3672e-05) | 0.0923405 ± 0.000903296 (W 0.000417071) | 🔵 colmat 1.32× faster than `lapack-aocl` |  |
+| `householder_apply/n64/b1 [sequence(basis=64,target=64)]` | 0.0698575 ± 0.000125414 (W 0.000511592) | 0.137066 ± 0.00123764 (W 0.00074175) | 🔵 colmat 1.96× faster than `lapack-aocl` |  |
+| `householder_apply/n96/b1 [block(basis=96,target=96)]` | 0.194148 ± 0.000504419 (W 0.00157505) | 0.194359 ± 0.00137116 (W 0.0014015) | · |  |
+| `householder_apply/n96/b1 [sequence(basis=96,target=96)]` | 0.19405 ± 0.00019575 (W 0.00136996) | 0.272802 ± 0.00146047 (W 0.00156851) | 🔵 colmat 1.41× faster than `lapack-aocl` |  |
+| `lu/n32/b1` | 0.0075395 ± 7.5843e-05 (W 5.48197e-05) | 0.0045095 ± 0.000170423 (W 3.43672e-05) | 🔴 colmat 1.67× slower than `lapack-aocl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `lu/n32/b1 [api-inclusive]` | 0.0089245 ± 5.79678e-05 (W 7.0098e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n64/b1` | 0.028904 ± 9.1433e-05 (W 7.73208e-05) | 0.021689 ± 0.000436743 (W 8.892e-05) | 🔴 colmat 1.33× slower than `lapack-aocl` |  |
+| `lu/n64/b1 [api-inclusive]` | 0.032649 ± 8.90852e-05 (W 0.00013076) | - | - | `*` one row has no measurement here |
+| `lu/n96/b1` | 0.0707775 ± 0.000271202 (W 0.000249051) | 0.050729 ± 0.000446183 (W 0.000159407) | 🔴 colmat 1.40× slower than `lapack-aocl` |  |
+| `lu/n96/b1 [api-inclusive]` | 0.109737 ± 0.000581395 (W 0.00116119) | - | - | `*` one row has no measurement here |
+| `qr/n32/b1` | 0.0201745 ± 0.000103905 (W 3.8162e-05) | 0.023989 ± 0.000267769 (W 5.59266e-05) | 🔵 colmat 1.19× faster than `lapack-aocl` |  |
+| `qr/n32/b1 [api-inclusive]` | 0.022334 ± 6.22093e-05 (W 7.56007e-05) | - | - | `*` one row has no measurement here |
+| `qr/n64/b1` | 0.126676 ± 0.00022187 (W 0.000961304) | 0.19942 ± 0.00114502 (W 0.00137783) | 🔵 colmat 1.57× faster than `lapack-aocl` |  |
+| `qr/n64/b1 [api-inclusive]` | 0.146534 ± 0.00151967 (W 0.00204064) | - | - | `*` one row has no measurement here |
+| `qr/n96/b1` | 0.309898 ± 0.00154271 (W 0.00150815) | 0.443053 ± 0.00229307 (W 0.002552) | 🔵 colmat 1.43× faster than `lapack-aocl` |  |
+| `qr/n96/b1 [api-inclusive]` | 0.380939 ± 0.00247319 (W 0.00274387) | - | - | `*` one row has no measurement here |
+| `qr_factor/n32/b1` | 0.0096795 ± 0.000141858 (W 2.80905e-05) | 0.012845 ± 5.60372e-05 (W 6.2982e-05) | 🔵 colmat 1.33× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `qr_factor/n64/b1` | 0.0511025 ± 0.000194362 (W 6.84147e-05) | 0.0591635 ± 0.000356839 (W 0.000143562) | 🔵 colmat 1.16× faster than `lapack-aocl` |  |
+| `qr_factor/n96/b1` | 0.146707 ± 0.000461499 (W 0.000775902) | 0.170416 ± 0.0012184 (W 0.00121705) | 🔵 colmat 1.16× faster than `lapack-aocl` |  |
+| `solve/n32/b1` | 0.0080595 ± 4.3798e-05 (W 4.1747e-05) | 0.00507 ± 0.000168602 (W 4.51149e-05) | 🔴 colmat 1.59× slower than `lapack-aocl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `solve/n32/b1 [api-inclusive]` | 0.009435 ± 0.00012145 (W 5.42305e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n64/b1` | 0.0309135 ± 0.000355845 (W 0.000213837) | 0.020964 ± 0.000197622 (W 5.70138e-05) | 🔴 colmat 1.47× slower than `lapack-aocl` |  |
+| `solve/n64/b1 [api-inclusive]` | 0.0339285 ± 0.000411315 (W 0.00013923) | - | - | `*` one row has no measurement here |
+| `solve/n96/b1` | 0.072868 ± 0.000488758 (W 0.000209043) | 0.048414 ± 0.000309387 (W 9.84267e-05) | 🔴 colmat 1.51× slower than `lapack-aocl` |  |
+| `solve/n96/b1 [api-inclusive]` | 0.112296 ± 0.0012112 (W 0.00180791) | - | - | `*` one row has no measurement here |
+| `svd_thin/n32/b1` | 0.129321 ± 0.001519 (W 0.000861872) | 0.136849 ± 0.000796075 (W 0.000576964) | 🔵 colmat 1.06× faster than `lapack-aocl` |  |
+| `svd_thin/n32/b1 [api-inclusive]` | 0.129458 ± 0.000486799 (W 0.00113452) | - | - | `*` one row has no measurement here |
+| `svd_thin/n64/b1` | 0.610299 ± 0.00108849 (W 0.00199125) | 0.535885 ± 0.00273345 (W 0.00185286) | 🔴 colmat 1.14× slower than `lapack-aocl` |  |
+| `svd_thin/n64/b1 [api-inclusive]` | 0.610191 ± 0.00102661 (W 0.00165837) | - | - | `*` one row has no measurement here |
+| `svd_thin/n96/b1` | 1.43888 ± 0.00403194 (W 0.00223714) | 1.46147 ± 0.00310982 (W 0.00373159) | · |  |
+| `svd_thin/n96/b1 [api-inclusive]` | 1.44466 ± 0.00272127 (W 0.00233937) | - | - | `*` one row has no measurement here |
+| `svd_values/n32/b1` | 0.049258 ± 0.000247237 (W 0.000107871) | 0.0635575 ± 0.000275334 (W 8.57558e-05) | 🔵 colmat 1.29× faster than `lapack-aocl` |  |
+| `svd_values/n32/b1 [api-inclusive]` | 0.049728 ± 0.000205865 (W 0.000522694) | - | - | `*` one row has no measurement here |
+| `svd_values/n64/b1` | 0.203084 ± 0.000595204 (W 0.0013967) | 0.228687 ± 0.0006198 (W 0.00132045) | 🔵 colmat 1.13× faster than `lapack-aocl` |  |
+| `svd_values/n64/b1 [api-inclusive]` | 0.203254 ± 0.000409873 (W 0.00112006) | - | - | `*` one row has no measurement here |
+| `svd_values/n96/b1` | 0.526642 ± 0.00132186 (W 0.00168008) | 0.564339 ± 0.00228028 (W 0.00149496) | 🔵 colmat 1.07× faster than `lapack-aocl` |  |
+| `svd_values/n96/b1 [api-inclusive]` | 0.527183 ± 0.0013091 (W 0.00149243) | - | - | `*` one row has no measurement here |
+| `triangular_solve/n32/b1` | 0.00078 ± 7.52773e-06 (W 1.81659e-05) | 0.0007945 ± 5.30723e-06 (W 2.09748e-05) | · | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n64/b1` | 0.001915 ± 2.11699e-05 (W 3.00483e-05) | 0.0016095 ± 3.94968e-06 (W 1.74778e-05) | 🔴 colmat 1.19× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n96/b1` | 0.003445 ± 3.97073e-05 (W 2.19567e-05) | 0.00277 ± 1.67332e-05 (W 1.9589e-05) | 🔴 colmat 1.24× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+
+## linalg-small, c64, f order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `cholesky/n32/b1` | 0.002995 ± 4.95648e-05 (W 2.09105e-05) | 0.028479 ± 8.66343e-05 (W 6.16318e-05) | 🔵 colmat 9.51× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `cholesky/n32/b1 [api-inclusive]` | 0.00355 ± 2.78687e-05 (W 3.25186e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `cholesky/n64/b1` | 0.0155245 ± 0.000144721 (W 6.79879e-05) | 0.0597585 ± 0.00137673 (W 0.00102659) | 🔵 colmat 3.85× faster than `lapack-aocl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n64/b1 [api-inclusive]` | 0.017659 ± 4.35006e-05 (W 0.000114125) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `cholesky/n96/b1` | 0.035949 ± 0.000181524 (W 0.000971871) | 0.0927215 ± 0.00116672 (W 0.00134549) | 🔵 colmat 2.58× faster than `lapack-aocl` |  |
+| `cholesky/n96/b1 [api-inclusive]` | 0.042504 ± 0.000155633 (W 0.000186996) | - | - | `*` one row has no measurement here |
+| `eigh/n32/b1` | 0.057829 ± 0.000127368 (W 0.000133048) | 0.097507 ± 0.000360091 (W 0.000752706) | 🔵 colmat 1.69× faster than `lapack-aocl` |  |
+| `eigh/n32/b1 [api-inclusive]` | 0.058323 ± 0.000164849 (W 0.000562967) | - | - | `*` one row has no measurement here |
+| `eigh/n64/b1` | 0.202303 ± 0.000733759 (W 0.00134915) | 0.415902 ± 0.0112663 (W 0.00223059) | 🔵 colmat 2.06× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `eigh/n64/b1 [api-inclusive]` | 0.20416 ± 0.000676281 (W 0.00133948) | - | - | `*` one row has no measurement here |
+| `eigh/n96/b1` | 0.428224 ± 0.00176528 (W 0.00206909) | 1.00407 ± 0.00189809 (W 0.00193606) | 🔵 colmat 2.34× faster than `lapack-aocl` |  |
+| `eigh/n96/b1 [api-inclusive]` | 0.431983 ± 0.00183127 (W 0.00181331) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n32/b1` | 0.0123095 ± 0.000117877 (W 5.11305e-05) | 0.107541 ± 0.00262466 (W 0.000110044) | 🔵 colmat 8.74× faster than `lapack-aocl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n32/b1 [api-inclusive]` | 0.013324 ± 0.000111015 (W 8.10623e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n64/b1` | 0.059293 ± 0.000356472 (W 0.000396847) | 1.80452 ± 0.00356862 (W 0.00434121) | 🔵 colmat 30.43× faster than `lapack-aocl` |  |
+| `full_piv_lu/n64/b1 [api-inclusive]` | 0.062663 ± 0.000521196 (W 0.000573428) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n96/b1` | 0.135775 ± 0.00156272 (W 0.00152446) | 6.20534 ± 0.0108658 (W 0.00450247) | 🔵 colmat 45.70× faster than `lapack-aocl` |  |
+| `full_piv_lu/n96/b1 [api-inclusive]` | 0.173171 ± 0.00164466 (W 0.00173457) | - | - | `*` one row has no measurement here |
+| `householder_apply/n32/b1 [block(basis=32,target=32)]` | 0.009905 ± 0.00011078 (W 9.37688e-05) | 0.042189 ± 0.000474047 (W 0.000638642) | 🔵 colmat 4.26× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `householder_apply/n32/b1 [sequence(basis=32,target=32)]` | 0.0101145 ± 0.000109387 (W 0.000154688) | 0.0108245 ± 5.53558e-05 (W 3.80996e-05) | 🔵 colmat 1.07× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `householder_apply/n64/b1 [block(basis=64,target=64)]` | 0.037179 ± 0.000146331 (W 0.000358249) | 0.080378 ± 0.000500033 (W 0.00107013) | 🔵 colmat 2.16× faster than `lapack-aocl` |  |
+| `householder_apply/n64/b1 [sequence(basis=64,target=64)]` | 0.0372735 ± 0.000175146 (W 0.000154785) | 0.0954725 ± 0.00184179 (W 0.00195744) | 🔵 colmat 2.56× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `householder_apply/n96/b1 [block(basis=96,target=96)]` | 0.078687 ± 0.000542306 (W 0.000420521) | 0.118826 ± 0.00108201 (W 0.00172504) | 🔵 colmat 1.51× faster than `lapack-aocl` |  |
+| `householder_apply/n96/b1 [sequence(basis=96,target=96)]` | 0.078703 ± 0.000409273 (W 0.000925875) | 0.158905 ± 0.00103972 (W 0.00147819) | 🔵 colmat 2.02× faster than `lapack-aocl` |  |
+| `lu/n32/b1` | 0.007725 ± 5.45588e-05 (W 5.56022e-05) | 0.004605 ± 8.01041e-05 (W 3.75579e-05) | 🔴 colmat 1.68× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `lu/n32/b1 [api-inclusive]` | 0.009 ± 4.13118e-05 (W 4.73601e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n64/b1` | 0.0287345 ± 0.000189771 (W 0.000298817) | 0.0220995 ± 0.000286943 (W 0.000601924) | 🔴 colmat 1.30× slower than `lapack-aocl` |  |
+| `lu/n64/b1 [api-inclusive]` | 0.032899 ± 0.000193364 (W 0.000378973) | - | - | `*` one row has no measurement here |
+| `lu/n96/b1` | 0.058334 ± 0.000458507 (W 0.000397886) | 0.050974 ± 0.00038302 (W 0.000313814) | 🔴 colmat 1.14× slower than `lapack-aocl` |  |
+| `lu/n96/b1 [api-inclusive]` | 0.0988815 ± 0.0012466 (W 0.000928969) | - | - | `*` one row has no measurement here |
+| `qr/n32/b1` | 0.020274 ± 0.000192811 (W 3.36103e-05) | 0.0237095 ± 0.000245729 (W 7.99713e-05) | 🔵 colmat 1.17× faster than `lapack-aocl` |  |
+| `qr/n32/b1 [api-inclusive]` | 0.022254 ± 0.000116945 (W 7.41169e-05) | - | - | `*` one row has no measurement here |
+| `qr/n64/b1` | 0.0885815 ± 0.000351071 (W 0.000270885) | 0.156436 ± 7.2837 (W 0.00146723) | · | `!` between-start range over 5%; `p` position effect over 5% |
+| `qr/n64/b1 [api-inclusive]` | 0.112606 ± 0.000851037 (W 0.00131251) | - | - | `*` one row has no measurement here |
+| `qr/n96/b1` | 0.236769 ± 0.000879765 (W 0.00145158) | 0.33878 ± 0.00650599 (W 0.00297405) | 🔵 colmat 1.43× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `qr/n96/b1 [api-inclusive]` | 0.312608 ± 0.00254744 (W 0.00272437) | - | - | `*` one row has no measurement here |
+| `qr_factor/n32/b1` | 0.0095 ± 4.24142e-05 (W 3.01353e-05) | 0.012745 ± 0.000174754 (W 5.44689e-05) | 🔵 colmat 1.34× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `qr_factor/n64/b1` | 0.0503185 ± 0.000312577 (W 4.95925e-05) | 0.058867 ± 0.000631777 (W 0.000139203) | 🔵 colmat 1.17× faster than `lapack-aocl` |  |
+| `qr_factor/n96/b1` | 0.15795 ± 0.000505364 (W 0.000954418) | 0.17068 ± 0.00141911 (W 0.000477001) | 🔵 colmat 1.08× faster than `lapack-aocl` |  |
+| `solve/n32/b1` | 0.0085745 ± 0.000135212 (W 7.6156e-05) | 0.0050345 ± 0.000311932 (W 3.88122e-05) | 🔴 colmat 1.70× slower than `lapack-aocl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `solve/n32/b1 [api-inclusive]` | 0.0098395 ± 6.52707e-05 (W 4.96669e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n64/b1` | 0.030164 ± 0.000285494 (W 0.00022485) | 0.0211145 ± 0.000290537 (W 0.000156838) | 🔴 colmat 1.43× slower than `lapack-aocl` |  |
+| `solve/n64/b1 [api-inclusive]` | 0.033959 ± 0.000176841 (W 0.000219873) | - | - | `*` one row has no measurement here |
+| `solve/n96/b1` | 0.0589235 ± 0.000432117 (W 0.000439815) | 0.0443285 ± 0.000129641 (W 0.000277496) | 🔴 colmat 1.33× slower than `lapack-aocl` |  |
+| `solve/n96/b1 [api-inclusive]` | 0.0996665 ± 0.000419389 (W 0.00190679) | - | - | `*` one row has no measurement here |
+| `svd_thin/n32/b1` | 0.128462 ± 0.000189996 (W 0.00025799) | 0.135914 ± 0.000203188 (W 0.00148337) | 🔵 colmat 1.06× faster than `lapack-aocl` |  |
+| `svd_thin/n32/b1 [api-inclusive]` | 0.129317 ± 0.00386727 (W 0.000235538) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_thin/n64/b1` | 0.472186 ± 0.000609477 (W 0.0013449) | 0.528833 ± 0.00342154 (W 0.00212643) | 🔵 colmat 1.12× faster than `lapack-aocl` |  |
+| `svd_thin/n64/b1 [api-inclusive]` | 0.473386 ± 0.00285764 (W 0.00155374) | - | - | `*` one row has no measurement here |
+| `svd_thin/n96/b1` | 0.99257 ± 0.00424644 (W 0.00164801) | 1.26866 ± 0.0279631 (W 0.00357146) | 🔵 colmat 1.28× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `svd_thin/n96/b1 [api-inclusive]` | 0.999513 ± 0.00205158 (W 0.00191826) | - | - | `*` one row has no measurement here |
+| `svd_values/n32/b1` | 0.050154 ± 0.000264163 (W 9.5419e-05) | 0.0633685 ± 0.0003648 (W 0.000159791) | 🔵 colmat 1.26× faster than `lapack-aocl` |  |
+| `svd_values/n32/b1 [api-inclusive]` | 0.0504885 ± 0.000273606 (W 0.000494158) | - | - | `*` one row has no measurement here |
+| `svd_values/n64/b1` | 0.209255 ± 0.000725445 (W 0.00121339) | 0.227369 ± 0.000940916 (W 0.0014858) | 🔵 colmat 1.09× faster than `lapack-aocl` |  |
+| `svd_values/n64/b1 [api-inclusive]` | 0.209587 ± 0.000888911 (W 0.00142178) | - | - | `*` one row has no measurement here |
+| `svd_values/n96/b1` | 0.479517 ± 0.000967379 (W 0.00219183) | 0.561557 ± 0.00217127 (W 0.00199894) | 🔵 colmat 1.17× faster than `lapack-aocl` |  |
+| `svd_values/n96/b1 [api-inclusive]` | 0.479383 ± 0.00141709 (W 0.00168069) | - | - | `*` one row has no measurement here |
+| `triangular_solve/n32/b1` | 0.000945 ± 1.44741e-05 (W 2.71273e-05) | 0.00077 ± 4.02078e-06 (W 1.9725e-05) | 🔴 colmat 1.23× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n64/b1` | 0.00229 ± 1.7224e-05 (W 3.04185e-05) | 0.00162 ± 1.04003e-05 (W 1.66461e-05) | 🔴 colmat 1.41× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n96/b1` | 0.0039895 ± 1.9395e-05 (W 3.77277e-05) | 0.002755 ± 1.36626e-05 (W 2.30794e-05) | 🔴 colmat 1.45× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+
+## linalg-small, c64, f order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `cholesky/n32/b1` | 0.00296 ± 1.64317e-05 (W 1.72421e-05) | 0.028514 ± 8.76059e-05 (W 6.86902e-05) | 🔵 colmat 9.63× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `cholesky/n32/b1 [api-inclusive]` | 0.003515 ± 2.87518e-05 (W 3.7076e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `cholesky/n64/b1` | 0.01514 ± 0.000168128 (W 0.000103242) | 0.0671275 ± 0.00137422 (W 0.00199603) | 🔵 colmat 4.43× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `cholesky/n64/b1 [api-inclusive]` | 0.0177935 ± 0.000133113 (W 0.000102636) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `cholesky/n96/b1` | 0.0386935 ± 0.000164699 (W 0.000188944) | 0.107392 ± 0.00202182 (W 0.00256717) | 🔵 colmat 2.78× faster than `lapack-aocl` |  |
+| `cholesky/n96/b1 [api-inclusive]` | 0.042953 ± 0.000160713 (W 0.000145305) | - | - | `*` one row has no measurement here |
+| `eigh/n32/b1` | 0.0546175 ± 0.000278067 (W 0.000183504) | 0.097212 ± 0.000559231 (W 0.00022862) | 🔵 colmat 1.78× faster than `lapack-aocl` |  |
+| `eigh/n32/b1 [api-inclusive]` | 0.0552185 ± 0.000214311 (W 0.000204251) | - | - | `*` one row has no measurement here |
+| `eigh/n64/b1` | 0.174335 ± 0.000768303 (W 0.00150014) | 0.429623 ± 0.00259282 (W 0.00363948) | 🔵 colmat 2.46× faster than `lapack-aocl` |  |
+| `eigh/n64/b1 [api-inclusive]` | 0.17704 ± 0.000402167 (W 0.000384124) | - | - | `*` one row has no measurement here |
+| `eigh/n96/b1` | 0.355735 ± 0.00135923 (W 0.00252141) | 1.02712 ± 2.51351 (W 0.00336732) | · | `!` between-start range over 5%; `p` position effect over 5% |
+| `eigh/n96/b1 [api-inclusive]` | 0.359537 ± 0.00111845 (W 0.0022003) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n32/b1` | 0.012229 ± 4.56527e-05 (W 4.88061e-05) | 0.107689 ± 0.00380693 (W 0.000714904) | 🔵 colmat 8.81× faster than `lapack-aocl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n32/b1 [api-inclusive]` | 0.013364 ± 0.00021429 (W 7.54087e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n64/b1` | 0.0611465 ± 0.000642093 (W 0.000439254) | 1.80364 ± 0.00780327 (W 0.00283343) | 🔵 colmat 29.50× faster than `lapack-aocl` |  |
+| `full_piv_lu/n64/b1 [api-inclusive]` | 0.064933 ± 0.000659355 (W 0.000450967) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n96/b1` | 0.133706 ± 0.00224688 (W 0.00150346) | 6.20975 ± 0.0189471 (W 0.00540205) | 🔵 colmat 46.44× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `full_piv_lu/n96/b1 [api-inclusive]` | 0.173075 ± 0.00173948 (W 0.00191922) | - | - | `*` one row has no measurement here |
+| `householder_apply/n32/b1 [block(basis=32,target=32)]` | 0.0076345 ± 3.82919e-05 (W 0.00012807) | 0.067353 ± 0.000735792 (W 0.00139694) | 🔵 colmat 8.82× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `householder_apply/n32/b1 [sequence(basis=32,target=32)]` | 0.0075695 ± 7.47808e-05 (W 0.000112802) | 0.010764 ± 9.50088e-05 (W 6.07311e-05) | 🔵 colmat 1.42× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `householder_apply/n64/b1 [block(basis=64,target=64)]` | 0.024204 ± 7.47567e-05 (W 0.000181544) | 0.099675 ± 0.000839617 (W 0.00115962) | 🔵 colmat 4.12× faster than `lapack-aocl` |  |
+| `householder_apply/n64/b1 [sequence(basis=64,target=64)]` | 0.023774 ± 9.99475e-05 (W 0.000212036) | 0.0976815 ± 0.00131474 (W 0.00393296) | 🔵 colmat 4.11× faster than `lapack-aocl` |  |
+| `householder_apply/n96/b1 [block(basis=96,target=96)]` | 0.0483135 ± 0.000105776 (W 0.000411717) | 0.129187 ± 0.00200802 (W 0.00146522) | 🔵 colmat 2.67× faster than `lapack-aocl` |  |
+| `householder_apply/n96/b1 [sequence(basis=96,target=96)]` | 0.048683 ± 0.000368071 (W 0.00040033) | 0.160236 ± 0.00170794 (W 0.00307011) | 🔵 colmat 3.29× faster than `lapack-aocl` |  |
+| `lu/n32/b1` | 0.007675 ± 4.72821e-05 (W 6.34126e-05) | 0.00454 ± 7.5667e-05 (W 2.47355e-05) | 🔴 colmat 1.69× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `lu/n32/b1 [api-inclusive]` | 0.008975 ± 0.000121343 (W 6.30562e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n64/b1` | 0.0285885 ± 0.000232633 (W 0.000257445) | 0.024419 ± 0.000508063 (W 0.000288485) | 🔴 colmat 1.17× slower than `lapack-aocl` | `!` between-start range over 5% |
+| `lu/n64/b1 [api-inclusive]` | 0.032479 ± 0.00018266 (W 0.000252417) | - | - | `*` one row has no measurement here |
+| `lu/n96/b1` | 0.0568635 ± 0.0003142 (W 0.000390194) | 0.082432 ± 0.00187818 (W 0.00321655) | 🔵 colmat 1.45× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `lu/n96/b1 [api-inclusive]` | 0.0993825 ± 0.00123823 (W 0.00159562) | - | - | `*` one row has no measurement here |
+| `qr/n32/b1` | 0.0201895 ± 7.97281e-05 (W 4.70762e-05) | 0.024159 ± 7.67898e-05 (W 4.07948e-05) | 🔵 colmat 1.20× faster than `lapack-aocl` |  |
+| `qr/n32/b1 [api-inclusive]` | 0.022259 ± 6.68842e-05 (W 6.87195e-05) | - | - | `*` one row has no measurement here |
+| `qr/n64/b1` | 0.085551 ± 0.000415214 (W 0.000229007) | 0.16138 ± 0.00291943 (W 0.00607877) | 🔵 colmat 1.89× faster than `lapack-aocl` |  |
+| `qr/n64/b1 [api-inclusive]` | 0.113836 ± 0.000717889 (W 0.00147846) | - | - | `*` one row has no measurement here |
+| `qr/n96/b1` | 0.211737 ± 0.00105645 (W 0.00169437) | 0.333302 ± 3.10024 (W 0.00424047) | · | `!` between-start range over 5%; `p` position effect over 5% |
+| `qr/n96/b1 [api-inclusive]` | 0.294049 ± 0.00419194 (W 0.00287395) | - | - | `*` one row has no measurement here |
+| `qr_factor/n32/b1` | 0.009624 ± 0.00012004 (W 3.8484e-05) | 0.0127395 ± 0.000197289 (W 5.93858e-05) | 🔵 colmat 1.32× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `qr_factor/n64/b1` | 0.0510985 ± 0.000222926 (W 0.000913379) | 0.0600075 ± 0.000491258 (W 9.71508e-05) | 🔵 colmat 1.17× faster than `lapack-aocl` |  |
+| `qr_factor/n96/b1` | 0.151751 ± 0.000854253 (W 0.000935926) | 0.170336 ± 0.00108908 (W 0.00148378) | 🔵 colmat 1.12× faster than `lapack-aocl` |  |
+| `solve/n32/b1` | 0.008419 ± 7.62822e-05 (W 5.2594e-05) | 0.00512 ± 0.000217256 (W 2.95324e-05) | 🔴 colmat 1.64× slower than `lapack-aocl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `solve/n32/b1 [api-inclusive]` | 0.00984 ± 2.89165e-05 (W 4.59088e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n64/b1` | 0.029129 ± 0.000188987 (W 0.000205521) | 0.022954 ± 0.000220572 (W 0.000186283) | 🔴 colmat 1.27× slower than `lapack-aocl` |  |
+| `solve/n64/b1 [api-inclusive]` | 0.0336335 ± 0.000179884 (W 0.000204614) | - | - | `*` one row has no measurement here |
+| `solve/n96/b1` | 0.0554775 ± 0.00018153 (W 0.000203724) | 0.075333 ± 0.00256792 (W 0.00495482) | 🔵 colmat 1.36× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `solve/n96/b1 [api-inclusive]` | 0.098456 ± 0.00121004 (W 0.00165091) | - | - | `*` one row has no measurement here |
+| `svd_thin/n32/b1` | 0.129226 ± 0.000537105 (W 0.000296265) | 0.136468 ± 0.000333611 (W 0.000169698) | 🔵 colmat 1.06× faster than `lapack-aocl` |  |
+| `svd_thin/n32/b1 [api-inclusive]` | 0.128989 ± 0.00411479 (W 0.000863445) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_thin/n64/b1` | 0.470803 ± 0.0015954 (W 0.001907) | 0.54067 ± 0.00426356 (W 0.00222783) | 🔵 colmat 1.15× faster than `lapack-aocl` |  |
+| `svd_thin/n64/b1 [api-inclusive]` | 0.471881 ± 0.00308157 (W 0.00202483) | - | - | `*` one row has no measurement here |
+| `svd_thin/n96/b1` | 0.97372 ± 0.00254881 (W 0.0023449) | 1.31378 ± 0.00565581 (W 0.00785533) | 🔵 colmat 1.35× faster than `lapack-aocl` |  |
+| `svd_thin/n96/b1 [api-inclusive]` | 0.979934 ± 0.00364488 (W 0.00182319) | - | - | `*` one row has no measurement here |
+| `svd_values/n32/b1` | 0.0509885 ± 0.000152591 (W 5.45895e-05) | 0.0631725 ± 0.000383949 (W 0.000124141) | 🔵 colmat 1.24× faster than `lapack-aocl` |  |
+| `svd_values/n32/b1 [api-inclusive]` | 0.0505925 ± 0.000577601 (W 8.95117e-05) | - | - | `*` one row has no measurement here |
+| `svd_values/n64/b1` | 0.215753 ± 0.000550006 (W 0.00123546) | 0.229056 ± 0.00087893 (W 0.00161104) | 🔵 colmat 1.06× faster than `lapack-aocl` |  |
+| `svd_values/n64/b1 [api-inclusive]` | 0.215532 ± 0.000625683 (W 0.00105957) | - | - | `*` one row has no measurement here |
+| `svd_values/n96/b1` | 0.495397 ± 0.00136427 (W 0.0021203) | 0.55731 ± 0.00385717 (W 0.00174004) | 🔵 colmat 1.12× faster than `lapack-aocl` |  |
+| `svd_values/n96/b1 [api-inclusive]` | 0.494021 ± 0.00140132 (W 0.00218505) | - | - | `*` one row has no measurement here |
+| `triangular_solve/n32/b1` | 0.00093 ± 1.21106e-05 (W 2.08536e-05) | 0.00077 ± 9.83192e-06 (W 1.81895e-05) | 🔴 colmat 1.21× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n64/b1` | 0.0022245 ± 1.58798e-05 (W 2.43662e-05) | 0.00161 ± 1.50555e-05 (W 1.66658e-05) | 🔴 colmat 1.38× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n96/b1` | 0.003905 ± 2.84283e-05 (W 2.99893e-05) | 0.00278 ± 9.83192e-06 (W 1.78179e-05) | 🔴 colmat 1.40× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+
+## linalg-small, f32, c order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `cholesky/n32/b1` | 0.00217 ± 2.36643e-05 (W 3.50255e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `cholesky/n32/b1 [api-inclusive]` | 0.001745 ± 2.06559e-05 (W 2.42584e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `cholesky/n64/b1` | 0.0093095 ± 0.000507815 (W 3.43708e-05) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n64/b1 [api-inclusive]` | 0.00663 ± 1.62972e-05 (W 3.06852e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `cholesky/n96/b1` | 0.016524 ± 0.000191404 (W 3.89819e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `cholesky/n96/b1 [api-inclusive]` | 0.01304 ± 7.73736e-05 (W 5.29526e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `eigh/n32/b1` | 0.0513685 ± 0.000277338 (W 0.000200257) | - | - | `*` one row has no measurement here |
+| `eigh/n32/b1 [api-inclusive]` | 0.051698 ± 0.000397533 (W 0.000269345) | - | - | `*` one row has no measurement here |
+| `eigh/n64/b1` | 0.199554 ± 0.0012555 (W 0.00129389) | - | - | `*` one row has no measurement here |
+| `eigh/n64/b1 [api-inclusive]` | 0.199988 ± 0.000577368 (W 0.00114192) | - | - | `*` one row has no measurement here |
+| `eigh/n96/b1` | 0.472882 ± 0.0020536 (W 0.0016246) | - | - | `*` one row has no measurement here |
+| `eigh/n96/b1 [api-inclusive]` | 0.471392 ± 0.00375971 (W 0.00184273) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n32/b1` | 0.00756 ± 4.30368e-05 (W 4.4241e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n32/b1 [api-inclusive]` | 0.0101445 ± 0.000883846 (W 7.89159e-05) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n64/b1` | 0.027759 ± 7.66229e-05 (W 0.000119422) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n64/b1 [api-inclusive]` | 0.0348235 ± 0.000303882 (W 0.000115887) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n96/b1` | 0.0652535 ± 0.000500315 (W 0.000163936) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n96/b1 [api-inclusive]` | 0.079257 ± 0.0108279 (W 0.000635884) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `householder_apply/n32/b1 [block(basis=32,target=32)]` | 0.0041495 ± 5.89251e-05 (W 3.56835e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n32/b1 [sequence(basis=32,target=32)]` | 0.0041895 ± 6.27822e-05 (W 2.58133e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n64/b1 [block(basis=64,target=64)]` | 0.014639 ± 5.26713e-05 (W 7.38027e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n64/b1 [sequence(basis=64,target=64)]` | 0.014555 ± 3.63726e-05 (W 5.02191e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n96/b1 [block(basis=96,target=96)]` | 0.0402085 ± 0.000254249 (W 8.18491e-05) | - | - | `*` one row has no measurement here |
+| `householder_apply/n96/b1 [sequence(basis=96,target=96)]` | 0.040054 ± 0.000108997 (W 0.000220495) | - | - | `*` one row has no measurement here |
+| `lu/n32/b1` | 0.00414 ± 3.74166e-05 (W 3.78848e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n32/b1 [api-inclusive]` | 0.005365 ± 3.95158e-05 (W 8.26265e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n64/b1` | 0.0129145 ± 7.17746e-05 (W 8.69506e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n64/b1 [api-inclusive]` | 0.0171 ± 8.91381e-05 (W 0.000114975) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n96/b1` | 0.027379 ± 0.000115448 (W 0.000108351) | - | - | `*` one row has no measurement here |
+| `lu/n96/b1 [api-inclusive]` | 0.036224 ± 0.000245764 (W 0.000229012) | - | - | `*` one row has no measurement here |
+| `qr/n32/b1` | 0.017999 ± 5.97006e-05 (W 8.06855e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `qr/n32/b1 [api-inclusive]` | 0.0132345 ± 0.000165744 (W 0.000185402) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `qr/n64/b1` | 0.0572325 ± 0.000256313 (W 0.000653374) | - | - | `*` one row has no measurement here |
+| `qr/n64/b1 [api-inclusive]` | 0.044309 ± 0.000322878 (W 0.000221588) | - | - | `*` one row has no measurement here |
+| `qr/n96/b1` | 0.116763 ± 0.000347334 (W 0.00101023) | - | - | `*` one row has no measurement here |
+| `qr/n96/b1 [api-inclusive]` | 0.107858 ± 0.000525945 (W 0.000752465) | - | - | `*` one row has no measurement here |
+| `qr_factor/n32/b1` | 0.01152 ± 8.15853e-05 (W 8.76141e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `qr_factor/n64/b1` | 0.037954 ± 8.70871e-05 (W 0.000164562) | - | - | `*` one row has no measurement here |
+| `qr_factor/n96/b1` | 0.0704275 ± 0.000276698 (W 0.000110081) | - | - | `*` one row has no measurement here |
+| `solve/n32/b1` | 0.0047895 ± 9.54477e-05 (W 1.86862e-05) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `solve/n32/b1 [api-inclusive]` | 0.00636 ± 6.59545e-05 (W 3.96607e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n64/b1` | 0.01276 ± 0.000117303 (W 0.000108775) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n64/b1 [api-inclusive]` | 0.018114 ± 0.00187935 (W 8.91826e-05) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `solve/n96/b1` | 0.0252895 ± 7.92559e-05 (W 0.000152868) | - | - | `*` one row has no measurement here |
+| `solve/n96/b1 [api-inclusive]` | 0.0359735 ± 0.000160957 (W 0.000138) | - | - | `*` one row has no measurement here |
+| `svd_thin/n32/b1` | 0.0821015 ± 0.000522144 (W 0.000290411) | - | - | `*` one row has no measurement here |
+| `svd_thin/n32/b1 [api-inclusive]` | 0.0826975 ± 0.000612697 (W 0.00105776) | - | - | `*` one row has no measurement here |
+| `svd_thin/n64/b1` | 0.333676 ± 0.00167209 (W 0.00170563) | - | - | `*` one row has no measurement here |
+| `svd_thin/n64/b1 [api-inclusive]` | 0.345052 ± 0.00423208 (W 0.00303703) | - | - | `*` one row has no measurement here |
+| `svd_thin/n96/b1` | 0.762568 ± 0.00238684 (W 0.00203759) | - | - | `*` one row has no measurement here |
+| `svd_thin/n96/b1 [api-inclusive]` | 0.764292 ± 0.00180681 (W 0.00123849) | - | - | `*` one row has no measurement here |
+| `svd_values/n32/b1` | 0.0314995 ± 9.83472e-05 (W 9.72055e-05) | - | - | `*` one row has no measurement here |
+| `svd_values/n32/b1 [api-inclusive]` | 0.031734 ± 0.000104289 (W 0.00012659) | - | - | `*` one row has no measurement here |
+| `svd_values/n64/b1` | 0.11344 ± 0.000672711 (W 0.000436435) | - | - | `*` one row has no measurement here |
+| `svd_values/n64/b1 [api-inclusive]` | 0.113907 ± 0.000502362 (W 0.000704927) | - | - | `*` one row has no measurement here |
+| `svd_values/n96/b1` | 0.247537 ± 0.000946264 (W 0.00148832) | - | - | `*` one row has no measurement here |
+| `svd_values/n96/b1 [api-inclusive]` | 0.247966 ± 0.000795856 (W 0.00118913) | - | - | `*` one row has no measurement here |
+| `triangular_solve/n32/b1` | 0.00049 ± 5.16398e-06 (W 1.93125e-05) | 0.00057 ± 4.08248e-07 (W 1.78885e-05) | 🔵 colmat 1.16× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n64/b1` | 0.0010295 ± 7.49444e-06 (W 2.05743e-05) | 0.00107 ± 4.08248e-06 (W 2.34521e-05) | · | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n96/b1` | 0.00174 ± 1.8619e-05 (W 2.16795e-05) | 0.001605 ± 5.47723e-06 (W 2.29644e-05) | 🔴 colmat 1.08× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+
+## linalg-small, f32, c order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `cholesky/n32/b1` | 0.002185 ± 8.56359e-05 (W 1.98802e-05) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n32/b1 [api-inclusive]` | 0.001715 ± 1.47196e-05 (W 4.27625e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `cholesky/n64/b1` | 0.009314 ± 0.000610471 (W 4.29525e-05) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n64/b1 [api-inclusive]` | 0.006645 ± 0.000463882 (W 4.59364e-05) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n96/b1` | 0.01688 ± 0.00069844 (W 3.68956e-05) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n96/b1 [api-inclusive]` | 0.013399 ± 0.000766966 (W 6.98905e-05) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `eigh/n32/b1` | 0.039429 ± 0.000353817 (W 0.000123893) | - | - | `*` one row has no measurement here |
+| `eigh/n32/b1 [api-inclusive]` | 0.0402085 ± 0.000363467 (W 0.000340119) | - | - | `*` one row has no measurement here |
+| `eigh/n64/b1` | 0.118752 ± 0.000428072 (W 0.000309388) | - | - | `*` one row has no measurement here |
+| `eigh/n64/b1 [api-inclusive]` | 0.119871 ± 0.000711425 (W 0.000604974) | - | - | `*` one row has no measurement here |
+| `eigh/n96/b1` | 0.263076 ± 0.000968468 (W 0.00165691) | - | - | `*` one row has no measurement here |
+| `eigh/n96/b1 [api-inclusive]` | 0.272965 ± 0.00131307 (W 0.00221178) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n32/b1` | 0.008399 ± 6.70445e-05 (W 7.80516e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n32/b1 [api-inclusive]` | 0.010885 ± 5.64757e-05 (W 8.18616e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n64/b1` | 0.029769 ± 0.000567694 (W 8.55804e-05) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n64/b1 [api-inclusive]` | 0.0367535 ± 0.00463003 (W 0.000188253) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `full_piv_lu/n96/b1` | 0.068008 ± 0.000495207 (W 0.000661373) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n96/b1 [api-inclusive]` | 0.0805935 ± 0.000365621 (W 0.000264559) | - | - | `*` one row has no measurement here |
+| `householder_apply/n32/b1 [block(basis=32,target=32)]` | 0.0034895 ± 2.14826e-05 (W 6.95286e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n32/b1 [sequence(basis=32,target=32)]` | 0.0034345 ± 5.31429e-05 (W 7.0678e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n64/b1 [block(basis=64,target=64)]` | 0.0103995 ± 0.000253453 (W 0.000429112) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `householder_apply/n64/b1 [sequence(basis=64,target=64)]` | 0.0104795 ± 0.000128373 (W 0.000387943) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n96/b1 [block(basis=96,target=96)]` | 0.019884 ± 0.000169918 (W 0.00028843) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n96/b1 [sequence(basis=96,target=96)]` | 0.021159 ± 0.00150423 (W 0.00042557) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `lu/n32/b1` | 0.004165 ± 4.4364e-05 (W 5.11078e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n32/b1 [api-inclusive]` | 0.0054 ± 5.24992e-05 (W 5.49731e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n64/b1` | 0.01315 ± 3.95677e-05 (W 9.32209e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n64/b1 [api-inclusive]` | 0.01711 ± 0.000174319 (W 0.000124453) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n96/b1` | 0.036074 ± 0.00047854 (W 0.000999913) | - | - | `*` one row has no measurement here |
+| `lu/n96/b1 [api-inclusive]` | 0.036219 ± 0.000267697 (W 0.000282398) | - | - | `*` one row has no measurement here |
+| `qr/n32/b1` | 0.0188945 ± 7.03439e-05 (W 0.000103001) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `qr/n32/b1 [api-inclusive]` | 0.013255 ± 0.000139371 (W 0.000142478) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `qr/n64/b1` | 0.0466135 ± 0.000599872 (W 0.000847712) | - | - | `*` one row has no measurement here |
+| `qr/n64/b1 [api-inclusive]` | 0.0429335 ± 0.000184071 (W 0.000261766) | - | - | `*` one row has no measurement here |
+| `qr/n96/b1` | 0.0962815 ± 0.00133067 (W 0.001734) | - | - | `*` one row has no measurement here |
+| `qr/n96/b1 [api-inclusive]` | 0.090342 ± 0.000608403 (W 0.000550704) | - | - | `*` one row has no measurement here |
+| `qr_factor/n32/b1` | 0.0121945 ± 8.9097e-05 (W 8.23221e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `qr_factor/n64/b1` | 0.0231895 ± 0.000214178 (W 0.000152171) | - | - | `*` one row has no measurement here |
+| `qr_factor/n96/b1` | 0.050703 ± 0.000462563 (W 0.000292287) | - | - | `*` one row has no measurement here |
+| `solve/n32/b1` | 0.005 ± 9.12149e-05 (W 2.48552e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n32/b1 [api-inclusive]` | 0.00664 ± 4.81664e-05 (W 4.34898e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n64/b1` | 0.013329 ± 6.1613e-05 (W 6.11525e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n64/b1 [api-inclusive]` | 0.018574 ± 6.7429e-05 (W 7.92901e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n96/b1` | 0.029759 ± 0.000490255 (W 0.000687812) | - | - | `*` one row has no measurement here |
+| `solve/n96/b1 [api-inclusive]` | 0.0381435 ± 0.000240167 (W 0.000392396) | - | - | `*` one row has no measurement here |
+| `svd_thin/n32/b1` | 0.0822275 ± 0.000621563 (W 0.000744116) | - | - | `*` one row has no measurement here |
+| `svd_thin/n32/b1 [api-inclusive]` | 0.0837875 ± 0.000648232 (W 0.000257117) | - | - | `*` one row has no measurement here |
+| `svd_thin/n64/b1` | 0.284305 ± 0.000603334 (W 0.00100697) | - | - | `*` one row has no measurement here |
+| `svd_thin/n64/b1 [api-inclusive]` | 0.295673 ± 0.00178586 (W 0.00176366) | - | - | `*` one row has no measurement here |
+| `svd_thin/n96/b1` | 0.573956 ± 0.00367074 (W 0.00127662) | - | - | `*` one row has no measurement here |
+| `svd_thin/n96/b1 [api-inclusive]` | 0.573963 ± 0.00183438 (W 0.00180112) | - | - | `*` one row has no measurement here |
+| `svd_values/n32/b1` | 0.0326835 ± 0.00038735 (W 6.17604e-05) | - | - | `*` one row has no measurement here |
+| `svd_values/n32/b1 [api-inclusive]` | 0.0324845 ± 0.000225939 (W 6.37779e-05) | - | - | `*` one row has no measurement here |
+| `svd_values/n64/b1` | 0.114686 ± 0.000517198 (W 0.000282216) | - | - | `*` one row has no measurement here |
+| `svd_values/n64/b1 [api-inclusive]` | 0.115402 ± 0.000720867 (W 0.000311892) | - | - | `*` one row has no measurement here |
+| `svd_values/n96/b1` | 0.255478 ± 0.000433119 (W 0.00109724) | - | - | `*` one row has no measurement here |
+| `svd_values/n96/b1 [api-inclusive]` | 0.256682 ± 0.00121934 (W 0.0013312) | - | - | `*` one row has no measurement here |
+| `triangular_solve/n32/b1` | 0.00061 ± 8.3666e-06 (W 1.4924e-05) | 0.00057 ± 4.08248e-06 (W 2.0115e-05) | 🔴 colmat 1.07× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n64/b1` | 0.00132 ± 2e-05 (W 2.13705e-05) | 0.001075 ± 5.47723e-06 (W 2.16795e-05) | 🔴 colmat 1.23× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n96/b1` | 0.002135 ± 1.75119e-05 (W 3.0067e-05) | 0.0016 ± 4.08248e-06 (W 2.20201e-05) | 🔴 colmat 1.33× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+
+## linalg-small, f32, c order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `cholesky/n32/b1` | 0.00216 ± 2.42212e-05 (W 1.79516e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `cholesky/n32/b1 [api-inclusive]` | 0.00173 ± 1.97484e-05 (W 3.21667e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `cholesky/n64/b1` | 0.0085495 ± 0.000701761 (W 3.72133e-05) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n64/b1 [api-inclusive]` | 0.00666 ± 2.23644e-05 (W 3.52655e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `cholesky/n96/b1` | 0.016849 ± 0.00065965 (W 6.72741e-05) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n96/b1 [api-inclusive]` | 0.013374 ± 0.000736895 (W 6.26064e-05) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `eigh/n32/b1` | 0.0379125 ± 0.000181798 (W 0.000153454) | - | - | `*` one row has no measurement here |
+| `eigh/n32/b1 [api-inclusive]` | 0.038469 ± 0.000395308 (W 0.00017277) | - | - | `*` one row has no measurement here |
+| `eigh/n64/b1` | 0.107751 ± 0.000457316 (W 0.000789546) | - | - | `*` one row has no measurement here |
+| `eigh/n64/b1 [api-inclusive]` | 0.108585 ± 0.000623393 (W 0.00046269) | - | - | `*` one row has no measurement here |
+| `eigh/n96/b1` | 0.228667 ± 0.00147568 (W 0.00132769) | - | - | `*` one row has no measurement here |
+| `eigh/n96/b1 [api-inclusive]` | 0.240239 ± 0.00211524 (W 0.00333331) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n32/b1` | 0.0083545 ± 5.09732e-05 (W 6.14577e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n32/b1 [api-inclusive]` | 0.010929 ± 7.5843e-05 (W 5.23405e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n64/b1` | 0.0295045 ± 0.000244611 (W 0.000104849) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n64/b1 [api-inclusive]` | 0.0368385 ± 0.00439811 (W 0.000138206) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `full_piv_lu/n96/b1` | 0.066688 ± 0.000684554 (W 0.000249088) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n96/b1 [api-inclusive]` | 0.080582 ± 0.000181643 (W 0.000186492) | - | - | `*` one row has no measurement here |
+| `householder_apply/n32/b1 [block(basis=32,target=32)]` | 0.004125 ± 0.000127815 (W 0.000230877) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `householder_apply/n32/b1 [sequence(basis=32,target=32)]` | 0.00409 ± 0.000181648 (W 0.00029657) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `householder_apply/n64/b1 [block(basis=64,target=64)]` | 0.0095595 ± 0.00013631 (W 0.000360129) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n64/b1 [sequence(basis=64,target=64)]` | 0.0085395 ± 0.000182697 (W 0.000156798) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `householder_apply/n96/b1 [block(basis=96,target=96)]` | 0.0165595 ± 9.91948e-05 (W 0.000336862) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n96/b1 [sequence(basis=96,target=96)]` | 0.0162145 ± 0.000278398 (W 0.000502553) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n32/b1` | 0.004165 ± 5.08593e-05 (W 4.04111e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n32/b1 [api-inclusive]` | 0.00545 ± 4.30891e-05 (W 7.45022e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n64/b1` | 0.013094 ± 8.45119e-05 (W 7.15276e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n64/b1 [api-inclusive]` | 0.0170845 ± 0.000147966 (W 0.000134999) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n96/b1` | 0.0403345 ± 0.000805968 (W 0.0014073) | - | - | `*` one row has no measurement here |
+| `lu/n96/b1 [api-inclusive]` | 0.0362575 ± 0.00405619 (W 0.000300535) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr/n32/b1` | 0.019069 ± 9.47453e-05 (W 6.98556e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `qr/n32/b1 [api-inclusive]` | 0.0133695 ± 0.000141361 (W 0.000122711) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `qr/n64/b1` | 0.0465975 ± 0.000560971 (W 0.00100614) | - | - | `*` one row has no measurement here |
+| `qr/n64/b1 [api-inclusive]` | 0.0434485 ± 0.000254278 (W 0.000205222) | - | - | `*` one row has no measurement here |
+| `qr/n96/b1` | 0.0934315 ± 0.000490193 (W 0.000889688) | - | - | `*` one row has no measurement here |
+| `qr/n96/b1 [api-inclusive]` | 0.0898055 ± 0.000738219 (W 0.000551032) | - | - | `*` one row has no measurement here |
+| `qr_factor/n32/b1` | 0.012174 ± 6.10161e-05 (W 0.000112137) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `qr_factor/n64/b1` | 0.023279 ± 0.000297479 (W 0.000324818) | - | - | `*` one row has no measurement here |
+| `qr_factor/n96/b1` | 0.0483185 ± 0.00041491 (W 0.000368967) | - | - | `*` one row has no measurement here |
+| `solve/n32/b1` | 0.005075 ± 6.77958e-05 (W 4.0095e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n32/b1 [api-inclusive]` | 0.00669 ± 5.85855e-05 (W 5.02379e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n64/b1` | 0.0132445 ± 0.000112562 (W 8.55921e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n64/b1 [api-inclusive]` | 0.0187095 ± 8.69132e-05 (W 6.95373e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n96/b1` | 0.033714 ± 0.000607666 (W 0.00134357) | - | - | `*` one row has no measurement here |
+| `solve/n96/b1 [api-inclusive]` | 0.0383685 ± 0.000219864 (W 0.000365566) | - | - | `*` one row has no measurement here |
+| `svd_thin/n32/b1` | 0.0829725 ± 0.000623804 (W 0.000215057) | - | - | `*` one row has no measurement here |
+| `svd_thin/n32/b1 [api-inclusive]` | 0.083432 ± 0.000948758 (W 0.00031267) | - | - | `*` one row has no measurement here |
+| `svd_thin/n64/b1` | 0.285431 ± 0.00129868 (W 0.0014648) | - | - | `*` one row has no measurement here |
+| `svd_thin/n64/b1 [api-inclusive]` | 0.29658 ± 0.00341839 (W 0.00262769) | - | - | `*` one row has no measurement here |
+| `svd_thin/n96/b1` | 0.573847 ± 0.00202588 (W 0.00264769) | - | - | `*` one row has no measurement here |
+| `svd_thin/n96/b1 [api-inclusive]` | 0.57291 ± 0.00181 (W 0.00192022) | - | - | `*` one row has no measurement here |
+| `svd_values/n32/b1` | 0.0320835 ± 0.000324115 (W 8.1999e-05) | - | - | `*` one row has no measurement here |
+| `svd_values/n32/b1 [api-inclusive]` | 0.032444 ± 0.00024539 (W 7.6013e-05) | - | - | `*` one row has no measurement here |
+| `svd_values/n64/b1` | 0.114971 ± 0.000435364 (W 0.000227071) | - | - | `*` one row has no measurement here |
+| `svd_values/n64/b1 [api-inclusive]` | 0.114836 ± 0.000768111 (W 0.000406362) | - | - | `*` one row has no measurement here |
+| `svd_values/n96/b1` | 0.256845 ± 0.000686178 (W 0.00100853) | - | - | `*` one row has no measurement here |
+| `svd_values/n96/b1 [api-inclusive]` | 0.257802 ± 0.000746088 (W 0.00121244) | - | - | `*` one row has no measurement here |
+| `triangular_solve/n32/b1` | 0.00061 ± 5.30723e-06 (W 1.83011e-05) | 0.00057 ± 6.32456e-06 (W 1.68761e-05) | 🔴 colmat 1.07× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n64/b1` | 0.001325 ± 2.16025e-05 (W 2.35873e-05) | 0.00107 ± 4.08248e-06 (W 1.83324e-05) | 🔴 colmat 1.24× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n96/b1` | 0.00216 ± 1.50555e-05 (W 1.85841e-05) | 0.0016045 ± 5.30723e-06 (W 1.8732e-05) | 🔴 colmat 1.35× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+
+## linalg-small, f32, f order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `cholesky/n32/b1` | 0.00128 ± 1.41421e-05 (W 1.53782e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `cholesky/n32/b1 [api-inclusive]` | 0.00174 ± 1.0328e-05 (W 2.99981e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `cholesky/n64/b1` | 0.0056145 ± 2.87449e-05 (W 1.8481e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `cholesky/n64/b1 [api-inclusive]` | 0.006765 ± 4.24284e-05 (W 3.12795e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `cholesky/n96/b1` | 0.0107445 ± 6.59566e-05 (W 2.8032e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `cholesky/n96/b1 [api-inclusive]` | 0.01321 ± 6.27822e-05 (W 5.78489e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `eigh/n32/b1` | 0.0513835 ± 9.40971e-05 (W 0.000283525) | - | - | `*` one row has no measurement here |
+| `eigh/n32/b1 [api-inclusive]` | 0.051933 ± 0.000331512 (W 0.000160557) | - | - | `*` one row has no measurement here |
+| `eigh/n64/b1` | 0.199684 ± 0.00102154 (W 0.00126823) | - | - | `*` one row has no measurement here |
+| `eigh/n64/b1 [api-inclusive]` | 0.199879 ± 0.0011 (W 0.00135662) | - | - | `*` one row has no measurement here |
+| `eigh/n96/b1` | 0.472594 ± 0.00221249 (W 0.00192871) | - | - | `*` one row has no measurement here |
+| `eigh/n96/b1 [api-inclusive]` | 0.472344 ± 0.00242989 (W 0.00182169) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n32/b1` | 0.007825 ± 6.15359e-05 (W 5.6039e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n32/b1 [api-inclusive]` | 0.008685 ± 7.17635e-05 (W 6.92496e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n64/b1` | 0.0285745 ± 0.000193612 (W 0.000139441) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n64/b1 [api-inclusive]` | 0.0300395 ± 0.00408267 (W 0.00011825) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `full_piv_lu/n96/b1` | 0.067113 ± 0.000827046 (W 0.000342644) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n96/b1 [api-inclusive]` | 0.069773 ± 0.000839793 (W 0.000250721) | - | - | `*` one row has no measurement here |
+| `householder_apply/n32/b1 [block(basis=32,target=32)]` | 0.00452 ± 7.75672e-06 (W 4.59208e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n32/b1 [sequence(basis=32,target=32)]` | 0.0054695 ± 7.91212e-05 (W 0.000136244) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n64/b1 [block(basis=64,target=64)]` | 0.016429 ± 6.47778e-05 (W 6.59778e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n64/b1 [sequence(basis=64,target=64)]` | 0.01633 ± 0.000144345 (W 6.46844e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n96/b1 [block(basis=96,target=96)]` | 0.044644 ± 0.000174094 (W 9.87861e-05) | - | - | `*` one row has no measurement here |
+| `householder_apply/n96/b1 [sequence(basis=96,target=96)]` | 0.044199 ± 0.000168352 (W 0.000115416) | - | - | `*` one row has no measurement here |
+| `lu/n32/b1` | 0.00324 ± 3.07679e-05 (W 4.05149e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n32/b1 [api-inclusive]` | 0.004095 ± 6.04704e-05 (W 5.62205e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n64/b1` | 0.01128 ± 0.00010603 (W 0.000129675) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n64/b1 [api-inclusive]` | 0.0129095 ± 6.20988e-05 (W 0.000115488) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n96/b1` | 0.023464 ± 0.000293503 (W 0.000213417) | - | - | `*` one row has no measurement here |
+| `lu/n96/b1 [api-inclusive]` | 0.0263895 ± 0.000186827 (W 0.000138583) | - | - | `*` one row has no measurement here |
+| `qr/n32/b1` | 0.0107645 ± 0.000157095 (W 0.000133941) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `qr/n32/b1 [api-inclusive]` | 0.011979 ± 8.1164e-05 (W 0.000184316) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `qr/n64/b1` | 0.0370035 ± 0.000336812 (W 0.000154132) | - | - | `*` one row has no measurement here |
+| `qr/n64/b1 [api-inclusive]` | 0.039644 ± 0.00035865 (W 0.000654465) | - | - | `*` one row has no measurement here |
+| `qr/n96/b1` | 0.094146 ± 0.000486025 (W 0.00044426) | - | - | `*` one row has no measurement here |
+| `qr/n96/b1 [api-inclusive]` | 0.0977365 ± 0.000149341 (W 0.000339674) | - | - | `*` one row has no measurement here |
+| `qr_factor/n32/b1` | 0.00541 ± 7.06163e-05 (W 6.49626e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `qr_factor/n64/b1` | 0.018149 ± 0.000310834 (W 0.000118229) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `qr_factor/n96/b1` | 0.041114 ± 0.000334288 (W 0.000257083) | - | - | `*` one row has no measurement here |
+| `solve/n32/b1` | 0.00393 ± 2.28035e-05 (W 4.24976e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n32/b1 [api-inclusive]` | 0.00492 ± 8.51861e-05 (W 5.78292e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n64/b1` | 0.0115795 ± 9.82047e-05 (W 4.21748e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n64/b1 [api-inclusive]` | 0.0133795 ± 7.43167e-05 (W 8.41362e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n96/b1` | 0.023124 ± 0.000250655 (W 0.000176143) | - | - | `*` one row has no measurement here |
+| `solve/n96/b1 [api-inclusive]` | 0.026029 ± 0.000139184 (W 0.000127022) | - | - | `*` one row has no measurement here |
+| `svd_thin/n32/b1` | 0.0870925 ± 0.000428647 (W 0.000669795) | - | - | `*` one row has no measurement here |
+| `svd_thin/n32/b1 [api-inclusive]` | 0.0886715 ± 0.00124597 (W 0.000310914) | - | - | `*` one row has no measurement here |
+| `svd_thin/n64/b1` | 0.337187 ± 0.00686055 (W 0.0015666) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_thin/n64/b1 [api-inclusive]` | 0.346967 ± 0.00209314 (W 0.00425254) | - | - | `*` one row has no measurement here |
+| `svd_thin/n96/b1` | 0.766253 ± 0.00168589 (W 0.00159905) | - | - | `*` one row has no measurement here |
+| `svd_thin/n96/b1 [api-inclusive]` | 0.768703 ± 0.00547068 (W 0.00205137) | - | - | `*` one row has no measurement here |
+| `svd_values/n32/b1` | 0.0321595 ± 0.000163255 (W 6.05962e-05) | - | - | `*` one row has no measurement here |
+| `svd_values/n32/b1 [api-inclusive]` | 0.032414 ± 0.000139092 (W 0.000476254) | - | - | `*` one row has no measurement here |
+| `svd_values/n64/b1` | 0.116066 ± 0.000637105 (W 0.000704253) | - | - | `*` one row has no measurement here |
+| `svd_values/n64/b1 [api-inclusive]` | 0.116623 ± 0.00058039 (W 0.000617746) | - | - | `*` one row has no measurement here |
+| `svd_values/n96/b1` | 0.251538 ± 0.000856349 (W 0.00164459) | - | - | `*` one row has no measurement here |
+| `svd_values/n96/b1 [api-inclusive]` | 0.252614 ± 0.0015948 (W 0.00128554) | - | - | `*` one row has no measurement here |
+| `triangular_solve/n32/b1` | 0.00053 ± 8.3666e-06 (W 1.93645e-05) | 0.0005 ± 5.30723e-06 (W 3.28263e-05) | `?` not evidence vs `lapack-aocl`: a row's `W` is as large as the difference (rerun) | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n64/b1` | 0.001175 ± 1.64317e-05 (W 2.00724e-05) | 0.000915 ± 8.16497e-06 (W 2.6692e-05) | 🔴 colmat 1.28× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n96/b1` | 0.0019 ± 1.00083e-05 (W 3.06822e-05) | 0.00133 ± 6.32456e-06 (W 2.95269e-05) | 🔴 colmat 1.43× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+
+## linalg-small, f32, f order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `cholesky/n32/b1` | 0.001275 ± 6.95701e-05 (W 1.44682e-05) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n32/b1 [api-inclusive]` | 0.001695 ± 8.13429e-05 (W 3.38653e-05) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n64/b1` | 0.0056145 ± 0.000546436 (W 2.24706e-05) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n64/b1 [api-inclusive]` | 0.0067645 ± 0.000517633 (W 2.93089e-05) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n96/b1` | 0.0111845 ± 0.000560072 (W 4.66499e-05) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n96/b1 [api-inclusive]` | 0.013545 ± 0.000753755 (W 8.31493e-05) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `eigh/n32/b1` | 0.039589 ± 0.000154694 (W 0.000247026) | - | - | `*` one row has no measurement here |
+| `eigh/n32/b1 [api-inclusive]` | 0.0399685 ± 0.000354795 (W 0.000323259) | - | - | `*` one row has no measurement here |
+| `eigh/n64/b1` | 0.119285 ± 0.000459139 (W 0.000380735) | - | - | `*` one row has no measurement here |
+| `eigh/n64/b1 [api-inclusive]` | 0.119801 ± 0.000586397 (W 0.000469594) | - | - | `*` one row has no measurement here |
+| `eigh/n96/b1` | 0.263388 ± 0.00142662 (W 0.00193254) | - | - | `*` one row has no measurement here |
+| `eigh/n96/b1 [api-inclusive]` | 0.271636 ± 0.00251769 (W 0.00316917) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n32/b1` | 0.0085645 ± 8.73132e-05 (W 5.61283e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n32/b1 [api-inclusive]` | 0.009495 ± 4.58984e-05 (W 7.14104e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n64/b1` | 0.030784 ± 0.000140487 (W 7.27146e-05) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n64/b1 [api-inclusive]` | 0.031964 ± 0.000478151 (W 0.0001237) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n96/b1` | 0.0701325 ± 0.000370015 (W 0.000324895) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n96/b1 [api-inclusive]` | 0.0713625 ± 0.000611572 (W 0.000159629) | - | - | `*` one row has no measurement here |
+| `householder_apply/n32/b1 [block(basis=32,target=32)]` | 0.0033995 ± 8.2447e-05 (W 0.000134646) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `householder_apply/n32/b1 [sequence(basis=32,target=32)]` | 0.00342 ± 4.48126e-05 (W 5.5152e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n64/b1 [block(basis=64,target=64)]` | 0.0085595 ± 0.000945861 (W 0.000130361) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `householder_apply/n64/b1 [sequence(basis=64,target=64)]` | 0.008974 ± 0.000192403 (W 0.000170448) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `householder_apply/n96/b1 [block(basis=96,target=96)]` | 0.018179 ± 0.000166206 (W 0.000204712) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n96/b1 [sequence(basis=96,target=96)]` | 0.018324 ± 0.000170916 (W 0.000194062) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n32/b1` | 0.003315 ± 3.09236e-05 (W 3.42674e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n32/b1 [api-inclusive]` | 0.004175 ± 6.47302e-05 (W 6.09179e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n64/b1` | 0.0113445 ± 6.36985e-05 (W 0.00013911) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n64/b1 [api-inclusive]` | 0.01292 ± 6.3877e-05 (W 0.000116395) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n96/b1` | 0.0236645 ± 0.000253117 (W 0.00019458) | - | - | `*` one row has no measurement here |
+| `lu/n96/b1 [api-inclusive]` | 0.026434 ± 0.000103313 (W 0.000247839) | - | - | `*` one row has no measurement here |
+| `qr/n32/b1` | 0.010769 ± 4.8952e-05 (W 0.000124771) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `qr/n32/b1 [api-inclusive]` | 0.0119845 ± 0.00012879 (W 0.000174013) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `qr/n64/b1` | 0.036339 ± 0.000314102 (W 0.000236707) | - | - | `*` one row has no measurement here |
+| `qr/n64/b1 [api-inclusive]` | 0.038589 ± 0.000246488 (W 0.000257803) | - | - | `*` one row has no measurement here |
+| `qr/n96/b1` | 0.075763 ± 0.000608783 (W 0.000602034) | - | - | `*` one row has no measurement here |
+| `qr/n96/b1 [api-inclusive]` | 0.0803225 ± 0.000363943 (W 0.00047364) | - | - | `*` one row has no measurement here |
+| `qr_factor/n32/b1` | 0.00549 ± 6.121e-05 (W 5.82331e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `qr_factor/n64/b1` | 0.0182095 ± 0.000163092 (W 0.000124866) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `qr_factor/n96/b1` | 0.040923 ± 0.000599677 (W 0.000222743) | - | - | `*` one row has no measurement here |
+| `solve/n32/b1` | 0.004195 ± 5.31977e-05 (W 4.58768e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n32/b1 [api-inclusive]` | 0.005195 ± 3.37145e-05 (W 5.47109e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n64/b1` | 0.0123795 ± 7.5341e-05 (W 6.51256e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n64/b1 [api-inclusive]` | 0.0139745 ± 7.35865e-05 (W 0.000121052) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n96/b1` | 0.025499 ± 0.000250528 (W 0.000258682) | - | - | `*` one row has no measurement here |
+| `solve/n96/b1 [api-inclusive]` | 0.0280995 ± 0.000212454 (W 0.00020135) | - | - | `*` one row has no measurement here |
+| `svd_thin/n32/b1` | 0.088648 ± 0.00178014 (W 0.000288624) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_thin/n32/b1 [api-inclusive]` | 0.0889825 ± 0.000831695 (W 0.000250326) | - | - | `*` one row has no measurement here |
+| `svd_thin/n64/b1` | 0.282152 ± 0.000532243 (W 0.00120167) | - | - | `*` one row has no measurement here |
+| `svd_thin/n64/b1 [api-inclusive]` | 0.292826 ± 0.00194246 (W 0.00198067) | - | - | `*` one row has no measurement here |
+| `svd_thin/n96/b1` | 0.577598 ± 0.00148185 (W 0.00186561) | - | - | `*` one row has no measurement here |
+| `svd_thin/n96/b1 [api-inclusive]` | 0.579112 ± 0.000941327 (W 0.00182884) | - | - | `*` one row has no measurement here |
+| `svd_values/n32/b1` | 0.033424 ± 0.000128609 (W 7.37295e-05) | - | - | `*` one row has no measurement here |
+| `svd_values/n32/b1 [api-inclusive]` | 0.033039 ± 0.00011404 (W 0.000141687) | - | - | `*` one row has no measurement here |
+| `svd_values/n64/b1` | 0.117777 ± 0.0004534 (W 0.000368922) | - | - | `*` one row has no measurement here |
+| `svd_values/n64/b1 [api-inclusive]` | 0.118351 ± 0.000602981 (W 0.000707298) | - | - | `*` one row has no measurement here |
+| `svd_values/n96/b1` | 0.260138 ± 0.000354069 (W 0.00100584) | - | - | `*` one row has no measurement here |
+| `svd_values/n96/b1 [api-inclusive]` | 0.260094 ± 0.000388047 (W 0.00117275) | - | - | `*` one row has no measurement here |
+| `triangular_solve/n32/b1` | 0.00063 ± 1.16905e-05 (W 2.29126e-05) | 0.0005 ± 7.52773e-06 (W 2.8547e-05) | 🔴 colmat 1.26× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n64/b1` | 0.0014245 ± 1.47479e-05 (W 2.93082e-05) | 0.00092 ± 4.1833e-06 (W 2.49118e-05) | 🔴 colmat 1.55× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n96/b1` | 0.002225 ± 2.68328e-05 (W 3.33244e-05) | 0.001335 ± 8.16497e-06 (W 2.99958e-05) | 🔴 colmat 1.67× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+
+## linalg-small, f32, f order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `cholesky/n32/b1` | 0.001275 ± 7.52108e-05 (W 2.24187e-05) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n32/b1 [api-inclusive]` | 0.00175 ± 1.16905e-05 (W 2.40832e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `cholesky/n64/b1` | 0.005585 ± 0.000525325 (W 1.92262e-05) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n64/b1 [api-inclusive]` | 0.006755 ± 1.46833e-05 (W 4.06696e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `cholesky/n96/b1` | 0.0110395 ± 0.000710458 (W 3.74311e-05) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n96/b1 [api-inclusive]` | 0.0135895 ± 0.000502777 (W 4.6569e-05) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `eigh/n32/b1` | 0.0380535 ± 0.000249223 (W 0.000233923) | - | - | `*` one row has no measurement here |
+| `eigh/n32/b1 [api-inclusive]` | 0.0384325 ± 0.00039943 (W 0.000251619) | - | - | `*` one row has no measurement here |
+| `eigh/n64/b1` | 0.107849 ± 0.000730104 (W 0.000402669) | - | - | `*` one row has no measurement here |
+| `eigh/n64/b1 [api-inclusive]` | 0.108561 ± 0.00128606 (W 0.00140169) | - | - | `*` one row has no measurement here |
+| `eigh/n96/b1` | 0.227847 ± 0.00169111 (W 0.00162291) | - | - | `*` one row has no measurement here |
+| `eigh/n96/b1 [api-inclusive]` | 0.238973 ± 0.0025413 (W 0.00292163) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n32/b1` | 0.0085745 ± 3.60869e-05 (W 5.29095e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n32/b1 [api-inclusive]` | 0.0095345 ± 5.26713e-05 (W 8.14017e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n64/b1` | 0.0302935 ± 0.000143366 (W 9.12607e-05) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n64/b1 [api-inclusive]` | 0.032079 ± 0.00104972 (W 0.000105953) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `full_piv_lu/n96/b1` | 0.068363 ± 0.000139226 (W 0.000177548) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n96/b1 [api-inclusive]` | 0.071706 ± 0.0110857 (W 0.000248682) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `householder_apply/n32/b1 [block(basis=32,target=32)]` | 0.00358 ± 8.75909e-05 (W 9.48309e-05) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `householder_apply/n32/b1 [sequence(basis=32,target=32)]` | 0.0036145 ± 5.02013e-05 (W 9.47119e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n64/b1 [block(basis=64,target=64)]` | 0.0076495 ± 0.000112281 (W 0.000205331) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n64/b1 [sequence(basis=64,target=64)]` | 0.0075695 ± 0.000183576 (W 0.000157622) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `householder_apply/n96/b1 [block(basis=96,target=96)]` | 0.0140245 ± 0.000109448 (W 0.000253539) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n96/b1 [sequence(basis=96,target=96)]` | 0.0138945 ± 0.000114395 (W 0.000217046) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n32/b1` | 0.0033 ± 2.51429e-05 (W 3.38774e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n32/b1 [api-inclusive]` | 0.00415 ± 2.16372e-05 (W 4.42053e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n64/b1` | 0.0112595 ± 8.77398e-05 (W 9.07581e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n64/b1 [api-inclusive]` | 0.013039 ± 0.000114741 (W 0.00012102) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n96/b1` | 0.0236845 ± 0.000198906 (W 0.000257228) | - | - | `*` one row has no measurement here |
+| `lu/n96/b1 [api-inclusive]` | 0.0266535 ± 0.000240816 (W 0.000217483) | - | - | `*` one row has no measurement here |
+| `qr/n32/b1` | 0.0109745 ± 0.000183569 (W 8.91114e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `qr/n32/b1 [api-inclusive]` | 0.0122245 ± 0.000304185 (W 0.000143636) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `qr/n64/b1` | 0.0363185 ± 0.000174845 (W 0.000181992) | - | - | `*` one row has no measurement here |
+| `qr/n64/b1 [api-inclusive]` | 0.0390585 ± 0.000971224 (W 0.000202666) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr/n96/b1` | 0.074367 ± 0.00088406 (W 0.000371725) | - | - | `*` one row has no measurement here |
+| `qr/n96/b1 [api-inclusive]` | 0.0797625 ± 0.000540672 (W 0.00076804) | - | - | `*` one row has no measurement here |
+| `qr_factor/n32/b1` | 0.005485 ± 8.06484e-05 (W 3.44145e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `qr_factor/n64/b1` | 0.0183585 ± 0.000226352 (W 0.000123505) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `qr_factor/n96/b1` | 0.041028 ± 0.000358183 (W 0.000404279) | - | - | `*` one row has no measurement here |
+| `solve/n32/b1` | 0.0042345 ± 4.03931e-05 (W 3.38807e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n32/b1 [api-inclusive]` | 0.00525 ± 6.02011e-05 (W 3.89403e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n64/b1` | 0.012325 ± 0.000221709 (W 7.10833e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n64/b1 [api-inclusive]` | 0.014049 ± 0.000126183 (W 6.18201e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n96/b1` | 0.025339 ± 0.000272219 (W 0.000337001) | - | - | `*` one row has no measurement here |
+| `solve/n96/b1 [api-inclusive]` | 0.028374 ± 0.0002447 (W 0.000345963) | - | - | `*` one row has no measurement here |
+| `svd_thin/n32/b1` | 0.088375 ± 0.00104467 (W 0.000346399) | - | - | `*` one row has no measurement here |
+| `svd_thin/n32/b1 [api-inclusive]` | 0.0891025 ± 0.00515757 (W 0.00124101) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_thin/n64/b1` | 0.28271 ± 0.000670278 (W 0.00179839) | - | - | `*` one row has no measurement here |
+| `svd_thin/n64/b1 [api-inclusive]` | 0.295104 ± 0.00179971 (W 0.00247933) | - | - | `*` one row has no measurement here |
+| `svd_thin/n96/b1` | 0.57913 ± 0.00209495 (W 0.00236511) | - | - | `*` one row has no measurement here |
+| `svd_thin/n96/b1 [api-inclusive]` | 0.580302 ± 0.00279799 (W 0.00336324) | - | - | `*` one row has no measurement here |
+| `svd_values/n32/b1` | 0.032778 ± 0.000158705 (W 7.29517e-05) | - | - | `*` one row has no measurement here |
+| `svd_values/n32/b1 [api-inclusive]` | 0.033103 ± 0.00012628 (W 6.85133e-05) | - | - | `*` one row has no measurement here |
+| `svd_values/n64/b1` | 0.117567 ± 0.000691271 (W 0.000288932) | - | - | `*` one row has no measurement here |
+| `svd_values/n64/b1 [api-inclusive]` | 0.117741 ± 0.000552079 (W 0.000860029) | - | - | `*` one row has no measurement here |
+| `svd_values/n96/b1` | 0.261297 ± 0.00110141 (W 0.00109511) | - | - | `*` one row has no measurement here |
+| `svd_values/n96/b1 [api-inclusive]` | 0.260848 ± 0.00124949 (W 0.00117267) | - | - | `*` one row has no measurement here |
+| `triangular_solve/n32/b1` | 0.00064 ± 8.3666e-06 (W 1.92354e-05) | 0.000515 ± 1.8619e-05 (W 2.91527e-05) | 🔴 colmat 1.24× slower than `lapack-aocl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `triangular_solve/n64/b1` | 0.001425 ± 2.69846e-05 (W 2.70775e-05) | 0.00091 ± 1.16905e-05 (W 2.39608e-05) | 🔴 colmat 1.57× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n96/b1` | 0.002295 ± 2.80476e-05 (W 2.60494e-05) | 0.00131 ± 2e-05 (W 3.30026e-05) | 🔴 colmat 1.75× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+
+## linalg-small, c32, c order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `cholesky/n32/b1` | 0.0084345 ± 4.03175e-05 (W 4.57356e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `cholesky/n32/b1 [api-inclusive]` | 0.007995 ± 2.49833e-05 (W 4.82208e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `cholesky/n64/b1` | 0.0465085 ± 0.000118955 (W 0.0001246) | - | - | `*` one row has no measurement here |
+| `cholesky/n64/b1 [api-inclusive]` | 0.0441625 ± 9.02103e-05 (W 0.000144455) | - | - | `*` one row has no measurement here |
+| `cholesky/n96/b1` | 0.071283 ± 0.000117031 (W 0.000144087) | - | - | `*` one row has no measurement here |
+| `cholesky/n96/b1 [api-inclusive]` | 0.067363 ± 0.000108497 (W 0.000199207) | - | - | `*` one row has no measurement here |
+| `eigh/n32/b1` | 0.0614975 ± 0.000145562 (W 0.000684445) | - | - | `*` one row has no measurement here |
+| `eigh/n32/b1 [api-inclusive]` | 0.062383 ± 0.000237567 (W 0.00011164) | - | - | `*` one row has no measurement here |
+| `eigh/n64/b1` | 0.246401 ± 0.000868665 (W 0.00129726) | - | - | `*` one row has no measurement here |
+| `eigh/n64/b1 [api-inclusive]` | 0.252174 ± 0.00147007 (W 0.0028059) | - | - | `*` one row has no measurement here |
+| `eigh/n96/b1` | 0.59692 ± 0.00176732 (W 0.00151796) | - | - | `*` one row has no measurement here |
+| `eigh/n96/b1 [api-inclusive]` | 0.598078 ± 0.0016998 (W 0.00165774) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n32/b1` | 0.0097895 ± 0.000272025 (W 6.90124e-05) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n32/b1 [api-inclusive]` | 0.012185 ± 5.42983e-05 (W 8.67987e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n64/b1` | 0.040849 ± 0.00039129 (W 0.000148913) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n64/b1 [api-inclusive]` | 0.0489435 ± 0.000163141 (W 0.000155335) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n96/b1` | 0.11026 ± 0.000347396 (W 0.000259228) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n96/b1 [api-inclusive]` | 0.133071 ± 0.00119205 (W 0.00159209) | - | - | `*` one row has no measurement here |
+| `householder_apply/n32/b1 [block(basis=32,target=32)]` | 0.009285 ± 6.53618e-05 (W 0.000209143) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n32/b1 [sequence(basis=32,target=32)]` | 0.00938 ± 4.09422e-05 (W 5.49709e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n64/b1 [block(basis=64,target=64)]` | 0.0426035 ± 0.000161939 (W 0.000113754) | - | - | `*` one row has no measurement here |
+| `householder_apply/n64/b1 [sequence(basis=64,target=64)]` | 0.0425035 ± 0.000262464 (W 0.000172251) | - | - | `*` one row has no measurement here |
+| `householder_apply/n96/b1 [block(basis=96,target=96)]` | 0.116621 ± 0.000223095 (W 0.000245473) | - | - | `*` one row has no measurement here |
+| `householder_apply/n96/b1 [sequence(basis=96,target=96)]` | 0.116531 ± 0.000261244 (W 0.000516166) | - | - | `*` one row has no measurement here |
+| `lu/n32/b1` | 0.006545 ± 4.5345e-05 (W 3.54467e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n32/b1 [api-inclusive]` | 0.00784 ± 3.20936e-05 (W 8.24128e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n64/b1` | 0.023064 ± 7.30224e-05 (W 7.55088e-05) | - | - | `*` one row has no measurement here |
+| `lu/n64/b1 [api-inclusive]` | 0.027679 ± 0.000139092 (W 0.000100855) | - | - | `*` one row has no measurement here |
+| `lu/n96/b1` | 0.052518 ± 0.000332594 (W 0.0001879) | - | - | `*` one row has no measurement here |
+| `lu/n96/b1 [api-inclusive]` | 0.0674335 ± 0.000541129 (W 0.0003305) | - | - | `*` one row has no measurement here |
+| `qr/n32/b1` | 0.033154 ± 9.50798e-05 (W 0.000107755) | - | - | `*` one row has no measurement here |
+| `qr/n32/b1 [api-inclusive]` | 0.0240695 ± 0.000571626 (W 6.17393e-05) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr/n64/b1` | 0.109542 ± 0.000377612 (W 0.000188917) | - | - | `*` one row has no measurement here |
+| `qr/n64/b1 [api-inclusive]` | 0.0935575 ± 0.00133416 (W 0.0010363) | - | - | `*` one row has no measurement here |
+| `qr/n96/b1` | 0.23667 ± 0.00048535 (W 0.00167009) | - | - | `*` one row has no measurement here |
+| `qr/n96/b1 [api-inclusive]` | 0.251947 ± 0.00137307 (W 0.0017792) | - | - | `*` one row has no measurement here |
+| `qr_factor/n32/b1` | 0.0191895 ± 9.16095e-05 (W 0.000114681) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `qr_factor/n64/b1` | 0.0621225 ± 0.000114386 (W 0.000138627) | - | - | `*` one row has no measurement here |
+| `qr_factor/n96/b1` | 0.127877 ± 0.000584905 (W 0.00109323) | - | - | `*` one row has no measurement here |
+| `solve/n32/b1` | 0.0070295 ± 3.98949e-05 (W 3.83465e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n32/b1 [api-inclusive]` | 0.0087045 ± 3.96354e-05 (W 5.98406e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n64/b1` | 0.022269 ± 0.00023047 (W 8.30137e-05) | - | - | `*` one row has no measurement here |
+| `solve/n64/b1 [api-inclusive]` | 0.028164 ± 8.77582e-05 (W 6.32041e-05) | - | - | `*` one row has no measurement here |
+| `solve/n96/b1` | 0.0500485 ± 0.000223365 (W 6.28773e-05) | - | - | `*` one row has no measurement here |
+| `solve/n96/b1 [api-inclusive]` | 0.0689675 ± 0.000550079 (W 0.00163209) | - | - | `*` one row has no measurement here |
+| `svd_thin/n32/b1` | 0.0998705 ± 0.00110371 (W 0.00102488) | - | - | `*` one row has no measurement here |
+| `svd_thin/n32/b1 [api-inclusive]` | 0.100322 ± 0.000562481 (W 0.00018509) | - | - | `*` one row has no measurement here |
+| `svd_thin/n64/b1` | 0.415878 ± 0.00218991 (W 0.00174638) | - | - | `*` one row has no measurement here |
+| `svd_thin/n64/b1 [api-inclusive]` | 0.41677 ± 0.00135422 (W 0.00144558) | - | - | `*` one row has no measurement here |
+| `svd_thin/n96/b1` | 0.989563 ± 0.00365276 (W 0.00100616) | - | - | `*` one row has no measurement here |
+| `svd_thin/n96/b1 [api-inclusive]` | 0.990081 ± 0.00127491 (W 0.000550552) | - | - | `*` one row has no measurement here |
+| `svd_values/n32/b1` | 0.037359 ± 0.000141323 (W 5.72643e-05) | - | - | `*` one row has no measurement here |
+| `svd_values/n32/b1 [api-inclusive]` | 0.037539 ± 0.000143813 (W 7.71094e-05) | - | - | `*` one row has no measurement here |
+| `svd_values/n64/b1` | 0.139616 ± 0.000449255 (W 0.0010856) | - | - | `*` one row has no measurement here |
+| `svd_values/n64/b1 [api-inclusive]` | 0.140047 ± 0.000181727 (W 0.000988681) | - | - | `*` one row has no measurement here |
+| `svd_values/n96/b1` | 0.340475 ± 0.00255549 (W 0.00141709) | - | - | `*` one row has no measurement here |
+| `svd_values/n96/b1 [api-inclusive]` | 0.342522 ± 0.00237455 (W 0.00182784) | - | - | `*` one row has no measurement here |
+| `triangular_solve/n32/b1` | 0.00069 ± 7.58288e-06 (W 2.28035e-05) | 0.00092 ± 5.16398e-06 (W 1.99972e-05) | 🔵 colmat 1.33× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n64/b1` | 0.00159 ± 1.21106e-05 (W 1.56525e-05) | 0.001845 ± 8.16497e-06 (W 1.79511e-05) | 🔵 colmat 1.16× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n96/b1` | 0.00276 ± 8.72735e-06 (W 2.36655e-05) | 0.00285 ± 1.16905e-05 (W 1.37793e-05) | · | dispatch-dominated (row under 20 us) |
+
+## linalg-small, c32, c order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `cholesky/n32/b1` | 0.00841 ± 1.3784e-05 (W 3.06756e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `cholesky/n32/b1 [api-inclusive]` | 0.00798 ± 2.55636e-05 (W 3.53237e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `cholesky/n64/b1` | 0.0466825 ± 0.000210225 (W 0.000125194) | - | - | `*` one row has no measurement here |
+| `cholesky/n64/b1 [api-inclusive]` | 0.0441335 ± 6.5974e-05 (W 0.000148878) | - | - | `*` one row has no measurement here |
+| `cholesky/n96/b1` | 0.07076 ± 0.000111801 (W 0.000917414) | - | - | `*` one row has no measurement here |
+| `cholesky/n96/b1 [api-inclusive]` | 0.067291 ± 0.000287215 (W 0.00029374) | - | - | `*` one row has no measurement here |
+| `eigh/n32/b1` | 0.0512885 ± 0.000275727 (W 0.000124202) | - | - | `*` one row has no measurement here |
+| `eigh/n32/b1 [api-inclusive]` | 0.0523135 ± 0.000854069 (W 0.000124208) | - | - | `*` one row has no measurement here |
+| `eigh/n64/b1` | 0.15329 ± 0.000653204 (W 0.000363004) | - | - | `*` one row has no measurement here |
+| `eigh/n64/b1 [api-inclusive]` | 0.15387 ± 0.000373747 (W 0.000472951) | - | - | `*` one row has no measurement here |
+| `eigh/n96/b1` | 0.333549 ± 0.000970997 (W 0.00181144) | - | - | `*` one row has no measurement here |
+| `eigh/n96/b1 [api-inclusive]` | 0.335174 ± 0.000529131 (W 0.00136569) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n32/b1` | 0.0102545 ± 0.000114147 (W 9.0687e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n32/b1 [api-inclusive]` | 0.012719 ± 3.15954e-05 (W 5.82664e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n64/b1` | 0.0427885 ± 0.00111856 (W 0.000178835) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `full_piv_lu/n64/b1 [api-inclusive]` | 0.0502775 ± 0.000404009 (W 0.000138586) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n96/b1` | 0.099676 ± 0.000651052 (W 0.000498838) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n96/b1 [api-inclusive]` | 0.122806 ± 0.00104256 (W 0.00148297) | - | - | `*` one row has no measurement here |
+| `householder_apply/n32/b1 [block(basis=32,target=32)]` | 0.0067295 ± 0.000131993 (W 0.000158845) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `householder_apply/n32/b1 [sequence(basis=32,target=32)]` | 0.00663 ± 0.000116603 (W 0.00019881) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n64/b1 [block(basis=64,target=64)]` | 0.022789 ± 0.000237024 (W 0.000249426) | - | - | `*` one row has no measurement here |
+| `householder_apply/n64/b1 [sequence(basis=64,target=64)]` | 0.022569 ± 0.000179872 (W 0.000232999) | - | - | `*` one row has no measurement here |
+| `householder_apply/n96/b1 [block(basis=96,target=96)]` | 0.0476225 ± 0.000326204 (W 0.000339971) | - | - | `*` one row has no measurement here |
+| `householder_apply/n96/b1 [sequence(basis=96,target=96)]` | 0.047394 ± 0.000295608 (W 0.000258966) | - | - | `*` one row has no measurement here |
+| `lu/n32/b1` | 0.006595 ± 3.32305e-05 (W 3.68688e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n32/b1 [api-inclusive]` | 0.0079145 ± 7.48706e-05 (W 5.92762e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n64/b1` | 0.026549 ± 0.00031078 (W 0.000409254) | - | - | `*` one row has no measurement here |
+| `lu/n64/b1 [api-inclusive]` | 0.0271545 ± 0.000171209 (W 0.000172208) | - | - | `*` one row has no measurement here |
+| `lu/n96/b1` | 0.0604315 ± 0.000804321 (W 0.000911439) | - | - | `*` one row has no measurement here |
+| `lu/n96/b1 [api-inclusive]` | 0.0633385 ± 0.000592156 (W 0.00156731) | - | - | `*` one row has no measurement here |
+| `qr/n32/b1` | 0.034139 ± 0.000182645 (W 0.000114503) | - | - | `*` one row has no measurement here |
+| `qr/n32/b1 [api-inclusive]` | 0.0234495 ± 6.04365e-05 (W 4.92342e-05) | - | - | `*` one row has no measurement here |
+| `qr/n64/b1` | 0.0760225 ± 0.000620931 (W 0.00127287) | - | - | `*` one row has no measurement here |
+| `qr/n64/b1 [api-inclusive]` | 0.0795665 ± 0.00174787 (W 0.000227097) | - | - | `*` one row has no measurement here |
+| `qr/n96/b1` | 0.185764 ± 0.00118354 (W 0.00164568) | - | - | `*` one row has no measurement here |
+| `qr/n96/b1 [api-inclusive]` | 0.20814 ± 0.000696639 (W 0.00223473) | - | - | `*` one row has no measurement here |
+| `qr_factor/n32/b1` | 0.019835 ± 0.000170699 (W 9.03472e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `qr_factor/n64/b1` | 0.0453475 ± 0.000114842 (W 0.000165415) | - | - | `*` one row has no measurement here |
+| `qr_factor/n96/b1` | 0.126382 ± 0.000360228 (W 0.000817162) | - | - | `*` one row has no measurement here |
+| `solve/n32/b1` | 0.007535 ± 5.55002e-05 (W 5.64483e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n32/b1 [api-inclusive]` | 0.0091 ± 3.92717e-05 (W 6.94725e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n64/b1` | 0.0248735 ± 0.000245485 (W 0.000160274) | - | - | `*` one row has no measurement here |
+| `solve/n64/b1 [api-inclusive]` | 0.02887 ± 0.000133539 (W 0.000218478) | - | - | `*` one row has no measurement here |
+| `solve/n96/b1` | 0.0510435 ± 0.000418854 (W 0.000720159) | - | - | `*` one row has no measurement here |
+| `solve/n96/b1 [api-inclusive]` | 0.0657885 ± 0.000934879 (W 0.00183021) | - | - | `*` one row has no measurement here |
+| `svd_thin/n32/b1` | 0.100746 ± 0.000402518 (W 0.000512291) | - | - | `*` one row has no measurement here |
+| `svd_thin/n32/b1 [api-inclusive]` | 0.101583 ± 0.000496013 (W 0.000135955) | - | - | `*` one row has no measurement here |
+| `svd_thin/n64/b1` | 0.335532 ± 0.00170151 (W 0.00164069) | - | - | `*` one row has no measurement here |
+| `svd_thin/n64/b1 [api-inclusive]` | 0.336296 ± 0.00574584 (W 0.00141409) | - | - | `*` one row has no measurement here |
+| `svd_thin/n96/b1` | 0.705177 ± 0.00246837 (W 0.00226991) | - | - | `*` one row has no measurement here |
+| `svd_thin/n96/b1 [api-inclusive]` | 0.708023 ± 0.00490507 (W 0.00288203) | - | - | `*` one row has no measurement here |
+| `svd_values/n32/b1` | 0.0381785 ± 0.000260334 (W 6.24184e-05) | - | - | `*` one row has no measurement here |
+| `svd_values/n32/b1 [api-inclusive]` | 0.0383185 ± 0.000244229 (W 9.16322e-05) | - | - | `*` one row has no measurement here |
+| `svd_values/n64/b1` | 0.144159 ± 0.000281271 (W 0.000131032) | - | - | `*` one row has no measurement here |
+| `svd_values/n64/b1 [api-inclusive]` | 0.149967 ± 0.00295162 (W 0.000223639) | - | - | `*` one row has no measurement here |
+| `svd_values/n96/b1` | 0.342647 ± 0.00225551 (W 0.00131701) | - | - | `*` one row has no measurement here |
+| `svd_values/n96/b1 [api-inclusive]` | 0.341317 ± 0.00144795 (W 0.00130642) | - | - | `*` one row has no measurement here |
+| `triangular_solve/n32/b1` | 0.00085 ± 8.94427e-06 (W 1.85841e-05) | 0.00092 ± 5.16398e-06 (W 1.8562e-05) | 🔵 colmat 1.08× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n64/b1` | 0.0019295 ± 1.83348e-05 (W 2.0653e-05) | 0.001845 ± 5.47723e-06 (W 1.81021e-05) | · | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n96/b1` | 0.003275 ± 1.83485e-05 (W 1.98249e-05) | 0.00284 ± 4.91596e-06 (W 1.93698e-05) | 🔴 colmat 1.15× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+
+## linalg-small, c32, c order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `cholesky/n32/b1` | 0.0085145 ± 4.88416e-05 (W 3.32899e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `cholesky/n32/b1 [api-inclusive]` | 0.00804 ± 2.44186e-05 (W 4.83796e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `cholesky/n64/b1` | 0.046528 ± 8.74035e-05 (W 0.000128554) | - | - | `*` one row has no measurement here |
+| `cholesky/n64/b1 [api-inclusive]` | 0.044123 ± 0.00014727 (W 0.000135514) | - | - | `*` one row has no measurement here |
+| `cholesky/n96/b1` | 0.0707435 ± 0.000239175 (W 0.000174568) | - | - | `*` one row has no measurement here |
+| `cholesky/n96/b1 [api-inclusive]` | 0.067648 ± 0.000218111 (W 0.000337136) | - | - | `*` one row has no measurement here |
+| `eigh/n32/b1` | 0.049613 ± 0.000158444 (W 0.000122267) | - | - | `*` one row has no measurement here |
+| `eigh/n32/b1 [api-inclusive]` | 0.0506075 ± 0.000678941 (W 0.000229134) | - | - | `*` one row has no measurement here |
+| `eigh/n64/b1` | 0.138569 ± 0.000584607 (W 0.000685948) | - | - | `*` one row has no measurement here |
+| `eigh/n64/b1 [api-inclusive]` | 0.139014 ± 0.00064741 (W 0.000523797) | - | - | `*` one row has no measurement here |
+| `eigh/n96/b1` | 0.29334 ± 0.00109665 (W 0.00178041) | - | - | `*` one row has no measurement here |
+| `eigh/n96/b1 [api-inclusive]` | 0.296376 ± 0.000909983 (W 0.00178996) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n32/b1` | 0.01039 ± 6.98589e-05 (W 9.5075e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n32/b1 [api-inclusive]` | 0.01278 ± 0.000163435 (W 8.41163e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n64/b1` | 0.042233 ± 0.000423453 (W 8.37046e-05) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n64/b1 [api-inclusive]` | 0.0502275 ± 0.000170229 (W 0.000106327) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n96/b1` | 0.101949 ± 0.000730667 (W 0.000777367) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n96/b1 [api-inclusive]` | 0.129215 ± 0.00134879 (W 0.00124979) | - | - | `*` one row has no measurement here |
+| `householder_apply/n32/b1 [block(basis=32,target=32)]` | 0.0054045 ± 0.00012836 (W 0.000134318) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `householder_apply/n32/b1 [sequence(basis=32,target=32)]` | 0.0052795 ± 0.000146888 (W 0.000110816) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `householder_apply/n64/b1 [block(basis=64,target=64)]` | 0.0158145 ± 0.0002437 (W 0.000320825) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n64/b1 [sequence(basis=64,target=64)]` | 0.0156845 ± 0.000170746 (W 0.000280824) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n96/b1 [block(basis=96,target=96)]` | 0.0333195 ± 0.000245113 (W 0.000674647) | - | - | `*` one row has no measurement here |
+| `householder_apply/n96/b1 [sequence(basis=96,target=96)]` | 0.032104 ± 0.000221321 (W 0.000421661) | - | - | `*` one row has no measurement here |
+| `lu/n32/b1` | 0.0066045 ± 5.09657e-05 (W 3.97347e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n32/b1 [api-inclusive]` | 0.0079 ± 7.93196e-05 (W 7.71947e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n64/b1` | 0.0271995 ± 0.000213262 (W 0.000571564) | - | - | `*` one row has no measurement here |
+| `lu/n64/b1 [api-inclusive]` | 0.0270085 ± 0.000203008 (W 0.000150642) | - | - | `*` one row has no measurement here |
+| `lu/n96/b1` | 0.0599635 ± 0.000878006 (W 0.00117436) | - | - | `*` one row has no measurement here |
+| `lu/n96/b1 [api-inclusive]` | 0.0638615 ± 0.00043694 (W 0.00147222) | - | - | `*` one row has no measurement here |
+| `qr/n32/b1` | 0.0341635 ± 0.000247131 (W 0.000114821) | - | - | `*` one row has no measurement here |
+| `qr/n32/b1 [api-inclusive]` | 0.023559 ± 0.000226275 (W 4.39144e-05) | - | - | `*` one row has no measurement here |
+| `qr/n64/b1` | 0.075893 ± 0.000443845 (W 0.000686152) | - | - | `*` one row has no measurement here |
+| `qr/n64/b1 [api-inclusive]` | 0.075296 ± 0.000753154 (W 0.000213799) | - | - | `*` one row has no measurement here |
+| `qr/n96/b1` | 0.17429 ± 0.000959766 (W 0.00126969) | - | - | `*` one row has no measurement here |
+| `qr/n96/b1 [api-inclusive]` | 0.197018 ± 0.000877086 (W 0.00215119) | - | - | `*` one row has no measurement here |
+| `qr_factor/n32/b1` | 0.019844 ± 0.00327739 (W 0.00015395) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `qr_factor/n64/b1` | 0.0456085 ± 0.000758045 (W 0.000117545) | - | - | `*` one row has no measurement here |
+| `qr_factor/n96/b1` | 0.11811 ± 0.000468397 (W 0.000382157) | - | - | `*` one row has no measurement here |
+| `solve/n32/b1` | 0.0074345 ± 6.43969e-05 (W 5.59114e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n32/b1 [api-inclusive]` | 0.009085 ± 4.64776e-05 (W 4.42474e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n64/b1` | 0.0244895 ± 0.000238183 (W 0.000270819) | - | - | `*` one row has no measurement here |
+| `solve/n64/b1 [api-inclusive]` | 0.028634 ± 0.000154234 (W 0.000182947) | - | - | `*` one row has no measurement here |
+| `solve/n96/b1` | 0.0536535 ± 0.000294945 (W 0.000641171) | - | - | `*` one row has no measurement here |
+| `solve/n96/b1 [api-inclusive]` | 0.065258 ± 0.000139346 (W 0.00157674) | - | - | `*` one row has no measurement here |
+| `svd_thin/n32/b1` | 0.101602 ± 0.00171073 (W 0.000104488) | - | - | `*` one row has no measurement here |
+| `svd_thin/n32/b1 [api-inclusive]` | 0.10224 ± 0.000929199 (W 0.000999372) | - | - | `*` one row has no measurement here |
+| `svd_thin/n64/b1` | 0.333109 ± 0.00122839 (W 0.00177723) | - | - | `*` one row has no measurement here |
+| `svd_thin/n64/b1 [api-inclusive]` | 0.333359 ± 0.000755182 (W 0.00165124) | - | - | `*` one row has no measurement here |
+| `svd_thin/n96/b1` | 0.700054 ± 0.00313221 (W 0.00312182) | - | - | `*` one row has no measurement here |
+| `svd_thin/n96/b1 [api-inclusive]` | 0.700521 ± 0.00201471 (W 0.00376861) | - | - | `*` one row has no measurement here |
+| `svd_values/n32/b1` | 0.038149 ± 5.95598e-05 (W 3.04544e-05) | - | - | `*` one row has no measurement here |
+| `svd_values/n32/b1 [api-inclusive]` | 0.038294 ± 0.000209783 (W 8.21972e-05) | - | - | `*` one row has no measurement here |
+| `svd_values/n64/b1` | 0.150458 ± 0.000273246 (W 0.000202118) | - | - | `*` one row has no measurement here |
+| `svd_values/n64/b1 [api-inclusive]` | 0.14471 ± 0.000604277 (W 0.00034188) | - | - | `*` one row has no measurement here |
+| `svd_values/n96/b1` | 0.35187 ± 0.00064609 (W 0.00157012) | - | - | `*` one row has no measurement here |
+| `svd_values/n96/b1 [api-inclusive]` | 0.352828 ± 0.000895521 (W 0.00186983) | - | - | `*` one row has no measurement here |
+| `triangular_solve/n32/b1` | 0.00084 ± 1.32916e-05 (W 2.04666e-05) | 0.00092 ± 4.08248e-06 (W 2.07364e-05) | 🔵 colmat 1.10× faster than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n64/b1` | 0.00191 ± 1.47026e-05 (W 1.91009e-05) | 0.00184 ± 1.0328e-05 (W 1.68761e-05) | · | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n96/b1` | 0.003255 ± 1.54919e-05 (W 2.11259e-05) | 0.002845 ± 8.16497e-06 (W 1.77465e-05) | 🔴 colmat 1.14× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+
+## linalg-small, c32, f order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `cholesky/n32/b1` | 0.007555 ± 2.78837e-05 (W 2.82781e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `cholesky/n32/b1 [api-inclusive]` | 0.0081095 ± 2.8289e-05 (W 6.20834e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `cholesky/n64/b1` | 0.0428635 ± 0.000181366 (W 0.000118224) | - | - | `*` one row has no measurement here |
+| `cholesky/n64/b1 [api-inclusive]` | 0.0440985 ± 5.54857e-05 (W 0.000139441) | - | - | `*` one row has no measurement here |
+| `cholesky/n96/b1` | 0.0644975 ± 0.000127016 (W 0.000105662) | - | - | `*` one row has no measurement here |
+| `cholesky/n96/b1 [api-inclusive]` | 0.0671375 ± 0.000580531 (W 0.000866649) | - | - | `*` one row has no measurement here |
+| `eigh/n32/b1` | 0.0616325 ± 0.000235364 (W 0.000522835) | - | - | `*` one row has no measurement here |
+| `eigh/n32/b1 [api-inclusive]` | 0.0623525 ± 0.000455309 (W 9.55651e-05) | - | - | `*` one row has no measurement here |
+| `eigh/n64/b1` | 0.246457 ± 0.000560895 (W 0.00140587) | - | - | `*` one row has no measurement here |
+| `eigh/n64/b1 [api-inclusive]` | 0.252073 ± 0.00148327 (W 0.00208426) | - | - | `*` one row has no measurement here |
+| `eigh/n96/b1` | 0.597233 ± 0.00138298 (W 0.0021955) | - | - | `*` one row has no measurement here |
+| `eigh/n96/b1 [api-inclusive]` | 0.596955 ± 0.000902367 (W 0.00166041) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n32/b1` | 0.009815 ± 7.00714e-05 (W 4.76445e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n32/b1 [api-inclusive]` | 0.0108445 ± 8.29715e-05 (W 5.36283e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n64/b1` | 0.041923 ± 0.000114916 (W 0.000123562) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n64/b1 [api-inclusive]` | 0.044554 ± 0.000227629 (W 0.000193179) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n96/b1` | 0.112757 ± 0.000107885 (W 0.000633673) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n96/b1 [api-inclusive]` | 0.122706 ± 0.00130744 (W 0.00165156) | - | - | `*` one row has no measurement here |
+| `householder_apply/n32/b1 [block(basis=32,target=32)]` | 0.0094695 ± 4.28517e-05 (W 5.12733e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n32/b1 [sequence(basis=32,target=32)]` | 0.0119345 ± 0.000978525 (W 2.80621e-05) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `householder_apply/n64/b1 [block(basis=64,target=64)]` | 0.042664 ± 0.000110607 (W 0.000269325) | - | - | `*` one row has no measurement here |
+| `householder_apply/n64/b1 [sequence(basis=64,target=64)]` | 0.042604 ± 0.000101797 (W 9.36055e-05) | - | - | `*` one row has no measurement here |
+| `householder_apply/n96/b1 [block(basis=96,target=96)]` | 0.119662 ± 0.000208407 (W 0.00104062) | - | - | `*` one row has no measurement here |
+| `householder_apply/n96/b1 [sequence(basis=96,target=96)]` | 0.118542 ± 0.000259641 (W 0.000679656) | - | - | `*` one row has no measurement here |
+| `lu/n32/b1` | 0.0056395 ± 4.51682e-05 (W 4.30113e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n32/b1 [api-inclusive]` | 0.0065595 ± 2.04328e-05 (W 5.30573e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n64/b1` | 0.020864 ± 0.000226734 (W 9.21526e-05) | - | - | `*` one row has no measurement here |
+| `lu/n64/b1 [api-inclusive]` | 0.0231495 ± 0.000106095 (W 0.000108408) | - | - | `*` one row has no measurement here |
+| `lu/n96/b1` | 0.0476785 ± 0.000238853 (W 0.000460468) | - | - | `*` one row has no measurement here |
+| `lu/n96/b1 [api-inclusive]` | 0.057013 ± 0.000595003 (W 0.000849226) | - | - | `*` one row has no measurement here |
+| `qr/n32/b1` | 0.020609 ± 0.000187163 (W 2.59581e-05) | - | - | `*` one row has no measurement here |
+| `qr/n32/b1 [api-inclusive]` | 0.0222995 ± 0.000220932 (W 5.6864e-05) | - | - | `*` one row has no measurement here |
+| `qr/n64/b1` | 0.085458 ± 0.00113982 (W 0.000126841) | - | - | `*` one row has no measurement here |
+| `qr/n64/b1 [api-inclusive]` | 0.089107 ± 0.00121469 (W 0.000121027) | - | - | `*` one row has no measurement here |
+| `qr/n96/b1` | 0.214997 ± 0.000435194 (W 0.00146214) | - | - | `*` one row has no measurement here |
+| `qr/n96/b1 [api-inclusive]` | 0.241609 ± 0.00275562 (W 0.00384075) | - | - | `*` one row has no measurement here |
+| `qr_factor/n32/b1` | 0.0087395 ± 3.86975e-05 (W 4.60469e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `qr_factor/n64/b1` | 0.0390085 ± 8.12502e-05 (W 4.96564e-05) | - | - | `*` one row has no measurement here |
+| `qr_factor/n96/b1` | 0.100722 ± 0.00021632 (W 8.18495e-05) | - | - | `*` one row has no measurement here |
+| `solve/n32/b1` | 0.00618 ± 3.68782e-05 (W 3.14197e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n32/b1 [api-inclusive]` | 0.0072695 ± 4.54771e-05 (W 4.55746e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n64/b1` | 0.0209995 ± 6.64342e-05 (W 4.96237e-05) | - | - | `*` one row has no measurement here |
+| `solve/n64/b1 [api-inclusive]` | 0.023604 ± 0.0001205 (W 6.822e-05) | - | - | `*` one row has no measurement here |
+| `solve/n96/b1` | 0.0478435 ± 0.000234971 (W 8.27416e-05) | - | - | `*` one row has no measurement here |
+| `solve/n96/b1 [api-inclusive]` | 0.0587785 ± 0.00100454 (W 0.00158459) | - | - | `*` one row has no measurement here |
+| `svd_thin/n32/b1` | 0.100056 ± 0.000293229 (W 0.000624042) | - | - | `*` one row has no measurement here |
+| `svd_thin/n32/b1 [api-inclusive]` | 0.101381 ± 0.000976556 (W 0.00121965) | - | - | `*` one row has no measurement here |
+| `svd_thin/n64/b1` | 0.418766 ± 0.00247214 (W 0.00160679) | - | - | `*` one row has no measurement here |
+| `svd_thin/n64/b1 [api-inclusive]` | 0.41806 ± 0.000937014 (W 0.00182875) | - | - | `*` one row has no measurement here |
+| `svd_thin/n96/b1` | 0.984984 ± 0.00264321 (W 0.000754924) | - | - | `*` one row has no measurement here |
+| `svd_thin/n96/b1 [api-inclusive]` | 0.986962 ± 0.00569079 (W 0.000947766) | - | - | `*` one row has no measurement here |
+| `svd_values/n32/b1` | 0.037944 ± 0.000201782 (W 5.35629e-05) | - | - | `*` one row has no measurement here |
+| `svd_values/n32/b1 [api-inclusive]` | 0.038179 ± 0.000164102 (W 6.23e-05) | - | - | `*` one row has no measurement here |
+| `svd_values/n64/b1` | 0.139676 ± 0.000572191 (W 0.00141752) | - | - | `*` one row has no measurement here |
+| `svd_values/n64/b1 [api-inclusive]` | 0.139722 ± 0.000520664 (W 0.00125509) | - | - | `*` one row has no measurement here |
+| `svd_values/n96/b1` | 0.342862 ± 0.000982907 (W 0.00192925) | - | - | `*` one row has no measurement here |
+| `svd_values/n96/b1 [api-inclusive]` | 0.344129 ± 0.00161395 (W 0.00154594) | - | - | `*` one row has no measurement here |
+| `triangular_solve/n32/b1` | 0.00074 ± 8.94427e-06 (W 1.78972e-05) | 0.0007 ± 5.16398e-06 (W 2.59663e-05) | 🔴 colmat 1.06× slower than `lapack-aocl` (marginal: spread 0.65 of the difference) | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n64/b1` | 0.001605 ± 9.83192e-06 (W 1.82984e-05) | 0.00145 ± 5.16398e-06 (W 2.07364e-05) | 🔴 colmat 1.11× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n96/b1` | 0.00261 ± 1.50555e-05 (W 2.84999e-05) | 0.002355 ± 1.04881e-05 (W 2.51127e-05) | 🔴 colmat 1.11× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+
+## linalg-small, c32, f order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `cholesky/n32/b1` | 0.007604 ± 2.74518e-05 (W 3.36087e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `cholesky/n32/b1 [api-inclusive]` | 0.0079595 ± 3.84916e-05 (W 8.22204e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `cholesky/n64/b1` | 0.0431075 ± 4.75454e-05 (W 0.000133335) | - | - | `*` one row has no measurement here |
+| `cholesky/n64/b1 [api-inclusive]` | 0.0440975 ± 4.58258e-05 (W 0.00013445) | - | - | `*` one row has no measurement here |
+| `cholesky/n96/b1` | 0.0644235 ± 0.000128689 (W 0.000222676) | - | - | `*` one row has no measurement here |
+| `cholesky/n96/b1 [api-inclusive]` | 0.0670665 ± 7.45048e-05 (W 0.000226831) | - | - | `*` one row has no measurement here |
+| `eigh/n32/b1` | 0.0513985 ± 0.000181074 (W 0.00010303) | - | - | `*` one row has no measurement here |
+| `eigh/n32/b1 [api-inclusive]` | 0.052698 ± 0.00128659 (W 0.000201657) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `eigh/n64/b1` | 0.153067 ± 0.000396735 (W 0.000311579) | - | - | `*` one row has no measurement here |
+| `eigh/n64/b1 [api-inclusive]` | 0.153602 ± 0.000386848 (W 0.000465875) | - | - | `*` one row has no measurement here |
+| `eigh/n96/b1` | 0.333587 ± 0.00137983 (W 0.00196263) | - | - | `*` one row has no measurement here |
+| `eigh/n96/b1 [api-inclusive]` | 0.334271 ± 0.00142471 (W 0.00148989) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n32/b1` | 0.010345 ± 0.000156046 (W 4.83261e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n32/b1 [api-inclusive]` | 0.0114395 ± 5.92419e-05 (W 3.70773e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n64/b1` | 0.043783 ± 0.000711754 (W 0.000114896) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n64/b1 [api-inclusive]` | 0.045703 ± 0.000341339 (W 0.000122704) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n96/b1` | 0.101832 ± 0.000685338 (W 0.000642437) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n96/b1 [api-inclusive]` | 0.112828 ± 0.000846272 (W 0.00110849) | - | - | `*` one row has no measurement here |
+| `householder_apply/n32/b1 [block(basis=32,target=32)]` | 0.0066095 ± 0.000147106 (W 0.00011435) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `householder_apply/n32/b1 [sequence(basis=32,target=32)]` | 0.0065995 ± 0.000126797 (W 0.000187232) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `householder_apply/n64/b1 [block(basis=64,target=64)]` | 0.021804 ± 0.000106421 (W 0.000191417) | - | - | `*` one row has no measurement here |
+| `householder_apply/n64/b1 [sequence(basis=64,target=64)]` | 0.0218785 ± 0.000155182 (W 0.000202797) | - | - | `*` one row has no measurement here |
+| `householder_apply/n96/b1 [block(basis=96,target=96)]` | 0.046434 ± 0.000120924 (W 0.000452112) | - | - | `*` one row has no measurement here |
+| `householder_apply/n96/b1 [sequence(basis=96,target=96)]` | 0.0465475 ± 0.00036249 (W 0.00029534) | - | - | `*` one row has no measurement here |
+| `lu/n32/b1` | 0.0056595 ± 4.14266e-05 (W 6.06421e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n32/b1 [api-inclusive]` | 0.0066745 ± 3.03804e-05 (W 5.81081e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n64/b1` | 0.020414 ± 0.000133035 (W 0.000125099) | - | - | `*` one row has no measurement here |
+| `lu/n64/b1 [api-inclusive]` | 0.022489 ± 0.000120754 (W 0.000233742) | - | - | `*` one row has no measurement here |
+| `lu/n96/b1` | 0.042729 ± 0.000382515 (W 0.000176541) | - | - | `*` one row has no measurement here |
+| `lu/n96/b1 [api-inclusive]` | 0.0527185 ± 0.000902824 (W 0.00147374) | - | - | `*` one row has no measurement here |
+| `qr/n32/b1` | 0.0205295 ± 4.84809e-05 (W 2.79455e-05) | - | - | `*` one row has no measurement here |
+| `qr/n32/b1 [api-inclusive]` | 0.0221745 ± 0.000218432 (W 4.08746e-05) | - | - | `*` one row has no measurement here |
+| `qr/n64/b1` | 0.0668715 ± 0.000224618 (W 0.000298272) | - | - | `*` one row has no measurement here |
+| `qr/n64/b1 [api-inclusive]` | 0.072083 ± 0.000538866 (W 0.000216075) | - | - | `*` one row has no measurement here |
+| `qr/n96/b1` | 0.166511 ± 0.000493607 (W 0.000408435) | - | - | `*` one row has no measurement here |
+| `qr/n96/b1 [api-inclusive]` | 0.197159 ± 0.00101662 (W 0.00199666) | - | - | `*` one row has no measurement here |
+| `qr_factor/n32/b1` | 0.0087195 ± 5.1733e-05 (W 3.95316e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `qr_factor/n64/b1` | 0.039019 ± 8.04661e-05 (W 6.46852e-05) | - | - | `*` one row has no measurement here |
+| `qr_factor/n96/b1` | 0.113956 ± 0.000919299 (W 0.00027473) | - | - | `*` one row has no measurement here |
+| `solve/n32/b1` | 0.0065895 ± 3.41116e-05 (W 2.94837e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n32/b1 [api-inclusive]` | 0.007675 ± 5.22587e-05 (W 5.94388e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n64/b1` | 0.021754 ± 0.00011601 (W 0.00021381) | - | - | `*` one row has no measurement here |
+| `solve/n64/b1 [api-inclusive]` | 0.023954 ± 0.000104236 (W 0.000167646) | - | - | `*` one row has no measurement here |
+| `solve/n96/b1` | 0.044159 ± 0.000176085 (W 0.000161305) | - | - | `*` one row has no measurement here |
+| `solve/n96/b1 [api-inclusive]` | 0.056357 ± 0.0010453 (W 0.00159766) | - | - | `*` one row has no measurement here |
+| `svd_thin/n32/b1` | 0.101587 ± 0.000619313 (W 0.000146082) | - | - | `*` one row has no measurement here |
+| `svd_thin/n32/b1 [api-inclusive]` | 0.102421 ± 0.0049159 (W 0.000127387) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_thin/n64/b1` | 0.335944 ± 0.00138493 (W 0.00143238) | - | - | `*` one row has no measurement here |
+| `svd_thin/n64/b1 [api-inclusive]` | 0.337202 ± 0.00124366 (W 0.00139869) | - | - | `*` one row has no measurement here |
+| `svd_thin/n96/b1` | 0.707502 ± 0.00267272 (W 0.00195826) | - | - | `*` one row has no measurement here |
+| `svd_thin/n96/b1 [api-inclusive]` | 0.710379 ± 0.00166627 (W 0.00206769) | - | - | `*` one row has no measurement here |
+| `svd_values/n32/b1` | 0.0388025 ± 0.000129815 (W 5.35293e-05) | - | - | `*` one row has no measurement here |
+| `svd_values/n32/b1 [api-inclusive]` | 0.039044 ± 0.000319875 (W 8.60539e-05) | - | - | `*` one row has no measurement here |
+| `svd_values/n64/b1` | 0.144002 ± 0.000658503 (W 0.000191458) | - | - | `*` one row has no measurement here |
+| `svd_values/n64/b1 [api-inclusive]` | 0.149454 ± 0.00295176 (W 0.000258416) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_values/n96/b1` | 0.343616 ± 0.00179247 (W 0.00184127) | - | - | `*` one row has no measurement here |
+| `svd_values/n96/b1 [api-inclusive]` | 0.344788 ± 0.0043136 (W 0.00152136) | - | - | `*` one row has no measurement here |
+| `triangular_solve/n32/b1` | 0.000855 ± 1.47196e-05 (W 1.86911e-05) | 0.000715 ± 1.36626e-05 (W 2.37593e-05) | 🔴 colmat 1.20× slower than `lapack-aocl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `triangular_solve/n64/b1` | 0.002005 ± 1.69588e-05 (W 1.87632e-05) | 0.00145 ± 7.31437e-06 (W 2.16795e-05) | 🔴 colmat 1.38× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n96/b1` | 0.003295 ± 2.31661e-05 (W 3.07289e-05) | 0.00237 ± 1.8619e-05 (W 2.14129e-05) | 🔴 colmat 1.39× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+
+## linalg-small, c32, f order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `cholesky/n32/b1` | 0.00754 ± 2.52982e-05 (W 2.53912e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `cholesky/n32/b1 [api-inclusive]` | 0.008134 ± 4.14278e-05 (W 7.41937e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `cholesky/n64/b1` | 0.0429035 ± 0.000107985 (W 9.2345e-05) | - | - | `*` one row has no measurement here |
+| `cholesky/n64/b1 [api-inclusive]` | 0.044074 ± 0.000358217 (W 0.000125255) | - | - | `*` one row has no measurement here |
+| `cholesky/n96/b1` | 0.063913 ± 0.000154684 (W 0.000223358) | - | - | `*` one row has no measurement here |
+| `cholesky/n96/b1 [api-inclusive]` | 0.0672225 ± 0.000166729 (W 0.000202051) | - | - | `*` one row has no measurement here |
+| `eigh/n32/b1` | 0.049747 ± 0.000106338 (W 9.75159e-05) | - | - | `*` one row has no measurement here |
+| `eigh/n32/b1 [api-inclusive]` | 0.050384 ± 0.000101184 (W 0.000153879) | - | - | `*` one row has no measurement here |
+| `eigh/n64/b1` | 0.137725 ± 0.000328048 (W 0.000243274) | - | - | `*` one row has no measurement here |
+| `eigh/n64/b1 [api-inclusive]` | 0.138591 ± 0.00047131 (W 0.000424337) | - | - | `*` one row has no measurement here |
+| `eigh/n96/b1` | 0.292174 ± 0.000478683 (W 0.00184567) | - | - | `*` one row has no measurement here |
+| `eigh/n96/b1 [api-inclusive]` | 0.295031 ± 0.00799534 (W 0.00200475) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `full_piv_lu/n32/b1` | 0.010349 ± 7.1042e-05 (W 4.58467e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n32/b1 [api-inclusive]` | 0.011469 ± 0.000109591 (W 5.39886e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `full_piv_lu/n64/b1` | 0.0431035 ± 0.000264186 (W 8.42467e-05) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n64/b1 [api-inclusive]` | 0.0456635 ± 0.000329273 (W 0.000116082) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n96/b1` | 0.104826 ± 0.00128907 (W 0.000632484) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n96/b1 [api-inclusive]` | 0.119212 ± 0.00114687 (W 0.00196165) | - | - | `*` one row has no measurement here |
+| `householder_apply/n32/b1 [block(basis=32,target=32)]` | 0.005295 ± 0.000100201 (W 0.000127394) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n32/b1 [sequence(basis=32,target=32)]` | 0.00524 ± 5.99347e-05 (W 6.56585e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n64/b1 [block(basis=64,target=64)]` | 0.0159095 ± 0.000116535 (W 0.000210741) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `householder_apply/n64/b1 [sequence(basis=64,target=64)]` | 0.0155095 ± 0.000313999 (W 0.000297743) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `householder_apply/n96/b1 [block(basis=96,target=96)]` | 0.030779 ± 0.000294953 (W 0.000320456) | - | - | `*` one row has no measurement here |
+| `householder_apply/n96/b1 [sequence(basis=96,target=96)]` | 0.030134 ± 0.000196178 (W 0.000355649) | - | - | `*` one row has no measurement here |
+| `lu/n32/b1` | 0.00568 ± 4.55211e-05 (W 3.84918e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n32/b1 [api-inclusive]` | 0.0066645 ± 2.96001e-05 (W 5.09529e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `lu/n64/b1` | 0.020384 ± 0.000143966 (W 0.000131968) | - | - | `*` one row has no measurement here |
+| `lu/n64/b1 [api-inclusive]` | 0.0223395 ± 0.000136882 (W 0.000181786) | - | - | `*` one row has no measurement here |
+| `lu/n96/b1` | 0.042388 ± 0.000287771 (W 0.000297796) | - | - | `*` one row has no measurement here |
+| `lu/n96/b1 [api-inclusive]` | 0.053613 ± 0.000264191 (W 0.00161752) | - | - | `*` one row has no measurement here |
+| `qr/n32/b1` | 0.0206245 ± 0.000197028 (W 3.39836e-05) | - | - | `*` one row has no measurement here |
+| `qr/n32/b1 [api-inclusive]` | 0.0222745 ± 0.000312494 (W 4.49161e-05) | - | - | `*` one row has no measurement here |
+| `qr/n64/b1` | 0.065357 ± 0.00114767 (W 0.000228371) | - | - | `*` one row has no measurement here |
+| `qr/n64/b1 [api-inclusive]` | 0.070302 ± 0.00198117 (W 0.000244351) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr/n96/b1` | 0.153935 ± 0.001143 (W 0.000923646) | - | - | `*` one row has no measurement here |
+| `qr/n96/b1 [api-inclusive]` | 0.18642 ± 0.00147474 (W 0.00195358) | - | - | `*` one row has no measurement here |
+| `qr_factor/n32/b1` | 0.008785 ± 0.000100731 (W 3.26305e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `qr_factor/n64/b1` | 0.038929 ± 0.000118818 (W 5.17641e-05) | - | - | `*` one row has no measurement here |
+| `qr_factor/n96/b1` | 0.110171 ± 0.000387638 (W 0.00117811) | - | - | `*` one row has no measurement here |
+| `solve/n32/b1` | 0.006485 ± 2.50333e-05 (W 3.24872e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n32/b1 [api-inclusive]` | 0.0076845 ± 5.86538e-05 (W 6.93538e-05) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `solve/n64/b1` | 0.021199 ± 0.000240659 (W 9.31291e-05) | - | - | `*` one row has no measurement here |
+| `solve/n64/b1 [api-inclusive]` | 0.0238295 ± 0.000100848 (W 0.000177258) | - | - | `*` one row has no measurement here |
+| `solve/n96/b1` | 0.041823 ± 0.000490268 (W 0.000322727) | - | - | `*` one row has no measurement here |
+| `solve/n96/b1 [api-inclusive]` | 0.055218 ± 0.000779894 (W 0.000641545) | - | - | `*` one row has no measurement here |
+| `svd_thin/n32/b1` | 0.101542 ± 0.000689131 (W 9.18732e-05) | - | - | `*` one row has no measurement here |
+| `svd_thin/n32/b1 [api-inclusive]` | 0.103055 ± 0.00136973 (W 0.000612424) | - | - | `*` one row has no measurement here |
+| `svd_thin/n64/b1` | 0.331711 ± 0.000816917 (W 0.00180754) | - | - | `*` one row has no measurement here |
+| `svd_thin/n64/b1 [api-inclusive]` | 0.332715 ± 0.000585023 (W 0.00175965) | - | - | `*` one row has no measurement here |
+| `svd_thin/n96/b1` | 0.700223 ± 0.00744845 (W 0.0027092) | - | - | `*` one row has no measurement here |
+| `svd_thin/n96/b1 [api-inclusive]` | 0.702678 ± 0.00327067 (W 0.00293881) | - | - | `*` one row has no measurement here |
+| `svd_values/n32/b1` | 0.0387485 ± 0.000285104 (W 6.16503e-05) | - | - | `*` one row has no measurement here |
+| `svd_values/n32/b1 [api-inclusive]` | 0.0389625 ± 0.000224082 (W 6.75636e-05) | - | - | `*` one row has no measurement here |
+| `svd_values/n64/b1` | 0.150116 ± 0.00084526 (W 0.000157435) | - | - | `*` one row has no measurement here |
+| `svd_values/n64/b1 [api-inclusive]` | 0.14384 ± 0.000897636 (W 0.000215574) | - | - | `*` one row has no measurement here |
+| `svd_values/n96/b1` | 0.355158 ± 0.00102642 (W 0.00161412) | - | - | `*` one row has no measurement here |
+| `svd_values/n96/b1 [api-inclusive]` | 0.356485 ± 0.00153825 (W 0.00174446) | - | - | `*` one row has no measurement here |
+| `triangular_solve/n32/b1` | 0.00087 ± 9.83192e-06 (W 1.80272e-05) | 0.00071 ± 7.52773e-06 (W 2.01496e-05) | 🔴 colmat 1.23× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n64/b1` | 0.001905 ± 1.3784e-05 (W 1.94294e-05) | 0.00146 ± 6.32456e-06 (W 1.93645e-05) | 🔴 colmat 1.30× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n96/b1` | 0.00307 ± 3.60093e-05 (W 2.13304e-05) | 0.002355 ± 1.7224e-05 (W 2.13227e-05) | 🔴 colmat 1.30× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+
+Not applicable to this population's shapes and reported as skipped: `cholesky/32`, `cholesky/64`, `cholesky/96`, `eig/32`, `eig/64`, `eig/96`, `eigh/32`, `eigh/64`, `eigh/96`, `full_piv_lu/32`, `full_piv_lu/64`, `full_piv_lu/96`, `householder_apply/32`, `householder_apply/64`, `householder_apply/96`, `lu/32`, `lu/64`, `lu/96`, `qr/32`, `qr/64`, `qr/96`, `qr_factor/32`, `qr_factor/64`, `qr_factor/96`, `solve/32`, `solve/64`, `solve/96`, `svd_thin/32`, `svd_thin/64`, `svd_thin/96`, `svd_values/32`, `svd_values/64`, `svd_values/96`, `upgrade_factor/32`, `upgrade_factor/64`, `upgrade_factor/96`.
+
+## linalg-mid, f64, c order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `cholesky/n128/b1` | 0.0317835 ± 0.000385956 (W 9.17858e-05) | - | - | `*` one row has no measurement here |
+| `cholesky/n128/b1 [api-inclusive]` | 0.0336685 ± 0.000368934 (W 0.000299894) | - | - | `*` one row has no measurement here |
+| `cholesky/n256/b1` | 0.187058 ± 0.00109524 (W 0.00173264) | - | - | `*` one row has no measurement here |
+| `cholesky/n256/b1 [api-inclusive]` | 0.173984 ± 0.00177663 (W 0.00130586) | - | - | `*` one row has no measurement here |
+| `cholesky/n512/b1` | 1.52541 ± 0.0111972 (W 0.00353347) | - | - | `*` one row has no measurement here |
+| `cholesky/n512/b1 [api-inclusive]` | 1.07186 ± 0.0197779 (W 0.00185188) | - | - | `*` one row has no measurement here |
+| `eigh/n128/b1` | 1.33401 ± 0.00319914 (W 0.00457964) | - | - | `*` one row has no measurement here |
+| `eigh/n128/b1 [api-inclusive]` | 1.33701 ± 0.00493654 (W 0.00191357) | - | - | `*` one row has no measurement here |
+| `eigh/n256/b1` | 5.85807 ± 0.0189532 (W 0.0130262) | - | - | `*` one row has no measurement here |
+| `eigh/n256/b1 [api-inclusive]` | 5.87163 ± 0.0256223 (W 0.00899673) | - | - | `*` one row has no measurement here |
+| `eigh/n512/b1` | 28.0729 ± 0.17071 (W 0.0205304) | - | - | `*` one row has no measurement here |
+| `eigh/n512/b1 [api-inclusive]` | 28.1392 ± 0.185821 (W 0.0261381) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1` | 0.223598 ± 0.0147639 (W 0.00169029) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `full_piv_lu/n128/b1 [api-inclusive]` | 0.237638 ± 0.0160649 (W 0.00150102) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `full_piv_lu/n256/b1` | 1.33615 ± 0.0065673 (W 0.00309602) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1 [api-inclusive]` | 1.44586 ± 0.00203385 (W 0.00272363) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1` | 10.4781 ± 0.0901991 (W 0.0268472) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1 [api-inclusive]` | 10.9827 ± 0.0952089 (W 0.0217398) | - | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [block(basis=128,target=128)]` | 0.111663 ± 0.00106028 (W 0.000457645) | - | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [sequence(basis=128,target=128)]` | 0.111543 ± 0.00076603 (W 0.000897509) | - | - | `*` one row has no measurement here |
+| `householder_apply/n256/b1 [block(basis=256,target=256)]` | 0.787782 ± 0.01093 (W 0.00261168) | - | - | `*` one row has no measurement here |
+| `householder_apply/n256/b1 [sequence(basis=256,target=256)]` | 0.793446 ± 0.00815518 (W 0.00320017) | - | - | `*` one row has no measurement here |
+| `householder_apply/n512/b1 [block(basis=512,target=512)]` | 7.12316 ± 0.229914 (W 0.012685) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `householder_apply/n512/b1 [sequence(basis=512,target=512)]` | 7.0433 ± 0.233193 (W 0.00812706) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `lu/n128/b1` | 0.059122 ± 0.000360812 (W 0.000545364) | - | - | `*` one row has no measurement here |
+| `lu/n128/b1 [api-inclusive]` | 0.0731865 ± 0.000254303 (W 0.000323731) | - | - | `*` one row has no measurement here |
+| `lu/n256/b1` | 0.284246 ± 0.000962862 (W 0.0017132) | - | - | `*` one row has no measurement here |
+| `lu/n256/b1 [api-inclusive]` | 0.538308 ± 0.00259538 (W 0.0023957) | - | - | `*` one row has no measurement here |
+| `lu/n512/b1` | 1.8476 ± 0.00473484 (W 0.00262399) | - | - | `*` one row has no measurement here |
+| `lu/n512/b1 [api-inclusive]` | 2.87273 ± 0.010906 (W 0.00480194) | - | - | `*` one row has no measurement here |
+| `qr/n128/b1` | 0.249996 ± 0.00341129 (W 0.00118884) | - | - | `*` one row has no measurement here |
+| `qr/n128/b1 [api-inclusive]` | 0.284002 ± 0.00258308 (W 0.0021902) | - | - | `*` one row has no measurement here |
+| `qr/n256/b1` | 1.35876 ± 0.00661139 (W 0.0020728) | - | - | `*` one row has no measurement here |
+| `qr/n256/b1 [api-inclusive]` | 1.55908 ± 0.00227913 (W 0.00540623) | - | - | `*` one row has no measurement here |
+| `qr/n512/b1` | 9.61437 ± 0.394373 (W 0.0121985) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr/n512/b1 [api-inclusive]` | 8.84387 ± 0.147049 (W 0.00913727) | - | - | `*` one row has no measurement here |
+| `qr_factor/n128/b1` | 0.145033 ± 0.000716176 (W 0.00122569) | - | - | `*` one row has no measurement here |
+| `qr_factor/n256/b1` | 0.789716 ± 0.00316771 (W 0.00244925) | - | - | `*` one row has no measurement here |
+| `qr_factor/n512/b1` | 3.99843 ± 0.0184949 (W 0.0061579) | - | - | `*` one row has no measurement here |
+| `solve/n128/b1` | 0.0509635 ± 0.000202425 (W 0.000215328) | - | - | `*` one row has no measurement here |
+| `solve/n128/b1 [api-inclusive]` | 0.100571 ± 0.000462872 (W 0.00108559) | - | - | `*` one row has no measurement here |
+| `solve/n256/b1` | 0.247466 ± 0.00173329 (W 0.0017607) | - | - | `*` one row has no measurement here |
+| `solve/n256/b1 [api-inclusive]` | 0.369499 ± 0.00494348 (W 0.00199284) | - | - | `*` one row has no measurement here |
+| `solve/n512/b1` | 1.81569 ± 0.032875 (W 0.00359897) | - | - | `*` one row has no measurement here |
+| `solve/n512/b1 [api-inclusive]` | 2.02008 ± 0.0296714 (W 0.00690327) | - | - | `*` one row has no measurement here |
+| `svd_thin/n128/b1` | 1.75919 ± 0.00572416 (W 0.00220997) | - | - | `*` one row has no measurement here |
+| `svd_thin/n128/b1 [api-inclusive]` | 1.76619 ± 0.00981795 (W 0.00274049) | - | - | `*` one row has no measurement here |
+| `svd_thin/n256/b1` | 8.20991 ± 0.0285003 (W 0.00824001) | - | - | `*` one row has no measurement here |
+| `svd_thin/n256/b1 [api-inclusive]` | 8.23784 ± 0.0116163 (W 0.0104654) | - | - | `*` one row has no measurement here |
+| `svd_thin/n512/b1` | 47.9146 ± 0.574548 (W 0.325798) | - | - | `*` one row has no measurement here |
+| `svd_thin/n512/b1 [api-inclusive]` | 49.287 ± 0.154037 (W 0.0356307) | - | - | `*` one row has no measurement here |
+| `svd_values/n128/b1` | 0.608556 ± 0.00385689 (W 0.00181751) | - | - | `*` one row has no measurement here |
+| `svd_values/n128/b1 [api-inclusive]` | 0.611832 ± 0.0336484 (W 0.00164391) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_values/n256/b1` | 3.43682 ± 0.0202086 (W 0.00674383) | - | - | `*` one row has no measurement here |
+| `svd_values/n256/b1 [api-inclusive]` | 3.44631 ± 0.0201647 (W 0.00740346) | - | - | `*` one row has no measurement here |
+| `svd_values/n512/b1` | 25.7041 ± 0.111781 (W 0.0408121) | - | - | `*` one row has no measurement here |
+| `svd_values/n512/b1 [api-inclusive]` | 25.827 ± 0.141905 (W 0.053237) | - | - | `*` one row has no measurement here |
+| `triangular_solve/n128/b1` | 0.0028 ± 2.65832e-05 (W 3.69927e-05) | 0.002415 ± 1.04881e-05 (W 2.49757e-05) | 🔴 colmat 1.16× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n256/b1` | 0.00842 ± 0.000139292 (W 0.000116803) | 0.005295 ± 1.36626e-05 (W 2.25419e-05) | 🔴 colmat 1.59× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n512/b1` | 0.029534 ± 0.000593135 (W 0.000264245) | 0.0196295 ± 0.000377609 (W 0.000442827) | 🔴 colmat 1.50× slower than `lapack-aocl` | `!` between-start range over 5% |
+
+## linalg-mid, f64, c order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `cholesky/n128/b1` | 0.0287845 ± 0.000479816 (W 0.000153912) | - | - | `*` one row has no measurement here |
+| `cholesky/n128/b1 [api-inclusive]` | 0.0343945 ± 0.000440367 (W 0.000286294) | - | - | `*` one row has no measurement here |
+| `cholesky/n256/b1` | 0.103016 ± 0.00122537 (W 0.00116287) | - | - | `*` one row has no measurement here |
+| `cholesky/n256/b1 [api-inclusive]` | 0.132564 ± 0.000596427 (W 0.000686188) | - | - | `*` one row has no measurement here |
+| `cholesky/n512/b1` | 0.52721 ± 0.00312959 (W 0.00229507) | - | - | `*` one row has no measurement here |
+| `cholesky/n512/b1 [api-inclusive]` | 0.552974 ± 0.00250117 (W 0.00291425) | - | - | `*` one row has no measurement here |
+| `eigh/n128/b1` | 0.56279 ± 0.00180595 (W 0.00211624) | - | - | `*` one row has no measurement here |
+| `eigh/n128/b1 [api-inclusive]` | 0.566645 ± 0.00141454 (W 0.00208756) | - | - | `*` one row has no measurement here |
+| `eigh/n256/b1` | 2.13372 ± 0.00231041 (W 0.00317841) | - | - | `*` one row has no measurement here |
+| `eigh/n256/b1 [api-inclusive]` | 2.14017 ± 0.00356427 (W 0.00378461) | - | - | `*` one row has no measurement here |
+| `eigh/n512/b1` | 9.10653 ± 0.0223603 (W 0.0115619) | - | - | `*` one row has no measurement here |
+| `eigh/n512/b1 [api-inclusive]` | 9.17635 ± 0.00916174 (W 0.0127216) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1` | 0.170858 ± 0.00121756 (W 0.00132293) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1 [api-inclusive]` | 0.178534 ± 0.00108624 (W 0.00143631) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1` | 0.668967 ± 0.00383356 (W 0.00211798) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1 [api-inclusive]` | 0.887387 ± 0.00652932 (W 0.00223309) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1` | 3.13509 ± 0.00422303 (W 0.00629847) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1 [api-inclusive]` | 4.22316 ± 0.0267837 (W 0.0049514) | - | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [block(basis=128,target=128)]` | 0.044489 ± 0.000397734 (W 0.000572619) | - | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [sequence(basis=128,target=128)]` | 0.0439325 ± 0.000403187 (W 0.000227098) | - | - | `*` one row has no measurement here |
+| `householder_apply/n256/b1 [block(basis=256,target=256)]` | 0.240384 ± 0.00193683 (W 0.00254169) | - | - | `*` one row has no measurement here |
+| `householder_apply/n256/b1 [sequence(basis=256,target=256)]` | 0.238453 ± 0.00259093 (W 0.00192917) | - | - | `*` one row has no measurement here |
+| `householder_apply/n512/b1 [block(basis=512,target=512)]` | 1.90608 ± 0.0260857 (W 0.0052258) | - | - | `*` one row has no measurement here |
+| `householder_apply/n512/b1 [sequence(basis=512,target=512)]` | 1.91999 ± 0.0354071 (W 0.00663118) | - | - | `*` one row has no measurement here |
+| `lu/n128/b1` | 0.0742665 ± 0.000805995 (W 0.0010531) | - | - | `*` one row has no measurement here |
+| `lu/n128/b1 [api-inclusive]` | 0.0698425 ± 0.00038737 (W 0.000396615) | - | - | `*` one row has no measurement here |
+| `lu/n256/b1` | 0.215819 ± 0.000642739 (W 0.00127438) | - | - | `*` one row has no measurement here |
+| `lu/n256/b1 [api-inclusive]` | 0.439849 ± 0.00302625 (W 0.00316472) | - | - | `*` one row has no measurement here |
+| `lu/n512/b1` | 0.920343 ± 0.00534206 (W 0.00293738) | - | - | `*` one row has no measurement here |
+| `lu/n512/b1 [api-inclusive]` | 2.0036 ± 0.0266209 (W 0.00524776) | - | - | `*` one row has no measurement here |
+| `qr/n128/b1` | 0.200179 ± 0.000763237 (W 0.00117803) | - | - | `*` one row has no measurement here |
+| `qr/n128/b1 [api-inclusive]` | 0.244009 ± 0.00106284 (W 0.00169618) | - | - | `*` one row has no measurement here |
+| `qr/n256/b1` | 0.612889 ± 0.0012669 (W 0.00295488) | - | - | `*` one row has no measurement here |
+| `qr/n256/b1 [api-inclusive]` | 0.941454 ± 0.0046643 (W 0.00402306) | - | - | `*` one row has no measurement here |
+| `qr/n512/b1` | 3.36929 ± 0.0289006 (W 0.00492301) | - | - | `*` one row has no measurement here |
+| `qr/n512/b1 [api-inclusive]` | 4.35005 ± 0.0376091 (W 0.00896121) | - | - | `*` one row has no measurement here |
+| `qr_factor/n128/b1` | 0.119541 ± 0.000294706 (W 0.000235034) | - | - | `*` one row has no measurement here |
+| `qr_factor/n256/b1` | 0.417722 ± 0.00098925 (W 0.00206361) | - | - | `*` one row has no measurement here |
+| `qr_factor/n512/b1` | 1.69219 ± 0.0401227 (W 0.00519426) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `solve/n128/b1` | 0.057919 ± 0.000647504 (W 0.000723021) | - | - | `*` one row has no measurement here |
+| `solve/n128/b1 [api-inclusive]` | 0.0715365 ± 0.000357999 (W 0.000278141) | - | - | `*` one row has no measurement here |
+| `solve/n256/b1` | 0.212543 ± 0.00096474 (W 0.00174605) | - | - | `*` one row has no measurement here |
+| `solve/n256/b1 [api-inclusive]` | 0.279135 ± 0.00096427 (W 0.00132636) | - | - | `*` one row has no measurement here |
+| `solve/n512/b1` | 0.881347 ± 0.00171138 (W 0.00297285) | - | - | `*` one row has no measurement here |
+| `solve/n512/b1 [api-inclusive]` | 1.23198 ± 0.0430649 (W 0.00674422) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_thin/n128/b1` | 1.28886 ± 0.00179492 (W 0.00307945) | - | - | `*` one row has no measurement here |
+| `svd_thin/n128/b1 [api-inclusive]` | 1.29555 ± 0.00559917 (W 0.00333126) | - | - | `*` one row has no measurement here |
+| `svd_thin/n256/b1` | 4.97979 ± 0.0117763 (W 0.00987421) | - | - | `*` one row has no measurement here |
+| `svd_thin/n256/b1 [api-inclusive]` | 4.99312 ± 0.0120967 (W 0.0051679) | - | - | `*` one row has no measurement here |
+| `svd_thin/n512/b1` | 22.7443 ± 0.603117 (W 0.0271294) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_thin/n512/b1 [api-inclusive]` | 23.4803 ± 0.720062 (W 0.0260953) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_values/n128/b1` | 0.636598 ± 0.00129925 (W 0.00217288) | - | - | `*` one row has no measurement here |
+| `svd_values/n128/b1 [api-inclusive]` | 0.639232 ± 0.00244904 (W 0.00251029) | - | - | `*` one row has no measurement here |
+| `svd_values/n256/b1` | 2.68042 ± 0.010751 (W 0.00587174) | - | - | `*` one row has no measurement here |
+| `svd_values/n256/b1 [api-inclusive]` | 2.69142 ± 0.0215871 (W 0.00562673) | - | - | `*` one row has no measurement here |
+| `svd_values/n512/b1` | 13.2772 ± 0.578217 (W 0.0325128) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_values/n512/b1 [api-inclusive]` | 13.2741 ± 0.0296387 (W 0.0122549) | - | - | `*` one row has no measurement here |
+| `triangular_solve/n128/b1` | 0.003555 ± 2.45798e-05 (W 2.10321e-05) | 0.00242 ± 7.52773e-06 (W 2.38577e-05) | 🔴 colmat 1.47× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n256/b1` | 0.008349 ± 4.44106e-05 (W 7.98786e-05) | 0.00532 ± 1.68967e-05 (W 2.01815e-05) | 🔴 colmat 1.57× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n512/b1` | 0.0213595 ± 0.000152902 (W 0.000156171) | 0.019634 ± 0.000477343 (W 0.000255328) | 🔴 colmat 1.09× slower than `lapack-aocl` | `!` between-start range over 5% |
+
+## linalg-mid, f64, c order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `cholesky/n128/b1` | 0.030579 ± 0.000724213 (W 0.00018748) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `cholesky/n128/b1 [api-inclusive]` | 0.034899 ± 0.000608729 (W 0.000302311) | - | - | `*` one row has no measurement here |
+| `cholesky/n256/b1` | 0.114286 ± 0.0010235 (W 0.00111969) | - | - | `*` one row has no measurement here |
+| `cholesky/n256/b1 [api-inclusive]` | 0.131005 ± 0.00117 (W 0.000568848) | - | - | `*` one row has no measurement here |
+| `cholesky/n512/b1` | 0.52917 ± 0.00444312 (W 0.00366253) | - | - | `*` one row has no measurement here |
+| `cholesky/n512/b1 [api-inclusive]` | 0.494027 ± 0.0125942 (W 0.00241267) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `eigh/n128/b1` | 0.43948 ± 0.00188409 (W 0.00182754) | - | - | `*` one row has no measurement here |
+| `eigh/n128/b1 [api-inclusive]` | 0.441673 ± 0.00164631 (W 0.00242736) | - | - | `*` one row has no measurement here |
+| `eigh/n256/b1` | 1.59555 ± 0.00579439 (W 0.0035017) | - | - | `*` one row has no measurement here |
+| `eigh/n256/b1 [api-inclusive]` | 1.59712 ± 0.00432662 (W 0.00365572) | - | - | `*` one row has no measurement here |
+| `eigh/n512/b1` | 6.28321 ± 0.0121996 (W 0.0082733) | - | - | `*` one row has no measurement here |
+| `eigh/n512/b1 [api-inclusive]` | 6.29119 ± 0.0179345 (W 0.00666267) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1` | 0.168241 ± 0.00234932 (W 0.00179302) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1 [api-inclusive]` | 0.182982 ± 0.00105146 (W 0.00202625) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1` | 0.597781 ± 0.00427221 (W 0.00365489) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1 [api-inclusive]` | 0.841376 ± 0.00965871 (W 0.00475327) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1` | 2.23579 ± 0.00556093 (W 0.0038137) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1 [api-inclusive]` | 3.43584 ± 0.0111931 (W 0.00738126) | - | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [block(basis=128,target=128)]` | 0.0362845 ± 0.000269175 (W 0.000693989) | - | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [sequence(basis=128,target=128)]` | 0.0358695 ± 0.000313364 (W 0.000701827) | - | - | `*` one row has no measurement here |
+| `householder_apply/n256/b1 [block(basis=256,target=256)]` | 0.144555 ± 0.00116517 (W 0.00211676) | - | - | `*` one row has no measurement here |
+| `householder_apply/n256/b1 [sequence(basis=256,target=256)]` | 0.145695 ± 0.00139719 (W 0.00199425) | - | - | `*` one row has no measurement here |
+| `householder_apply/n512/b1 [block(basis=512,target=512)]` | 1.04959 ± 0.00663857 (W 0.00441573) | - | - | `*` one row has no measurement here |
+| `householder_apply/n512/b1 [sequence(basis=512,target=512)]` | 1.0433 ± 0.00335282 (W 0.00360193) | - | - | `*` one row has no measurement here |
+| `lu/n128/b1` | 0.078911 ± 0.000730439 (W 0.000918139) | - | - | `*` one row has no measurement here |
+| `lu/n128/b1 [api-inclusive]` | 0.069312 ± 0.00046569 (W 0.00038872) | - | - | `*` one row has no measurement here |
+| `lu/n256/b1` | 0.179076 ± 0.000765771 (W 0.00172167) | - | - | `*` one row has no measurement here |
+| `lu/n256/b1 [api-inclusive]` | 0.423214 ± 0.00239218 (W 0.0029628) | - | - | `*` one row has no measurement here |
+| `lu/n512/b1` | 0.680403 ± 0.0030657 (W 0.00424057) | - | - | `*` one row has no measurement here |
+| `lu/n512/b1 [api-inclusive]` | 1.83663 ± 0.0179028 (W 0.00682275) | - | - | `*` one row has no measurement here |
+| `qr/n128/b1` | 0.193265 ± 0.000696634 (W 0.00218567) | - | - | `*` one row has no measurement here |
+| `qr/n128/b1 [api-inclusive]` | 0.23747 ± 0.00142587 (W 0.00170331) | - | - | `*` one row has no measurement here |
+| `qr/n256/b1` | 0.527297 ± 0.00293391 (W 0.00190782) | - | - | `*` one row has no measurement here |
+| `qr/n256/b1 [api-inclusive]` | 0.873842 ± 0.00907008 (W 0.00367279) | - | - | `*` one row has no measurement here |
+| `qr/n512/b1` | 2.16784 ± 0.0175154 (W 0.00576249) | - | - | `*` one row has no measurement here |
+| `qr/n512/b1 [api-inclusive]` | 3.39868 ± 0.0214253 (W 0.00807067) | - | - | `*` one row has no measurement here |
+| `qr_factor/n128/b1` | 0.115424 ± 0.000963123 (W 0.000246676) | - | - | `*` one row has no measurement here |
+| `qr_factor/n256/b1` | 0.392624 ± 0.00127583 (W 0.00227464) | - | - | `*` one row has no measurement here |
+| `qr_factor/n512/b1` | 1.19411 ± 0.00410453 (W 0.00207344) | - | - | `*` one row has no measurement here |
+| `solve/n128/b1` | 0.0541435 ± 0.000343434 (W 0.00039644) | - | - | `*` one row has no measurement here |
+| `solve/n128/b1 [api-inclusive]` | 0.0711685 ± 0.00031137 (W 0.000309102) | - | - | `*` one row has no measurement here |
+| `solve/n256/b1` | 0.177266 ± 0.00138178 (W 0.00133388) | - | - | `*` one row has no measurement here |
+| `solve/n256/b1 [api-inclusive]` | 0.263471 ± 0.00244796 (W 0.00158733) | - | - | `*` one row has no measurement here |
+| `solve/n512/b1` | 0.660762 ± 0.00225954 (W 0.00236974) | - | - | `*` one row has no measurement here |
+| `solve/n512/b1 [api-inclusive]` | 1.05405 ± 0.0473327 (W 0.0050842) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_thin/n128/b1` | 1.29166 ± 0.00257596 (W 0.00321183) | - | - | `*` one row has no measurement here |
+| `svd_thin/n128/b1 [api-inclusive]` | 1.29912 ± 0.00549126 (W 0.00388327) | - | - | `*` one row has no measurement here |
+| `svd_thin/n256/b1` | 4.66538 ± 0.0141041 (W 0.00487604) | - | - | `*` one row has no measurement here |
+| `svd_thin/n256/b1 [api-inclusive]` | 4.66766 ± 0.0165449 (W 0.00729557) | - | - | `*` one row has no measurement here |
+| `svd_thin/n512/b1` | 19.672 ± 0.547407 (W 0.0233873) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_thin/n512/b1 [api-inclusive]` | 19.7931 ± 0.681144 (W 0.0226205) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_values/n128/b1` | 0.673088 ± 0.00335942 (W 0.00175059) | - | - | `*` one row has no measurement here |
+| `svd_values/n128/b1 [api-inclusive]` | 0.670428 ± 0.00228758 (W 0.00217322) | - | - | `*` one row has no measurement here |
+| `svd_values/n256/b1` | 2.6126 ± 0.0283583 (W 0.00510601) | - | - | `*` one row has no measurement here |
+| `svd_values/n256/b1 [api-inclusive]` | 2.64469 ± 0.00646699 (W 0.00469003) | - | - | `*` one row has no measurement here |
+| `svd_values/n512/b1` | 11.9459 ± 0.0123628 (W 0.0169061) | - | - | `*` one row has no measurement here |
+| `svd_values/n512/b1 [api-inclusive]` | 11.9646 ± 0.0180954 (W 0.0144057) | - | - | `*` one row has no measurement here |
+| `triangular_solve/n128/b1` | 0.00343 ± 3.15621e-05 (W 3.55239e-05) | 0.00242 ± 6.6458e-06 (W 2.23585e-05) | 🔴 colmat 1.42× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n256/b1` | 0.0086695 ± 0.000141592 (W 5.68928e-05) | 0.00531 ± 2.30687e-05 (W 3.09194e-05) | 🔴 colmat 1.63× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n512/b1` | 0.0190745 ± 0.000158296 (W 0.000124872) | 0.0200995 ± 0.000441381 (W 0.000258753) | 🔵 colmat 1.05× faster than `lapack-aocl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+
+## linalg-mid, f64, f order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `cholesky/n128/b1` | 0.0259945 ± 0.000453032 (W 6.87229e-05) | 0.032284 ± 0.000246667 (W 8.45326e-05) | 🔵 colmat 1.24× faster than `lapack-aocl` |  |
+| `cholesky/n128/b1 [api-inclusive]` | 0.0303185 ± 0.000363915 (W 8.43646e-05) | - | - | `*` one row has no measurement here |
+| `cholesky/n256/b1` | 0.136159 ± 0.0010283 (W 0.00135361) | 0.145752 ± 0.0012501 (W 0.00137855) | 🔵 colmat 1.07× faster than `lapack-aocl` |  |
+| `cholesky/n256/b1 [api-inclusive]` | 0.148585 ± 0.000833921 (W 0.000276975) | - | - | `*` one row has no measurement here |
+| `cholesky/n512/b1` | 0.940683 ± 0.0117643 (W 0.00165438) | 0.800153 ± 0.00352715 (W 0.00159528) | 🔴 colmat 1.18× slower than `lapack-aocl` |  |
+| `cholesky/n512/b1 [api-inclusive]` | 0.950778 ± 0.00697518 (W 0.00105195) | - | - | `*` one row has no measurement here |
+| `eigh/n128/b1` | 1.33343 ± 0.00593524 (W 0.0118544) | 1.07877 ± 0.00185602 (W 0.00371306) | 🔴 colmat 1.24× slower than `lapack-aocl` |  |
+| `eigh/n128/b1 [api-inclusive]` | 1.33266 ± 0.00247383 (W 0.00226979) | - | - | `*` one row has no measurement here |
+| `eigh/n256/b1` | 5.82135 ± 0.0334048 (W 0.00911843) | 4.88414 ± 0.0110819 (W 0.00663067) | 🔴 colmat 1.19× slower than `lapack-aocl` |  |
+| `eigh/n256/b1 [api-inclusive]` | 5.84302 ± 0.0229429 (W 0.00802023) | - | - | `*` one row has no measurement here |
+| `eigh/n512/b1` | 27.8881 ± 0.120358 (W 0.0246543) | 28.4868 ± 0.450218 (W 0.166372) | · |  |
+| `eigh/n512/b1 [api-inclusive]` | 27.9525 ± 0.143215 (W 0.0207745) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1` | 0.199432 ± 0.023889 (W 0.00133135) | 1.17089 ± 0.00293563 (W 0.00145011) | 🔵 colmat 5.87× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `full_piv_lu/n128/b1 [api-inclusive]` | 0.216309 ± 0.000750625 (W 0.00102529) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1` | 1.31147 ± 0.00466548 (W 0.00176311) | 10.1508 ± 0.0698523 (W 0.0152477) | 🔵 colmat 7.74× faster than `lapack-aocl` |  |
+| `full_piv_lu/n256/b1 [api-inclusive]` | 1.37971 ± 0.008481 (W 0.00383369) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1` | 10.7756 ± 0.0631716 (W 0.00883512) | 281.825 ± 9.33405 (W 1.41999) | 🔵 colmat 26.15× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `full_piv_lu/n512/b1 [api-inclusive]` | 10.6481 ± 0.0854962 (W 0.0270016) | - | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [block(basis=128,target=128)]` | 0.11059 ± 0.000480751 (W 0.00072511) | 0.224619 ± 0.00138564 (W 0.00411524) | 🔵 colmat 2.03× faster than `lapack-aocl` |  |
+| `householder_apply/n128/b1 [sequence(basis=128,target=128)]` | 0.110655 ± 0.00101152 (W 0.000256394) | 0.256429 ± 0.00222145 (W 0.0041184) | 🔵 colmat 2.32× faster than `lapack-aocl` |  |
+| `householder_apply/n256/b1 [block(basis=256,target=256)]` | 0.792122 ± 0.0166082 (W 0.00168413) | 1.38311 ± 0.00555434 (W 0.00373017) | 🔵 colmat 1.75× faster than `lapack-aocl` |  |
+| `householder_apply/n256/b1 [sequence(basis=256,target=256)]` | 0.805943 ± 0.00588066 (W 0.00325091) | 1.41878 ± 0.0178066 (W 0.00388763) | 🔵 colmat 1.76× faster than `lapack-aocl` |  |
+| `householder_apply/n512/b1 [block(basis=512,target=512)]` | 6.74864 ± 0.104198 (W 0.00790124) | 11.4608 ± 0.0559341 (W 0.014805) | 🔵 colmat 1.70× faster than `lapack-aocl` |  |
+| `householder_apply/n512/b1 [sequence(basis=512,target=512)]` | 6.74991 ± 0.104822 (W 0.00753241) | 11.4601 ± 0.0601377 (W 0.0151326) | 🔵 colmat 1.70× faster than `lapack-aocl` |  |
+| `lu/n128/b1` | 0.053682 ± 0.000199499 (W 0.000482175) | 0.080322 ± 0.000398675 (W 0.000600028) | 🔵 colmat 1.50× faster than `lapack-aocl` |  |
+| `lu/n128/b1 [api-inclusive]` | 0.0585035 ± 0.000288407 (W 0.000604015) | - | - | `*` one row has no measurement here |
+| `lu/n256/b1` | 0.283251 ± 0.000641151 (W 0.00154929) | 0.564801 ± 0.00244273 (W 0.00326046) | 🔵 colmat 1.99× faster than `lapack-aocl` |  |
+| `lu/n256/b1 [api-inclusive]` | 0.466452 ± 0.00301478 (W 0.00304219) | - | - | `*` one row has no measurement here |
+| `lu/n512/b1` | 1.67218 ± 0.00280629 (W 0.00277285) | 5.62051 ± 0.00563084 (W 0.01301) | 🔵 colmat 3.36× faster than `lapack-aocl` |  |
+| `lu/n512/b1 [api-inclusive]` | 2.52749 ± 0.00714298 (W 0.00497635) | - | - | `*` one row has no measurement here |
+| `qr/n128/b1` | 0.209374 ± 0.00168491 (W 0.00142337) | 0.671054 ± 0.00241428 (W 0.00413002) | 🔵 colmat 3.21× faster than `lapack-aocl` |  |
+| `qr/n128/b1 [api-inclusive]` | 0.263568 ± 0.00191381 (W 0.00180596) | - | - | `*` one row has no measurement here |
+| `qr/n256/b1` | 1.18791 ± 0.00410707 (W 0.00221084) | 3.25954 ± 0.138548 (W 0.00369275) | 🔵 colmat 2.74× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `qr/n256/b1 [api-inclusive]` | 1.47737 ± 0.0040702 (W 0.00220576) | - | - | `*` one row has no measurement here |
+| `qr/n512/b1` | 7.66263 ± 0.0335903 (W 0.00387005) | 20.4434 ± 0.0544872 (W 0.0252642) | 🔵 colmat 2.67× faster than `lapack-aocl` |  |
+| `qr/n512/b1 [api-inclusive]` | 8.56187 ± 0.139983 (W 0.00783948) | - | - | `*` one row has no measurement here |
+| `qr_factor/n128/b1` | 0.104987 ± 0.000471613 (W 0.000281169) | 0.408923 ± 0.00119021 (W 0.00140292) | 🔵 colmat 3.89× faster than `lapack-aocl` |  |
+| `qr_factor/n256/b1` | 0.633098 ± 0.00299309 (W 0.00201111) | 1.83202 ± 0.00183392 (W 0.00325431) | 🔵 colmat 2.89× faster than `lapack-aocl` |  |
+| `qr_factor/n512/b1` | 3.47434 ± 0.0358355 (W 0.00547837) | 9.1271 ± 0.0375081 (W 0.0101394) | 🔵 colmat 2.63× faster than `lapack-aocl` |  |
+| `solve/n128/b1` | 0.0507415 ± 0.000225137 (W 7.90847e-05) | 0.069797 ± 0.000204587 (W 0.000234278) | 🔵 colmat 1.38× faster than `lapack-aocl` |  |
+| `solve/n128/b1 [api-inclusive]` | 0.083122 ± 0.00101001 (W 0.00087306) | - | - | `*` one row has no measurement here |
+| `solve/n256/b1` | 0.264317 ± 0.00115557 (W 0.00148491) | 0.250838 ± 0.000628309 (W 0.00181373) | 🔴 colmat 1.05× slower than `lapack-aocl` |  |
+| `solve/n256/b1 [api-inclusive]` | 0.300221 ± 0.00204233 (W 0.00169306) | - | - | `*` one row has no measurement here |
+| `solve/n512/b1` | 1.64484 ± 0.0052115 (W 0.00258181) | 1.65182 ± 0.0730603 (W 0.00428203) | · | `!` between-start range over 5% |
+| `solve/n512/b1 [api-inclusive]` | 1.72856 ± 0.00442364 (W 0.00235449) | - | - | `*` one row has no measurement here |
+| `svd_thin/n128/b1` | 1.74512 ± 0.00204004 (W 0.0021463) | 1.70551 ± 0.00733222 (W 0.00469352) | · |  |
+| `svd_thin/n128/b1 [api-inclusive]` | 1.75004 ± 0.00568792 (W 0.0019703) | - | - | `*` one row has no measurement here |
+| `svd_thin/n256/b1` | 8.1765 ± 0.0326268 (W 0.00820391) | 8.8022 ± 0.0196859 (W 0.00949964) | 🔵 colmat 1.08× faster than `lapack-aocl` |  |
+| `svd_thin/n256/b1 [api-inclusive]` | 8.19383 ± 0.012385 (W 0.00690143) | - | - | `*` one row has no measurement here |
+| `svd_thin/n512/b1` | 46.0468 ± 0.076451 (W 0.0941493) | 70.9225 ± 1.42714 (W 0.676099) | 🔵 colmat 1.54× faster than `lapack-aocl` |  |
+| `svd_thin/n512/b1 [api-inclusive]` | 46.2257 ± 0.201902 (W 0.0666632) | - | - | `*` one row has no measurement here |
+| `svd_values/n128/b1` | 0.597721 ± 0.00169382 (W 0.00160137) | 0.696014 ± 0.0048055 (W 0.00156769) | 🔵 colmat 1.16× faster than `lapack-aocl` |  |
+| `svd_values/n128/b1 [api-inclusive]` | 0.597049 ± 0.0023798 (W 0.00191206) | - | - | `*` one row has no measurement here |
+| `svd_values/n256/b1` | 3.37142 ± 0.0333566 (W 0.00558628) | 3.97361 ± 0.0542224 (W 0.00674771) | 🔵 colmat 1.18× faster than `lapack-aocl` |  |
+| `svd_values/n256/b1 [api-inclusive]` | 3.36709 ± 0.0171814 (W 0.00630795) | - | - | `*` one row has no measurement here |
+| `svd_values/n512/b1` | 22.5659 ± 0.149594 (W 0.0280889) | 33.2205 ± 0.443266 (W 0.0349415) | 🔵 colmat 1.47× faster than `lapack-aocl` |  |
+| `svd_values/n512/b1 [api-inclusive]` | 22.6102 ± 0.152025 (W 0.013101) | - | - | `*` one row has no measurement here |
+| `triangular_solve/n128/b1` | 0.003035 ± 3.14113e-05 (W 2.74735e-05) | 0.0019645 ± 5.30723e-06 (W 2.34565e-05) | 🔴 colmat 1.54× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n256/b1` | 0.00922 ± 0.000119508 (W 7.20262e-05) | 0.0042995 ± 1.05956e-05 (W 1.89045e-05) | 🔴 colmat 2.14× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n512/b1` | 0.030133 ± 0.000176404 (W 0.00014301) | 0.0177295 ± 0.000980415 (W 0.000186863) | 🔴 colmat 1.70× slower than `lapack-aocl` | `!` between-start range over 5% |
+
+## linalg-mid, f64, f order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `cholesky/n128/b1` | 0.02401 ± 0.000451471 (W 0.000121917) | 0.030989 ± 0.000586037 (W 0.000373549) | 🔵 colmat 1.29× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `cholesky/n128/b1 [api-inclusive]` | 0.031249 ± 0.000317082 (W 0.000236131) | - | - | `*` one row has no measurement here |
+| `cholesky/n256/b1` | 0.078508 ± 0.000947966 (W 0.000358378) | 0.091705 ± 0.000564077 (W 0.00170044) | 🔵 colmat 1.17× faster than `lapack-aocl` |  |
+| `cholesky/n256/b1 [api-inclusive]` | 0.108923 ± 0.000557898 (W 0.000573367) | - | - | `*` one row has no measurement here |
+| `cholesky/n512/b1` | 0.327271 ± 0.00128706 (W 0.00172028) | 0.375288 ± 0.0039334 (W 0.00433876) | 🔵 colmat 1.15× faster than `lapack-aocl` |  |
+| `cholesky/n512/b1 [api-inclusive]` | 0.450577 ± 0.00353651 (W 0.00171531) | - | - | `*` one row has no measurement here |
+| `eigh/n128/b1` | 0.559142 ± 0.00221079 (W 0.00239788) | 1.09589 ± 0.00539429 (W 0.00411891) | 🔵 colmat 1.96× faster than `lapack-aocl` |  |
+| `eigh/n128/b1 [api-inclusive]` | 0.562512 ± 0.00238828 (W 0.0018023) | - | - | `*` one row has no measurement here |
+| `eigh/n256/b1` | 2.09886 ± 0.00621584 (W 0.00243447) | 4.40676 ± 0.0162598 (W 0.0117345) | 🔵 colmat 2.10× faster than `lapack-aocl` |  |
+| `eigh/n256/b1 [api-inclusive]` | 2.1041 ± 0.00474522 (W 0.00258839) | - | - | `*` one row has no measurement here |
+| `eigh/n512/b1` | 8.99765 ± 0.0265671 (W 0.00962652) | 22.6945 ± 0.0423809 (W 0.0639428) | 🔵 colmat 2.52× faster than `lapack-aocl` |  |
+| `eigh/n512/b1 [api-inclusive]` | 9.03334 ± 0.0155683 (W 0.00898754) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1` | 0.163136 ± 0.00632208 (W 0.00129166) | 1.17361 ± 0.00272649 (W 0.0030639) | 🔵 colmat 7.19× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `full_piv_lu/n128/b1 [api-inclusive]` | 0.164072 ± 0.00103586 (W 0.00137404) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1` | 0.656828 ± 0.00779033 (W 0.00203883) | 10.1594 ± 0.113319 (W 0.0199979) | 🔵 colmat 15.47× faster than `lapack-aocl` |  |
+| `full_piv_lu/n256/b1 [api-inclusive]` | 0.81055 ± 0.00612233 (W 0.00414577) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1` | 3.23986 ± 0.0303965 (W 0.00628342) | 299.207 ± 18.7947 (W 3.95596) | 🔵 colmat 92.35× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `full_piv_lu/n512/b1 [api-inclusive]` | 3.85633 ± 0.0185641 (W 0.011143) | - | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [block(basis=128,target=128)]` | 0.0444945 ± 0.000229702 (W 0.000267367) | 0.18175 ± 0.00319957 (W 0.00255181) | 🔵 colmat 4.08× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `householder_apply/n128/b1 [sequence(basis=128,target=128)]` | 0.0443435 ± 0.000458888 (W 0.000385416) | 0.293998 ± 0.00158021 (W 0.00353094) | 🔵 colmat 6.63× faster than `lapack-aocl` |  |
+| `householder_apply/n256/b1 [block(basis=256,target=256)]` | 0.239619 ± 0.00268298 (W 0.00146688) | 0.959414 ± 0.00765937 (W 0.00342374) | 🔵 colmat 4.00× faster than `lapack-aocl` |  |
+| `householder_apply/n256/b1 [sequence(basis=256,target=256)]` | 0.23861 ± 0.00234047 (W 0.00116847) | 1.20595 ± 0.00422193 (W 0.00611134) | 🔵 colmat 5.05× faster than `lapack-aocl` |  |
+| `householder_apply/n512/b1 [block(basis=512,target=512)]` | 1.88847 ± 0.0270542 (W 0.00591459) | 7.88134 ± 0.023284 (W 0.0198852) | 🔵 colmat 4.17× faster than `lapack-aocl` |  |
+| `householder_apply/n512/b1 [sequence(basis=512,target=512)]` | 1.88736 ± 0.00601521 (W 0.00737569) | 8.41268 ± 0.0312496 (W 0.0179888) | 🔵 colmat 4.46× faster than `lapack-aocl` |  |
+| `lu/n128/b1` | 0.0462485 ± 0.000305411 (W 0.00039433) | 0.0803775 ± 0.000210296 (W 0.000996613) | 🔵 colmat 1.74× faster than `lapack-aocl` |  |
+| `lu/n128/b1 [api-inclusive]` | 0.0541325 ± 0.000240849 (W 0.000342848) | - | - | `*` one row has no measurement here |
+| `lu/n256/b1` | 0.182565 ± 0.00141098 (W 0.00126821) | 0.272731 ± 0.000935252 (W 0.00143497) | 🔵 colmat 1.49× faster than `lapack-aocl` |  |
+| `lu/n256/b1 [api-inclusive]` | 0.371408 ± 0.00456901 (W 0.00207956) | - | - | `*` one row has no measurement here |
+| `lu/n512/b1` | 0.79857 ± 0.0024895 (W 0.00268692) | 1.97591 ± 0.00421992 (W 0.00684564) | 🔵 colmat 2.47× faster than `lapack-aocl` |  |
+| `lu/n512/b1 [api-inclusive]` | 1.67581 ± 0.0101439 (W 0.00530864) | - | - | `*` one row has no measurement here |
+| `qr/n128/b1` | 0.169762 ± 0.000836327 (W 0.000975586) | 0.467846 ± 0.00445887 (W 0.00359045) | 🔵 colmat 2.76× faster than `lapack-aocl` |  |
+| `qr/n128/b1 [api-inclusive]` | 0.228174 ± 0.0013771 (W 0.0016123) | - | - | `*` one row has no measurement here |
+| `qr/n256/b1` | 0.556538 ± 0.00129005 (W 0.00198464) | 1.85255 ± 0.0652833 (W 0.00841132) | 🔵 colmat 3.33× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `qr/n256/b1 [api-inclusive]` | 0.867429 ± 0.0072067 (W 0.00326646) | - | - | `*` one row has no measurement here |
+| `qr/n512/b1` | 2.73138 ± 0.00706477 (W 0.00564422) | 11.3269 ± 0.081302 (W 0.0409085) | 🔵 colmat 4.15× faster than `lapack-aocl` |  |
+| `qr/n512/b1 [api-inclusive]` | 3.94834 ± 0.0273812 (W 0.00569516) | - | - | `*` one row has no measurement here |
+| `qr_factor/n128/b1` | 0.104747 ± 0.000506649 (W 0.00023455) | 0.179812 ± 0.00221559 (W 0.00234166) | 🔵 colmat 1.72× faster than `lapack-aocl` |  |
+| `qr_factor/n256/b1` | 0.365107 ± 0.0017561 (W 0.00206565) | 0.642837 ± 0.00132023 (W 0.00509752) | 🔵 colmat 1.76× faster than `lapack-aocl` |  |
+| `qr_factor/n512/b1` | 1.56768 ± 0.00516123 (W 0.00387527) | 2.91429 ± 0.0161409 (W 0.00661192) | 🔵 colmat 1.86× faster than `lapack-aocl` |  |
+| `solve/n128/b1` | 0.0475835 ± 0.000366601 (W 0.000380972) | 0.069118 ± 0.000441059 (W 0.00101956) | 🔵 colmat 1.45× faster than `lapack-aocl` |  |
+| `solve/n128/b1 [api-inclusive]` | 0.0546735 ± 0.000261795 (W 0.000251798) | - | - | `*` one row has no measurement here |
+| `solve/n256/b1` | 0.176743 ± 0.000781225 (W 0.00124141) | 0.187477 ± 0.00137516 (W 0.00227935) | 🔵 colmat 1.06× faster than `lapack-aocl` |  |
+| `solve/n256/b1 [api-inclusive]` | 0.205519 ± 0.00112237 (W 0.00128949) | - | - | `*` one row has no measurement here |
+| `solve/n512/b1` | 0.694136 ± 0.00427862 (W 0.00280318) | 0.748567 ± 0.00735149 (W 0.00353879) | 🔵 colmat 1.08× faster than `lapack-aocl` |  |
+| `solve/n512/b1 [api-inclusive]` | 0.888199 ± 0.00680902 (W 0.00249002) | - | - | `*` one row has no measurement here |
+| `svd_thin/n128/b1` | 1.27729 ± 0.00306916 (W 0.0024423) | 1.55049 ± 0.00550071 (W 0.00497704) | 🔵 colmat 1.21× faster than `lapack-aocl` |  |
+| `svd_thin/n128/b1 [api-inclusive]` | 1.2817 ± 0.00219038 (W 0.00292934) | - | - | `*` one row has no measurement here |
+| `svd_thin/n256/b1` | 4.90636 ± 0.0113103 (W 0.00400196) | 7.43661 ± 0.0849346 (W 0.0120534) | 🔵 colmat 1.52× faster than `lapack-aocl` |  |
+| `svd_thin/n256/b1 [api-inclusive]` | 4.91583 ± 0.00416247 (W 0.0090647) | - | - | `*` one row has no measurement here |
+| `svd_thin/n512/b1` | 20.7484 ± 0.0510899 (W 0.0254359) | 55.6413 ± 2.82188 (W 1.25796) | 🔵 colmat 2.68× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `svd_thin/n512/b1 [api-inclusive]` | 20.8714 ± 0.0312551 (W 0.0138127) | - | - | `*` one row has no measurement here |
+| `svd_values/n128/b1` | 0.626361 ± 0.00174835 (W 0.00191524) | 0.711784 ± 0.00402594 (W 0.00212032) | 🔵 colmat 1.14× faster than `lapack-aocl` |  |
+| `svd_values/n128/b1 [api-inclusive]` | 0.627962 ± 0.00385683 (W 0.00159177) | - | - | `*` one row has no measurement here |
+| `svd_values/n256/b1` | 2.59954 ± 0.0062924 (W 0.00401691) | 3.91588 ± 0.0243888 (W 0.00777787) | 🔵 colmat 1.51× faster than `lapack-aocl` |  |
+| `svd_values/n256/b1 [api-inclusive]` | 2.59794 ± 0.00864875 (W 0.00422609) | - | - | `*` one row has no measurement here |
+| `svd_values/n512/b1` | 11.2656 ± 0.00463338 (W 0.0162335) | 31.2618 ± 1.60135 (W 0.226124) | 🔵 colmat 2.77× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `svd_values/n512/b1 [api-inclusive]` | 11.2799 ± 0.0374091 (W 0.0123142) | - | - | `*` one row has no measurement here |
+| `triangular_solve/n128/b1` | 0.00378 ± 1.7224e-05 (W 2.22084e-05) | 0.00197 ± 1.22474e-05 (W 2.07364e-05) | 🔴 colmat 1.92× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n256/b1` | 0.00975 ± 0.000151579 (W 0.000198524) | 0.0044545 ± 8.42417e-06 (W 2.22956e-05) | 🔴 colmat 2.19× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n512/b1` | 0.026449 ± 0.000303103 (W 0.000314093) | 0.018365 ± 0.00100993 (W 0.000179569) | 🔴 colmat 1.44× slower than `lapack-aocl` | `!` between-start range over 5% |
+
+## linalg-mid, f64, f order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `cholesky/n128/b1` | 0.026329 ± 0.000678437 (W 0.000207436) | 0.0327385 ± 0.000135796 (W 0.000497972) | 🔵 colmat 1.24× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `cholesky/n128/b1 [api-inclusive]` | 0.0313785 ± 0.000400122 (W 0.000163287) | - | - | `*` one row has no measurement here |
+| `cholesky/n256/b1` | 0.0824015 ± 0.000933094 (W 0.000705765) | 0.0978475 ± 0.00155345 (W 0.00250572) | 🔵 colmat 1.19× faster than `lapack-aocl` |  |
+| `cholesky/n256/b1 [api-inclusive]` | 0.106254 ± 0.00131232 (W 0.000560437) | - | - | `*` one row has no measurement here |
+| `cholesky/n512/b1` | 0.304648 ± 0.00262148 (W 0.00265448) | 0.363966 ± 0.00154384 (W 0.00358011) | 🔵 colmat 1.19× faster than `lapack-aocl` |  |
+| `cholesky/n512/b1 [api-inclusive]` | 0.394731 ± 0.00528636 (W 0.0022876) | - | - | `*` one row has no measurement here |
+| `eigh/n128/b1` | 0.435448 ± 0.000886004 (W 0.00209175) | 1.15893 ± 0.00511569 (W 0.00881497) | 🔵 colmat 2.66× faster than `lapack-aocl` |  |
+| `eigh/n128/b1 [api-inclusive]` | 0.437752 ± 0.00161468 (W 0.00237552) | - | - | `*` one row has no measurement here |
+| `eigh/n256/b1` | 1.55848 ± 0.0051161 (W 0.0037421) | 4.51616 ± 0.0179821 (W 0.0170464) | 🔵 colmat 2.90× faster than `lapack-aocl` |  |
+| `eigh/n256/b1 [api-inclusive]` | 1.57133 ± 0.00486955 (W 0.00389013) | - | - | `*` one row has no measurement here |
+| `eigh/n512/b1` | 6.1542 ± 0.0164954 (W 0.0112359) | 22.0856 ± 0.0927207 (W 0.0729332) | 🔵 colmat 3.59× faster than `lapack-aocl` |  |
+| `eigh/n512/b1 [api-inclusive]` | 6.17496 ± 0.00700187 (W 0.00688308) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1` | 0.163741 ± 0.0020367 (W 0.00181928) | 1.17896 ± 0.00406145 (W 0.00427807) | 🔵 colmat 7.20× faster than `lapack-aocl` |  |
+| `full_piv_lu/n128/b1 [api-inclusive]` | 0.166845 ± 0.00134366 (W 0.00144252) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1` | 0.593505 ± 0.00271297 (W 0.00265323) | 10.166 ± 0.0179054 (W 0.0350077) | 🔵 colmat 17.13× faster than `lapack-aocl` |  |
+| `full_piv_lu/n256/b1 [api-inclusive]` | 0.760193 ± 0.00421238 (W 0.00452032) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1` | 2.27138 ± 0.0210181 (W 0.00677308) | 307.481 ± 21.5798 (W 2.1943) | 🔵 colmat 135.37× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `full_piv_lu/n512/b1 [api-inclusive]` | 3.03495 ± 0.0117762 (W 0.00535308) | - | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [block(basis=128,target=128)]` | 0.0336095 ± 0.000303547 (W 0.000978348) | 0.182744 ± 0.000648547 (W 0.00280511) | 🔵 colmat 5.44× faster than `lapack-aocl` |  |
+| `householder_apply/n128/b1 [sequence(basis=128,target=128)]` | 0.0339995 ± 0.000222029 (W 0.000508225) | 0.348043 ± 0.00193618 (W 0.00523006) | 🔵 colmat 10.24× faster than `lapack-aocl` |  |
+| `householder_apply/n256/b1 [block(basis=256,target=256)]` | 0.14585 ± 0.00119962 (W 0.0010099) | 0.878964 ± 0.00395553 (W 0.00456484) | 🔵 colmat 6.03× faster than `lapack-aocl` |  |
+| `householder_apply/n256/b1 [sequence(basis=256,target=256)]` | 0.146375 ± 0.00139702 (W 0.00154824) | 1.35885 ± 0.0156569 (W 0.0168069) | 🔵 colmat 9.28× faster than `lapack-aocl` |  |
+| `householder_apply/n512/b1 [block(basis=512,target=512)]` | 1.03271 ± 0.00990363 (W 0.00387377) | 7.18442 ± 0.100665 (W 0.0191295) | 🔵 colmat 6.96× faster than `lapack-aocl` |  |
+| `householder_apply/n512/b1 [sequence(basis=512,target=512)]` | 1.02973 ± 0.00757149 (W 0.00389736) | 8.36443 ± 0.618506 (W 0.0279712) | 🔵 colmat 8.12× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `lu/n128/b1` | 0.0458145 ± 0.0003264 (W 0.000324079) | 0.0825575 ± 0.000305509 (W 0.000377131) | 🔵 colmat 1.80× faster than `lapack-aocl` |  |
+| `lu/n128/b1 [api-inclusive]` | 0.053349 ± 0.000348588 (W 0.000377847) | - | - | `*` one row has no measurement here |
+| `lu/n256/b1` | 0.163251 ± 0.0011608 (W 0.0019177) | 0.219481 ± 0.0010936 (W 0.00296418) | 🔵 colmat 1.34× faster than `lapack-aocl` |  |
+| `lu/n256/b1 [api-inclusive]` | 0.352616 ± 0.0045879 (W 0.00234001) | - | - | `*` one row has no measurement here |
+| `lu/n512/b1` | 0.634242 ± 0.00234087 (W 0.00250764) | 1.71722 ± 0.00318344 (W 0.00755504) | 🔵 colmat 2.71× faster than `lapack-aocl` |  |
+| `lu/n512/b1 [api-inclusive]` | 1.49682 ± 0.00632333 (W 0.00414335) | - | - | `*` one row has no measurement here |
+| `qr/n128/b1` | 0.155828 ± 0.000572444 (W 0.000467853) | 0.511761 ± 0.0065952 (W 0.0112) | 🔵 colmat 3.28× faster than `lapack-aocl` |  |
+| `qr/n128/b1 [api-inclusive]` | 0.220968 ± 0.00113454 (W 0.00183039) | - | - | `*` one row has no measurement here |
+| `qr/n256/b1` | 0.481924 ± 0.00123848 (W 0.00260284) | 1.86669 ± 0.0154839 (W 0.0164219) | 🔵 colmat 3.87× faster than `lapack-aocl` |  |
+| `qr/n256/b1 [api-inclusive]` | 0.802671 ± 0.00183804 (W 0.00346613) | - | - | `*` one row has no measurement here |
+| `qr/n512/b1` | 1.75107 ± 0.00495729 (W 0.00192146) | 10.1323 ± 0.0500616 (W 0.0354663) | 🔵 colmat 5.79× faster than `lapack-aocl` |  |
+| `qr/n512/b1 [api-inclusive]` | 3.05004 ± 0.0126778 (W 0.0073693) | - | - | `*` one row has no measurement here |
+| `qr_factor/n128/b1` | 0.105007 ± 0.0019471 (W 0.000261859) | 0.166257 ± 0.0029183 (W 0.00245154) | 🔵 colmat 1.58× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `qr_factor/n256/b1` | 0.361053 ± 0.00171038 (W 0.00213566) | 0.502466 ± 0.00221745 (W 0.00739469) | 🔵 colmat 1.39× faster than `lapack-aocl` |  |
+| `qr_factor/n512/b1` | 1.08662 ± 0.00402957 (W 0.0020993) | 1.86425 ± 0.0038058 (W 0.0129151) | 🔵 colmat 1.72× faster than `lapack-aocl` |  |
+| `solve/n128/b1` | 0.045283 ± 0.000362175 (W 0.000258589) | 0.069544 ± 0.000248349 (W 0.00051734) | 🔵 colmat 1.54× faster than `lapack-aocl` |  |
+| `solve/n128/b1 [api-inclusive]` | 0.0546765 ± 0.000229149 (W 0.000250225) | - | - | `*` one row has no measurement here |
+| `solve/n256/b1` | 0.145799 ± 0.00111359 (W 0.00125093) | 0.165677 ± 0.00359706 (W 0.00382766) | 🔵 colmat 1.14× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `solve/n256/b1 [api-inclusive]` | 0.194503 ± 0.000642672 (W 0.00156904) | - | - | `*` one row has no measurement here |
+| `solve/n512/b1` | 0.59817 ± 0.00191905 (W 0.00278232) | 0.614182 ± 0.00841746 (W 0.00349929) | · |  |
+| `solve/n512/b1 [api-inclusive]` | 0.731744 ± 0.00528389 (W 0.00297394) | - | - | `*` one row has no measurement here |
+| `svd_thin/n128/b1` | 1.27838 ± 0.00271099 (W 0.00390704) | 1.57601 ± 0.00187049 (W 0.0119537) | 🔵 colmat 1.23× faster than `lapack-aocl` |  |
+| `svd_thin/n128/b1 [api-inclusive]` | 1.28479 ± 0.00478737 (W 0.00347214) | - | - | `*` one row has no measurement here |
+| `svd_thin/n256/b1` | 4.57157 ± 0.0100896 (W 0.00810861) | 7.07861 ± 0.0517312 (W 0.0161282) | 🔵 colmat 1.55× faster than `lapack-aocl` |  |
+| `svd_thin/n256/b1 [api-inclusive]` | 4.57784 ± 0.00558828 (W 0.00778066) | - | - | `*` one row has no measurement here |
+| `svd_thin/n512/b1` | 17.6558 ± 0.0184605 (W 0.0222583) | 48.0755 ± 0.463015 (W 5.76951) | 🔵 colmat 2.72× faster than `lapack-aocl` |  |
+| `svd_thin/n512/b1 [api-inclusive]` | 17.7435 ± 0.0374373 (W 0.0194306) | - | - | `*` one row has no measurement here |
+| `svd_values/n128/b1` | 0.655072 ± 0.00296844 (W 0.0021877) | 0.713832 ± 0.00499793 (W 0.00250177) | 🔵 colmat 1.09× faster than `lapack-aocl` |  |
+| `svd_values/n128/b1 [api-inclusive]` | 0.656295 ± 0.00256643 (W 0.00239853) | - | - | `*` one row has no measurement here |
+| `svd_values/n256/b1` | 2.5473 ± 0.0122262 (W 0.00387434) | 3.85478 ± 0.0220593 (W 0.0099048) | 🔵 colmat 1.51× faster than `lapack-aocl` |  |
+| `svd_values/n256/b1 [api-inclusive]` | 2.55905 ± 0.00645175 (W 0.00534384) | - | - | `*` one row has no measurement here |
+| `svd_values/n512/b1` | 9.97075 ± 0.0227644 (W 0.0094774) | 27.9746 ± 0.454265 (W 0.294127) | 🔵 colmat 2.81× faster than `lapack-aocl` |  |
+| `svd_values/n512/b1 [api-inclusive]` | 9.96446 ± 0.0111607 (W 0.00948028) | - | - | `*` one row has no measurement here |
+| `triangular_solve/n128/b1` | 0.0035695 ± 4.08921e-05 (W 4.09743e-05) | 0.001975 ± 1.51658e-05 (W 1.95899e-05) | 🔴 colmat 1.81× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n256/b1` | 0.01017 ± 6.72627e-05 (W 0.000124001) | 0.00434 ± 2.41143e-05 (W 1.86052e-05) | 🔴 colmat 2.34× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n512/b1` | 0.0235095 ± 0.000202324 (W 0.000170676) | 0.017064 ± 0.000978518 (W 0.000148197) | 🔴 colmat 1.38× slower than `lapack-aocl` | `!` between-start range over 5% |
+
+## linalg-mid, c64, c order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `cholesky/n128/b1` | 0.0917845 ± 0.000195948 (W 0.000278466) | - | - | `*` one row has no measurement here |
+| `cholesky/n128/b1 [api-inclusive]` | 0.097164 ± 0.000253022 (W 0.00147547) | - | - | `*` one row has no measurement here |
+| `cholesky/n256/b1` | 0.530786 ± 0.00353519 (W 0.00196651) | - | - | `*` one row has no measurement here |
+| `cholesky/n256/b1 [api-inclusive]` | 0.54139 ± 0.00301985 (W 0.00239636) | - | - | `*` one row has no measurement here |
+| `cholesky/n512/b1` | 3.12555 ± 0.0325058 (W 0.00375268) | - | - | `*` one row has no measurement here |
+| `cholesky/n512/b1 [api-inclusive]` | 3.17088 ± 0.00907324 (W 0.00412004) | - | - | `*` one row has no measurement here |
+| `eigh/n128/b1` | 1.85098 ± 0.00309604 (W 0.0018724) | - | - | `*` one row has no measurement here |
+| `eigh/n128/b1 [api-inclusive]` | 1.85497 ± 0.00670757 (W 0.00830219) | - | - | `*` one row has no measurement here |
+| `eigh/n256/b1` | 9.60167 ± 0.0284131 (W 0.0150044) | - | - | `*` one row has no measurement here |
+| `eigh/n256/b1 [api-inclusive]` | 9.57749 ± 0.0420593 (W 0.0078967) | - | - | `*` one row has no measurement here |
+| `eigh/n512/b1` | 55.7266 ± 0.263252 (W 0.0424119) | - | - | `*` one row has no measurement here |
+| `eigh/n512/b1 [api-inclusive]` | 55.9546 ± 0.105566 (W 0.0499344) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1` | 0.43006 ± 0.00162873 (W 0.00217043) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1 [api-inclusive]` | 0.492264 ± 0.00211648 (W 0.00184282) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1` | 2.99305 ± 0.0155635 (W 0.00295634) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1 [api-inclusive]` | 3.33642 ± 0.0309212 (W 0.0137809) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1` | 22.9574 ± 0.125575 (W 0.052017) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1 [api-inclusive]` | 24.4169 ± 0.0782177 (W 0.0433581) | - | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [block(basis=128,target=128)]` | 0.424447 ± 0.00125246 (W 0.00100067) | - | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [sequence(basis=128,target=128)]` | 0.425553 ± 0.00191448 (W 0.0017043) | - | - | `*` one row has no measurement here |
+| `householder_apply/n256/b1 [block(basis=256,target=256)]` | 2.90332 ± 0.0668719 (W 0.00339778) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `householder_apply/n256/b1 [sequence(basis=256,target=256)]` | 2.90007 ± 0.0496555 (W 0.00232264) | - | - | `*` one row has no measurement here |
+| `householder_apply/n512/b1 [block(basis=512,target=512)]` | 20.5527 ± 0.0321181 (W 0.0215017) | - | - | `*` one row has no measurement here |
+| `householder_apply/n512/b1 [sequence(basis=512,target=512)]` | 20.5519 ± 0.0295627 (W 0.0227443) | - | - | `*` one row has no measurement here |
+| `lu/n128/b1` | 0.145047 ± 0.000302066 (W 0.000649052) | - | - | `*` one row has no measurement here |
+| `lu/n128/b1 [api-inclusive]` | 0.245096 ± 0.00301776 (W 0.00289603) | - | - | `*` one row has no measurement here |
+| `lu/n256/b1` | 0.855114 ± 0.00840956 (W 0.00163838) | - | - | `*` one row has no measurement here |
+| `lu/n256/b1 [api-inclusive]` | 1.34965 ± 0.00504248 (W 0.00348412) | - | - | `*` one row has no measurement here |
+| `lu/n512/b1` | 5.42459 ± 0.0144995 (W 0.00532399) | - | - | `*` one row has no measurement here |
+| `lu/n512/b1 [api-inclusive]` | 7.44446 ± 0.0264452 (W 0.0113571) | - | - | `*` one row has no measurement here |
+| `qr/n128/b1` | 0.696485 ± 0.00364453 (W 0.00146338) | - | - | `*` one row has no measurement here |
+| `qr/n128/b1 [api-inclusive]` | 0.816088 ± 0.00164845 (W 0.00204877) | - | - | `*` one row has no measurement here |
+| `qr/n256/b1` | 4.40504 ± 0.0250439 (W 0.00747219) | - | - | `*` one row has no measurement here |
+| `qr/n256/b1 [api-inclusive]` | 4.85981 ± 0.0158185 (W 0.00415969) | - | - | `*` one row has no measurement here |
+| `qr/n512/b1` | 28.4 ± 1.21821 (W 0.0173981) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr/n512/b1 [api-inclusive]` | 28.7265 ± 0.129056 (W 0.0138095) | - | - | `*` one row has no measurement here |
+| `qr_factor/n128/b1` | 0.341121 ± 0.000627629 (W 0.00150563) | - | - | `*` one row has no measurement here |
+| `qr_factor/n256/b1` | 2.10128 ± 0.0100838 (W 0.00391215) | - | - | `*` one row has no measurement here |
+| `qr_factor/n512/b1` | 11.9161 ± 0.0257794 (W 0.0340013) | - | - | `*` one row has no measurement here |
+| `solve/n128/b1` | 0.13652 ± 8.24468e-05 (W 0.00114553) | - | - | `*` one row has no measurement here |
+| `solve/n128/b1 [api-inclusive]` | 0.253772 ± 0.00234157 (W 0.00185924) | - | - | `*` one row has no measurement here |
+| `solve/n256/b1` | 0.84648 ± 0.00303501 (W 0.00241136) | - | - | `*` one row has no measurement here |
+| `solve/n256/b1 [api-inclusive]` | 0.983044 ± 0.00873718 (W 0.00218464) | - | - | `*` one row has no measurement here |
+| `solve/n512/b1` | 5.41852 ± 0.012015 (W 0.00700637) | - | - | `*` one row has no measurement here |
+| `solve/n512/b1 [api-inclusive]` | 5.79448 ± 0.00577316 (W 0.00839467) | - | - | `*` one row has no measurement here |
+| `svd_thin/n128/b1` | 2.78642 ± 0.0073027 (W 0.00514997) | - | - | `*` one row has no measurement here |
+| `svd_thin/n128/b1 [api-inclusive]` | 2.79017 ± 0.00395975 (W 0.00664366) | - | - | `*` one row has no measurement here |
+| `svd_thin/n256/b1` | 15.9207 ± 0.0228588 (W 0.0179146) | - | - | `*` one row has no measurement here |
+| `svd_thin/n256/b1 [api-inclusive]` | 15.9705 ± 0.0235173 (W 0.0150908) | - | - | `*` one row has no measurement here |
+| `svd_thin/n512/b1` | 99.1847 ± 0.560506 (W 0.364497) | - | - | `*` one row has no measurement here |
+| `svd_thin/n512/b1 [api-inclusive]` | 99.8749 ± 0.186446 (W 0.128057) | - | - | `*` one row has no measurement here |
+| `svd_values/n128/b1` | 1.09805 ± 0.00176168 (W 0.00170718) | - | - | `*` one row has no measurement here |
+| `svd_values/n128/b1 [api-inclusive]` | 1.09942 ± 0.00196401 (W 0.00133447) | - | - | `*` one row has no measurement here |
+| `svd_values/n256/b1` | 7.59907 ± 0.0883492 (W 0.0165202) | - | - | `*` one row has no measurement here |
+| `svd_values/n256/b1 [api-inclusive]` | 7.60282 ± 0.0962357 (W 0.0134797) | - | - | `*` one row has no measurement here |
+| `svd_values/n512/b1` | 53.0189 ± 0.135153 (W 0.0532758) | - | - | `*` one row has no measurement here |
+| `svd_values/n512/b1 [api-inclusive]` | 53.0787 ± 0.248887 (W 0.0598085) | - | - | `*` one row has no measurement here |
+| `triangular_solve/n128/b1` | 0.00504 ± 5.12656e-05 (W 3.89895e-05) | 0.00447 ± 1.8283e-05 (W 2.05213e-05) | 🔴 colmat 1.13× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n256/b1` | 0.015864 ± 0.000227859 (W 0.000128393) | 0.0130095 ± 0.000126587 (W 8.10288e-05) | 🔴 colmat 1.22× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n512/b1` | 0.0591385 ± 0.000263621 (W 0.000315173) | 0.0469785 ± 0.000953685 (W 0.000231871) | 🔴 colmat 1.26× slower than `lapack-aocl` | `!` between-start range over 5% |
+
+## linalg-mid, c64, c order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `cholesky/n128/b1` | 0.071029 ± 0.00187048 (W 0.0002352) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `cholesky/n128/b1 [api-inclusive]` | 0.0821075 ± 0.000306063 (W 0.000643522) | - | - | `*` one row has no measurement here |
+| `cholesky/n256/b1` | 0.2538 ± 0.000734161 (W 0.00165906) | - | - | `*` one row has no measurement here |
+| `cholesky/n256/b1 [api-inclusive]` | 0.321425 ± 0.000720305 (W 0.00127033) | - | - | `*` one row has no measurement here |
+| `cholesky/n512/b1` | 1.00638 ± 0.00313098 (W 0.00226902) | - | - | `*` one row has no measurement here |
+| `cholesky/n512/b1 [api-inclusive]` | 1.24487 ± 0.00860764 (W 0.00291335) | - | - | `*` one row has no measurement here |
+| `eigh/n128/b1` | 0.785212 ± 0.00125607 (W 0.00241941) | - | - | `*` one row has no measurement here |
+| `eigh/n128/b1 [api-inclusive]` | 0.790321 ± 0.00155957 (W 0.00198942) | - | - | `*` one row has no measurement here |
+| `eigh/n256/b1` | 3.18445 ± 0.00668924 (W 0.00731014) | - | - | `*` one row has no measurement here |
+| `eigh/n256/b1 [api-inclusive]` | 3.20678 ± 0.00793283 (W 0.00365994) | - | - | `*` one row has no measurement here |
+| `eigh/n512/b1` | 16.4117 ± 0.0383703 (W 0.01336) | - | - | `*` one row has no measurement here |
+| `eigh/n512/b1 [api-inclusive]` | 16.5204 ± 0.0376767 (W 0.0127707) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1` | 0.257492 ± 0.00248098 (W 0.0020153) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1 [api-inclusive]` | 0.342061 ± 0.00242099 (W 0.00223647) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1` | 1.13457 ± 0.00711524 (W 0.00335282) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1 [api-inclusive]` | 1.62226 ± 0.00855808 (W 0.00474961) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1` | 6.4942 ± 0.0213241 (W 0.0112893) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1 [api-inclusive]` | 8.57855 ± 0.0203574 (W 0.0112597) | - | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [block(basis=128,target=128)]` | 0.128155 ± 0.000426232 (W 0.00124824) | - | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [sequence(basis=128,target=128)]` | 0.127763 ± 0.000634549 (W 0.000737874) | - | - | `*` one row has no measurement here |
+| `householder_apply/n256/b1 [block(basis=256,target=256)]` | 0.789682 ± 0.00699037 (W 0.00288181) | - | - | `*` one row has no measurement here |
+| `householder_apply/n256/b1 [sequence(basis=256,target=256)]` | 0.782706 ± 0.00680425 (W 0.00287079) | - | - | `*` one row has no measurement here |
+| `householder_apply/n512/b1 [block(basis=512,target=512)]` | 5.30379 ± 0.00914959 (W 0.0121744) | - | - | `*` one row has no measurement here |
+| `householder_apply/n512/b1 [sequence(basis=512,target=512)]` | 5.3205 ± 0.0168491 (W 0.0136073) | - | - | `*` one row has no measurement here |
+| `lu/n128/b1` | 0.13126 ± 0.000625637 (W 0.000869838) | - | - | `*` one row has no measurement here |
+| `lu/n128/b1 [api-inclusive]` | 0.212071 ± 0.0016141 (W 0.00181038) | - | - | `*` one row has no measurement here |
+| `lu/n256/b1` | 0.473326 ± 0.00123683 (W 0.00190235) | - | - | `*` one row has no measurement here |
+| `lu/n256/b1 [api-inclusive]` | 0.96954 ± 0.00516186 (W 0.00408454) | - | - | `*` one row has no measurement here |
+| `lu/n512/b1` | 2.14678 ± 0.00547904 (W 0.00806301) | - | - | `*` one row has no measurement here |
+| `lu/n512/b1 [api-inclusive]` | 4.2351 ± 0.0134263 (W 0.00685513) | - | - | `*` one row has no measurement here |
+| `qr/n128/b1` | 0.446438 ± 0.00144691 (W 0.00177629) | - | - | `*` one row has no measurement here |
+| `qr/n128/b1 [api-inclusive]` | 0.567556 ± 0.002525 (W 0.0033792) | - | - | `*` one row has no measurement here |
+| `qr/n256/b1` | 1.51612 ± 0.0119438 (W 0.00307914) | - | - | `*` one row has no measurement here |
+| `qr/n256/b1 [api-inclusive]` | 2.19142 ± 0.00880187 (W 0.00509553) | - | - | `*` one row has no measurement here |
+| `qr/n512/b1` | 8.85475 ± 0.0332946 (W 0.0125635) | - | - | `*` one row has no measurement here |
+| `qr/n512/b1 [api-inclusive]` | 10.9119 ± 0.0182106 (W 0.0144576) | - | - | `*` one row has no measurement here |
+| `qr_factor/n128/b1` | 0.27903 ± 0.00129547 (W 0.00151406) | - | - | `*` one row has no measurement here |
+| `qr_factor/n256/b1` | 0.883976 ± 0.00153754 (W 0.00236223) | - | - | `*` one row has no measurement here |
+| `qr_factor/n512/b1` | 4.1807 ± 0.0582184 (W 0.00682805) | - | - | `*` one row has no measurement here |
+| `solve/n128/b1` | 0.110862 ± 0.000308759 (W 0.000708531) | - | - | `*` one row has no measurement here |
+| `solve/n128/b1 [api-inclusive]` | 0.212239 ± 0.00290421 (W 0.00200107) | - | - | `*` one row has no measurement here |
+| `solve/n256/b1` | 0.461424 ± 0.00206475 (W 0.00181813) | - | - | `*` one row has no measurement here |
+| `solve/n256/b1 [api-inclusive]` | 0.577851 ± 0.00392262 (W 0.0026371) | - | - | `*` one row has no measurement here |
+| `solve/n512/b1` | 2.10146 ± 0.0336027 (W 0.00743325) | - | - | `*` one row has no measurement here |
+| `solve/n512/b1 [api-inclusive]` | 2.49888 ± 0.00688318 (W 0.00518981) | - | - | `*` one row has no measurement here |
+| `svd_thin/n128/b1` | 1.72783 ± 0.0068064 (W 0.00425027) | - | - | `*` one row has no measurement here |
+| `svd_thin/n128/b1 [api-inclusive]` | 1.73317 ± 0.00711908 (W 0.00529756) | - | - | `*` one row has no measurement here |
+| `svd_thin/n256/b1` | 7.60758 ± 0.0875326 (W 0.0123818) | - | - | `*` one row has no measurement here |
+| `svd_thin/n256/b1 [api-inclusive]` | 7.63842 ± 0.018381 (W 0.0151239) | - | - | `*` one row has no measurement here |
+| `svd_thin/n512/b1` | 40.0841 ± 0.559374 (W 0.0464186) | - | - | `*` one row has no measurement here |
+| `svd_thin/n512/b1 [api-inclusive]` | 40.2356 ± 0.103475 (W 0.0354334) | - | - | `*` one row has no measurement here |
+| `svd_values/n128/b1` | 0.854224 ± 0.00219215 (W 0.00279413) | - | - | `*` one row has no measurement here |
+| `svd_values/n128/b1 [api-inclusive]` | 0.851679 ± 0.00377238 (W 0.00275431) | - | - | `*` one row has no measurement here |
+| `svd_values/n256/b1` | 4.32275 ± 0.134719 (W 0.00805262) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_values/n256/b1 [api-inclusive]` | 4.34035 ± 0.11504 (W 0.00746286) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_values/n512/b1` | 24.1305 ± 0.051269 (W 0.0386876) | - | - | `*` one row has no measurement here |
+| `svd_values/n512/b1 [api-inclusive]` | 24.1046 ± 0.0960983 (W 0.0236841) | - | - | `*` one row has no measurement here |
+| `triangular_solve/n128/b1` | 0.00574 ± 5.35304e-05 (W 3.59873e-05) | 0.004475 ± 3.81663e-05 (W 3.95465e-05) | 🔴 colmat 1.28× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n256/b1` | 0.0139895 ± 0.000197399 (W 0.000105966) | 0.012799 ± 0.000143229 (W 6.01969e-05) | 🔴 colmat 1.09× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n512/b1` | 0.036808 ± 0.000225244 (W 0.000224978) | 0.047708 ± 0.000656959 (W 0.000262457) | 🔵 colmat 1.30× faster than `lapack-aocl` |  |
+
+## linalg-mid, c64, c order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `cholesky/n128/b1` | 0.073377 ± 0.00040968 (W 0.00029649) | - | - | `*` one row has no measurement here |
+| `cholesky/n128/b1 [api-inclusive]` | 0.0825075 ± 0.000453098 (W 0.000269899) | - | - | `*` one row has no measurement here |
+| `cholesky/n256/b1` | 0.233389 ± 0.00536128 (W 0.00260113) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `cholesky/n256/b1 [api-inclusive]` | 0.298738 ± 0.00241764 (W 0.00168417) | - | - | `*` one row has no measurement here |
+| `cholesky/n512/b1` | 0.759838 ± 0.00576899 (W 0.00238635) | - | - | `*` one row has no measurement here |
+| `cholesky/n512/b1 [api-inclusive]` | 1.03032 ± 0.0182024 (W 0.00263582) | - | - | `*` one row has no measurement here |
+| `eigh/n128/b1` | 0.614652 ± 0.00233285 (W 0.00264913) | - | - | `*` one row has no measurement here |
+| `eigh/n128/b1 [api-inclusive]` | 0.619797 ± 0.00252767 (W 0.00223966) | - | - | `*` one row has no measurement here |
+| `eigh/n256/b1` | 2.30972 ± 0.00702278 (W 0.00449809) | - | - | `*` one row has no measurement here |
+| `eigh/n256/b1 [api-inclusive]` | 2.33166 ± 0.00725449 (W 0.00403072) | - | - | `*` one row has no measurement here |
+| `eigh/n512/b1` | 10.4888 ± 0.0126322 (W 0.0100034) | - | - | `*` one row has no measurement here |
+| `eigh/n512/b1 [api-inclusive]` | 10.5778 ± 0.0207953 (W 0.00677592) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1` | 0.235614 ± 0.00345157 (W 0.00159538) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1 [api-inclusive]` | 0.330543 ± 0.00234524 (W 0.00326269) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1` | 0.877556 ± 0.00576803 (W 0.00206625) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1 [api-inclusive]` | 1.39092 ± 0.00627048 (W 0.00467162) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1` | 3.9697 ± 0.00697475 (W 0.00798759) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1 [api-inclusive]` | 6.13001 ± 0.0150173 (W 0.00939767) | - | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [block(basis=128,target=128)]` | 0.100404 ± 0.000630054 (W 0.00109907) | - | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [sequence(basis=128,target=128)]` | 0.100436 ± 0.000440504 (W 0.000966535) | - | - | `*` one row has no measurement here |
+| `householder_apply/n256/b1 [block(basis=256,target=256)]` | 0.438058 ± 0.00423998 (W 0.00245639) | - | - | `*` one row has no measurement here |
+| `householder_apply/n256/b1 [sequence(basis=256,target=256)]` | 0.435863 ± 0.0025339 (W 0.00218125) | - | - | `*` one row has no measurement here |
+| `householder_apply/n512/b1 [block(basis=512,target=512)]` | 2.78981 ± 0.00802063 (W 0.012419) | - | - | `*` one row has no measurement here |
+| `householder_apply/n512/b1 [sequence(basis=512,target=512)]` | 2.7864 ± 0.00755997 (W 0.0120691) | - | - | `*` one row has no measurement here |
+| `lu/n128/b1` | 0.132741 ± 0.00109889 (W 0.000776931) | - | - | `*` one row has no measurement here |
+| `lu/n128/b1 [api-inclusive]` | 0.203076 ± 0.000759314 (W 0.00175381) | - | - | `*` one row has no measurement here |
+| `lu/n256/b1` | 0.401324 ± 0.00177169 (W 0.00256666) | - | - | `*` one row has no measurement here |
+| `lu/n256/b1 [api-inclusive]` | 0.91512 ± 0.0064303 (W 0.00228146) | - | - | `*` one row has no measurement here |
+| `lu/n512/b1` | 1.524 ± 0.0102899 (W 0.00442061) | - | - | `*` one row has no measurement here |
+| `lu/n512/b1 [api-inclusive]` | 3.70557 ± 0.0196601 (W 0.00764513) | - | - | `*` one row has no measurement here |
+| `qr/n128/b1` | 0.370819 ± 0.00864695 (W 0.0023691) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr/n128/b1 [api-inclusive]` | 0.508745 ± 0.00231041 (W 0.00268348) | - | - | `*` one row has no measurement here |
+| `qr/n256/b1` | 1.1771 ± 0.00664613 (W 0.00292304) | - | - | `*` one row has no measurement here |
+| `qr/n256/b1 [api-inclusive]` | 1.88555 ± 0.0150214 (W 0.00629338) | - | - | `*` one row has no measurement here |
+| `qr/n512/b1` | 5.01511 ± 0.0208747 (W 0.00648493) | - | - | `*` one row has no measurement here |
+| `qr/n512/b1 [api-inclusive]` | 7.5415 ± 0.0281051 (W 0.0170786) | - | - | `*` one row has no measurement here |
+| `qr_factor/n128/b1` | 0.249874 ± 0.00106708 (W 0.00165846) | - | - | `*` one row has no measurement here |
+| `qr_factor/n256/b1` | 0.805977 ± 0.0030552 (W 0.00238154) | - | - | `*` one row has no measurement here |
+| `qr_factor/n512/b1` | 2.47952 ± 0.0113228 (W 0.00473309) | - | - | `*` one row has no measurement here |
+| `solve/n128/b1` | 0.0976925 ± 0.000655564 (W 0.000522979) | - | - | `*` one row has no measurement here |
+| `solve/n128/b1 [api-inclusive]` | 0.203849 ± 0.00259401 (W 0.00183779) | - | - | `*` one row has no measurement here |
+| `solve/n256/b1` | 0.39718 ± 0.0020962 (W 0.00221564) | - | - | `*` one row has no measurement here |
+| `solve/n256/b1 [api-inclusive]` | 0.52476 ± 0.00542241 (W 0.00321657) | - | - | `*` one row has no measurement here |
+| `solve/n512/b1` | 1.49613 ± 0.0237752 (W 0.00407551) | - | - | `*` one row has no measurement here |
+| `solve/n512/b1 [api-inclusive]` | 1.98703 ± 0.015188 (W 0.00452446) | - | - | `*` one row has no measurement here |
+| `svd_thin/n128/b1` | 1.63044 ± 0.00459865 (W 0.00366681) | - | - | `*` one row has no measurement here |
+| `svd_thin/n128/b1 [api-inclusive]` | 1.63733 ± 0.00624237 (W 0.00329865) | - | - | `*` one row has no measurement here |
+| `svd_thin/n256/b1` | 6.69191 ± 0.1393 (W 0.00908343) | - | - | `*` one row has no measurement here |
+| `svd_thin/n256/b1 [api-inclusive]` | 6.72972 ± 0.138707 (W 0.0103659) | - | - | `*` one row has no measurement here |
+| `svd_thin/n512/b1` | 29.8558 ± 0.59167 (W 0.0360772) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_thin/n512/b1 [api-inclusive]` | 29.9417 ± 0.607525 (W 0.0501681) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_values/n128/b1` | 0.857492 ± 0.0095234 (W 0.00302361) | - | - | `*` one row has no measurement here |
+| `svd_values/n128/b1 [api-inclusive]` | 0.850081 ± 0.00369006 (W 0.00219701) | - | - | `*` one row has no measurement here |
+| `svd_values/n256/b1` | 3.98886 ± 0.113283 (W 0.00385767) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_values/n256/b1 [api-inclusive]` | 3.97898 ± 0.0312339 (W 0.00705337) | - | - | `*` one row has no measurement here |
+| `svd_values/n512/b1` | 18.3767 ± 0.0857697 (W 0.0237287) | - | - | `*` one row has no measurement here |
+| `svd_values/n512/b1 [api-inclusive]` | 18.3649 ± 0.717965 (W 0.0342601) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `triangular_solve/n128/b1` | 0.0057645 ± 6.47271e-05 (W 3.13944e-05) | 0.00449 ± 1.3784e-05 (W 2.81573e-05) | 🔴 colmat 1.28× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n256/b1` | 0.01337 ± 4.01779e-05 (W 6.87928e-05) | 0.0130695 ± 0.000119723 (W 6.24897e-05) | · | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n512/b1` | 0.033248 ± 0.000951124 (W 0.000295573) | 0.049152 ± 0.00177104 (W 0.000880433) | 🔵 colmat 1.48× faster than `lapack-aocl` | `!` between-start range over 5% |
+
+## linalg-mid, c64, f order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `cholesky/n128/b1` | 0.082389 ± 0.000229441 (W 7.27693e-05) | 0.137908 ± 0.00116514 (W 0.00120999) | 🔵 colmat 1.67× faster than `lapack-aocl` |  |
+| `cholesky/n128/b1 [api-inclusive]` | 0.0895915 ± 0.000237229 (W 0.0010145) | - | - | `*` one row has no measurement here |
+| `cholesky/n256/b1` | 0.482199 ± 0.00279006 (W 0.00186374) | 0.561174 ± 0.00487195 (W 0.0020628) | 🔵 colmat 1.16× faster than `lapack-aocl` |  |
+| `cholesky/n256/b1 [api-inclusive]` | 0.509907 ± 0.00156605 (W 0.0019629) | - | - | `*` one row has no measurement here |
+| `cholesky/n512/b1` | 2.96963 ± 0.0196795 (W 0.00237905) | 2.86306 ± 0.0115563 (W 0.00222009) | · |  |
+| `cholesky/n512/b1 [api-inclusive]` | 3.04411 ± 0.0100798 (W 0.00185043) | - | - | `*` one row has no measurement here |
+| `eigh/n128/b1` | 1.84674 ± 0.00777158 (W 0.00222355) | 1.96397 ± 0.00375602 (W 0.000790809) | 🔵 colmat 1.06× faster than `lapack-aocl` |  |
+| `eigh/n128/b1 [api-inclusive]` | 1.84811 ± 0.00531604 (W 0.000995958) | - | - | `*` one row has no measurement here |
+| `eigh/n256/b1` | 9.56262 ± 0.0205209 (W 0.0192087) | 11.1756 ± 0.12099 (W 0.00836952) | 🔵 colmat 1.17× faster than `lapack-aocl` |  |
+| `eigh/n256/b1 [api-inclusive]` | 9.56588 ± 0.0223027 (W 0.0120383) | - | - | `*` one row has no measurement here |
+| `eigh/n512/b1` | 55.7559 ± 0.17828 (W 0.0422326) | 74.199 ± 0.567967 (W 0.321405) | 🔵 colmat 1.33× faster than `lapack-aocl` |  |
+| `eigh/n512/b1 [api-inclusive]` | 55.7831 ± 0.10271 (W 0.0469972) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1` | 0.409826 ± 0.0338593 (W 0.00219041) | 14.7552 ± 0.0541689 (W 0.0112497) | 🔵 colmat 36.00× faster than `lapack-aocl` | `!` between-start range over 5%; `p` position effect over 5% |
+| `full_piv_lu/n128/b1 [api-inclusive]` | 0.471799 ± 0.00180278 (W 0.00180367) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1` | 2.87216 ± 0.0803162 (W 0.00282288) | 116.673 ± 0.351878 (W 0.040808) | 🔵 colmat 40.62× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `full_piv_lu/n256/b1 [api-inclusive]` | 3.22307 ± 0.0144844 (W 0.00831742) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1` | 23.7082 ± 0.313387 (W 0.0118113) | 971.765 ± 5.17302 (W 0.693013) | 🔵 colmat 40.99× faster than `lapack-aocl` |  |
+| `full_piv_lu/n512/b1 [api-inclusive]` | 23.779 ± 0.135211 (W 0.0296359) | - | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [block(basis=128,target=128)]` | 0.418837 ± 0.00403714 (W 0.00193403) | 0.565408 ± 0.00558273 (W 0.00306973) | 🔵 colmat 1.35× faster than `lapack-aocl` |  |
+| `householder_apply/n128/b1 [sequence(basis=128,target=128)]` | 0.418898 ± 0.00278563 (W 0.00177638) | 0.679361 ± 0.00486689 (W 0.00266501) | 🔵 colmat 1.62× faster than `lapack-aocl` |  |
+| `householder_apply/n256/b1 [block(basis=256,target=256)]` | 2.86729 ± 0.00725547 (W 0.00281909) | 4.10932 ± 0.0907103 (W 0.00852149) | 🔵 colmat 1.43× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `householder_apply/n256/b1 [sequence(basis=256,target=256)]` | 2.86936 ± 0.00739316 (W 0.0029009) | 4.25757 ± 0.030722 (W 0.0058997) | 🔵 colmat 1.48× faster than `lapack-aocl` |  |
+| `householder_apply/n512/b1 [block(basis=512,target=512)]` | 20.1938 ± 0.049611 (W 0.0158711) | 25.3001 ± 0.0495666 (W 0.0177075) | 🔵 colmat 1.25× faster than `lapack-aocl` |  |
+| `householder_apply/n512/b1 [sequence(basis=512,target=512)]` | 20.1996 ± 0.0355644 (W 0.00920728) | 24.6608 ± 0.060927 (W 0.0178157) | 🔵 colmat 1.22× faster than `lapack-aocl` |  |
+| `lu/n128/b1` | 0.139699 ± 0.000360904 (W 0.00121721) | 0.193709 ± 0.001222 (W 0.00133289) | 🔵 colmat 1.39× faster than `lapack-aocl` |  |
+| `lu/n128/b1 [api-inclusive]` | 0.225158 ± 0.00229899 (W 0.00186416) | - | - | `*` one row has no measurement here |
+| `lu/n256/b1` | 0.81974 ± 0.00283315 (W 0.0017067) | 1.95964 ± 0.00532297 (W 0.00489539) | 🔵 colmat 2.39× faster than `lapack-aocl` |  |
+| `lu/n256/b1 [api-inclusive]` | 1.2455 ± 0.00251372 (W 0.00193801) | - | - | `*` one row has no measurement here |
+| `lu/n512/b1` | 5.20753 ± 0.0210756 (W 0.00518223) | 9.85015 ± 0.0899116 (W 0.0180439) | 🔵 colmat 1.89× faster than `lapack-aocl` |  |
+| `lu/n512/b1 [api-inclusive]` | 6.98578 ± 0.012638 (W 0.00785649) | - | - | `*` one row has no measurement here |
+| `qr/n128/b1` | 0.671467 ± 0.00170084 (W 0.00169874) | 1.04161 ± 0.0142993 (W 0.00173778) | 🔵 colmat 1.55× faster than `lapack-aocl` |  |
+| `qr/n128/b1 [api-inclusive]` | 0.797943 ± 0.0018783 (W 0.00150703) | - | - | `*` one row has no measurement here |
+| `qr/n256/b1` | 4.1416 ± 0.0091376 (W 0.00358584) | 6.67112 ± 0.0354069 (W 0.0126898) | 🔵 colmat 1.61× faster than `lapack-aocl` |  |
+| `qr/n256/b1 [api-inclusive]` | 4.74851 ± 0.0153149 (W 0.00563105) | - | - | `*` one row has no measurement here |
+| `qr/n512/b1` | 26.2885 ± 0.0638573 (W 0.0207502) | 39.4425 ± 0.125449 (W 0.0332041) | 🔵 colmat 1.50× faster than `lapack-aocl` |  |
+| `qr/n512/b1 [api-inclusive]` | 28.184 ± 0.0425589 (W 0.0265323) | - | - | `*` one row has no measurement here |
+| `qr_factor/n128/b1` | 0.32842 ± 0.00160542 (W 0.00164657) | 0.373629 ± 0.00425354 (W 0.00181705) | 🔵 colmat 1.14× faster than `lapack-aocl` |  |
+| `qr_factor/n256/b1` | 1.94412 ± 0.00648844 (W 0.00169356) | 2.45077 ± 0.0384442 (W 0.004903) | 🔵 colmat 1.26× faster than `lapack-aocl` |  |
+| `qr_factor/n512/b1` | 11.191 ± 0.0710622 (W 0.00897405) | 14.9134 ± 0.0286902 (W 0.00995281) | 🔵 colmat 1.33× faster than `lapack-aocl` |  |
+| `solve/n128/b1` | 0.145446 ± 0.000444474 (W 0.00122907) | 0.126744 ± 0.00082491 (W 0.0011332) | 🔴 colmat 1.15× slower than `lapack-aocl` |  |
+| `solve/n128/b1 [api-inclusive]` | 0.23425 ± 0.00214496 (W 0.00296631) | - | - | `*` one row has no measurement here |
+| `solve/n256/b1` | 0.835199 ± 0.00300168 (W 0.00106315) | 0.969069 ± 0.0151324 (W 0.00250261) | 🔵 colmat 1.16× faster than `lapack-aocl` |  |
+| `solve/n256/b1 [api-inclusive]` | 0.903623 ± 0.00562176 (W 0.00237911) | - | - | `*` one row has no measurement here |
+| `solve/n512/b1` | 5.25293 ± 0.0320671 (W 0.0056746) | 5.38186 ± 0.114404 (W 0.00647133) | · | `!` between-start range over 5% |
+| `solve/n512/b1 [api-inclusive]` | 5.4708 ± 0.0092563 (W 0.00334338) | - | - | `*` one row has no measurement here |
+| `svd_thin/n128/b1` | 2.76825 ± 0.0100434 (W 0.00351768) | 2.94732 ± 0.0224558 (W 0.00413524) | 🔵 colmat 1.06× faster than `lapack-aocl` |  |
+| `svd_thin/n128/b1 [api-inclusive]` | 2.77216 ± 0.00701788 (W 0.0026939) | - | - | `*` one row has no measurement here |
+| `svd_thin/n256/b1` | 15.3837 ± 0.0231646 (W 0.0127893) | 18.546 ± 0.446145 (W 0.0237089) | 🔵 colmat 1.21× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `svd_thin/n256/b1 [api-inclusive]` | 15.4071 ± 0.0349219 (W 0.00951588) | - | - | `*` one row has no measurement here |
+| `svd_thin/n512/b1` | 96.5738 ± 0.1235 (W 0.111112) | 118.696 ± 2.14398 (W 1.28399) | 🔵 colmat 1.23× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `svd_thin/n512/b1 [api-inclusive]` | 96.7647 ± 0.0755113 (W 0.0677168) | - | - | `*` one row has no measurement here |
+| `svd_values/n128/b1` | 1.08005 ± 0.00225957 (W 0.00120676) | 1.15711 ± 0.00192677 (W 0.00304023) | 🔵 colmat 1.07× faster than `lapack-aocl` |  |
+| `svd_values/n128/b1 [api-inclusive]` | 1.08248 ± 0.00299323 (W 0.00091287) | - | - | `*` one row has no measurement here |
+| `svd_values/n256/b1` | 7.07339 ± 0.0298847 (W 0.0159593) | 8.55353 ± 0.0793413 (W 0.0161426) | 🔵 colmat 1.21× faster than `lapack-aocl` |  |
+| `svd_values/n256/b1 [api-inclusive]` | 7.07508 ± 0.0285733 (W 0.0162991) | - | - | `*` one row has no measurement here |
+| `svd_values/n512/b1` | 50.0515 ± 0.2653 (W 0.0435788) | 57.6286 ± 0.34218 (W 0.238969) | 🔵 colmat 1.15× faster than `lapack-aocl` |  |
+| `svd_values/n512/b1 [api-inclusive]` | 49.9312 ± 0.142861 (W 0.0494311) | - | - | `*` one row has no measurement here |
+| `triangular_solve/n128/b1` | 0.00541 ± 1.5237e-05 (W 3.14683e-05) | 0.00415 ± 2.41695e-05 (W 2.38966e-05) | 🔴 colmat 1.30× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n256/b1` | 0.0164445 ± 0.000133205 (W 0.000119236) | 0.01302 ± 0.00010044 (W 7.54988e-05) | 🔴 colmat 1.26× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n512/b1` | 0.0607885 ± 0.000370679 (W 0.000347662) | 0.048484 ± 0.000438128 (W 0.000282095) | 🔴 colmat 1.25× slower than `lapack-aocl` |  |
+
+## linalg-mid, c64, f order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `cholesky/n128/b1` | 0.062158 ± 0.000140492 (W 0.000179152) | 0.130146 ± 0.00067157 (W 0.00289117) | 🔵 colmat 2.09× faster than `lapack-aocl` |  |
+| `cholesky/n128/b1 [api-inclusive]` | 0.0742515 ± 0.000264532 (W 0.000188212) | - | - | `*` one row has no measurement here |
+| `cholesky/n256/b1` | 0.225722 ± 0.00194877 (W 0.00143961) | 0.36966 ± 0.00222863 (W 0.00298676) | 🔵 colmat 1.64× faster than `lapack-aocl` |  |
+| `cholesky/n256/b1 [api-inclusive]` | 0.294038 ± 0.0011498 (W 0.00118123) | - | - | `*` one row has no measurement here |
+| `cholesky/n512/b1` | 0.979111 ± 0.00636707 (W 0.00311781) | 1.22697 ± 0.00608144 (W 0.00805697) | 🔵 colmat 1.25× faster than `lapack-aocl` |  |
+| `cholesky/n512/b1 [api-inclusive]` | 1.12292 ± 0.00411807 (W 0.00288184) | - | - | `*` one row has no measurement here |
+| `eigh/n128/b1` | 0.774746 ± 0.00515092 (W 0.00201996) | 1.94809 ± 0.00630811 (W 0.00336193) | 🔵 colmat 2.51× faster than `lapack-aocl` |  |
+| `eigh/n128/b1 [api-inclusive]` | 0.781319 ± 0.00342899 (W 0.00285392) | - | - | `*` one row has no measurement here |
+| `eigh/n256/b1` | 3.1501 ± 0.00851111 (W 0.00608799) | 10.9007 ± 0.0805545 (W 0.00882006) | 🔵 colmat 3.46× faster than `lapack-aocl` |  |
+| `eigh/n256/b1 [api-inclusive]` | 3.16998 ± 0.00536995 (W 0.00565369) | - | - | `*` one row has no measurement here |
+| `eigh/n512/b1` | 16.3069 ± 0.0408617 (W 0.0187251) | 73.4481 ± 0.751822 (W 0.170304) | 🔵 colmat 4.50× faster than `lapack-aocl` |  |
+| `eigh/n512/b1 [api-inclusive]` | 16.3658 ± 0.0341248 (W 0.012121) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1` | 0.245136 ± 0.00264769 (W 0.00195229) | 14.7559 ± 0.0161646 (W 0.00731223) | 🔵 colmat 60.19× faster than `lapack-aocl` |  |
+| `full_piv_lu/n128/b1 [api-inclusive]` | 0.322538 ± 0.0021624 (W 0.00157366) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1` | 1.10248 ± 0.0189323 (W 0.00248664) | 117.287 ± 0.497884 (W 0.0565939) | 🔵 colmat 106.38× faster than `lapack-aocl` |  |
+| `full_piv_lu/n256/b1 [api-inclusive]` | 1.51265 ± 0.00929029 (W 0.0032317) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1` | 6.53915 ± 0.0241811 (W 0.00704658) | 973.613 ± 7.65578 (W 0.496327) | 🔵 colmat 148.89× faster than `lapack-aocl` |  |
+| `full_piv_lu/n512/b1 [api-inclusive]` | 8.12021 ± 0.0213765 (W 0.0109613) | - | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [block(basis=128,target=128)]` | 0.126071 ± 0.000873779 (W 0.000924192) | 0.371127 ± 0.00211113 (W 0.00252189) | 🔵 colmat 2.94× faster than `lapack-aocl` |  |
+| `householder_apply/n128/b1 [sequence(basis=128,target=128)]` | 0.126156 ± 0.00107605 (W 0.0012993) | 0.281809 ± 0.00337596 (W 0.00239558) | 🔵 colmat 2.23× faster than `lapack-aocl` |  |
+| `householder_apply/n256/b1 [block(basis=256,target=256)]` | 0.776674 ± 0.00643876 (W 0.00273539) | 2.402 ± 0.0550606 (W 0.0126152) | 🔵 colmat 3.09× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `householder_apply/n256/b1 [sequence(basis=256,target=256)]` | 0.77579 ± 0.0038668 (W 0.00341373) | 1.39484 ± 0.00319396 (W 0.00456144) | 🔵 colmat 1.80× faster than `lapack-aocl` |  |
+| `householder_apply/n512/b1 [block(basis=512,target=512)]` | 5.25283 ± 0.00987171 (W 0.00704875) | 11.8973 ± 0.118611 (W 0.0214314) | 🔵 colmat 2.26× faster than `lapack-aocl` |  |
+| `householder_apply/n512/b1 [sequence(basis=512,target=512)]` | 5.25679 ± 0.0108116 (W 0.00893132) | 7.23852 ± 0.370797 (W 0.0263449) | 🔵 colmat 1.38× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `lu/n128/b1` | 0.106086 ± 0.000299277 (W 0.000548319) | 0.072812 ± 0.000675933 (W 0.000736041) | 🔴 colmat 1.46× slower than `lapack-aocl` |  |
+| `lu/n128/b1 [api-inclusive]` | 0.193524 ± 0.00197388 (W 0.00230858) | - | - | `*` one row has no measurement here |
+| `lu/n256/b1` | 0.430798 ± 0.00148198 (W 0.00223811) | 0.535455 ± 0.00335404 (W 0.00354081) | 🔵 colmat 1.24× faster than `lapack-aocl` |  |
+| `lu/n256/b1 [api-inclusive]` | 0.868219 ± 0.00542549 (W 0.00223632) | - | - | `*` one row has no measurement here |
+| `lu/n512/b1` | 1.97709 ± 0.00561577 (W 0.00428193) | 3.0184 ± 0.0056141 (W 0.00722643) | 🔵 colmat 1.53× faster than `lapack-aocl` |  |
+| `lu/n512/b1 [api-inclusive]` | 3.7902 ± 0.010709 (W 0.0093923) | - | - | `*` one row has no measurement here |
+| `qr/n128/b1` | 0.40639 ± 0.00171829 (W 0.0017007) | 0.661102 ± 0.00179499 (W 0.00394261) | 🔵 colmat 1.63× faster than `lapack-aocl` |  |
+| `qr/n128/b1 [api-inclusive]` | 0.546528 ± 0.00478737 (W 0.00245845) | - | - | `*` one row has no measurement here |
+| `qr/n256/b1` | 1.42123 ± 0.00146596 (W 0.00381565) | 3.24694 ± 10.7042 (W 0.0144629) | · | `!` between-start range over 5%; `p` position effect over 5% |
+| `qr/n256/b1 [api-inclusive]` | 2.0832 ± 0.00565162 (W 0.00416853) | - | - | `*` one row has no measurement here |
+| `qr/n512/b1` | 7.88392 ± 0.00881168 (W 0.00870129) | 15.1886 ± 0.0441563 (W 0.0248434) | 🔵 colmat 1.93× faster than `lapack-aocl` |  |
+| `qr/n512/b1 [api-inclusive]` | 10.4258 ± 0.0235095 (W 0.0101805) | - | - | `*` one row has no measurement here |
+| `qr_factor/n128/b1` | 0.259589 ± 0.000744563 (W 0.0014043) | 0.370003 ± 0.00246663 (W 0.00210175) | 🔵 colmat 1.43× faster than `lapack-aocl` |  |
+| `qr_factor/n256/b1` | 0.820339 ± 0.00198293 (W 0.00273341) | 1.77379 ± 15.595 (W 0.00797635) | · | `!` between-start range over 5%; `p` position effect over 5% |
+| `qr_factor/n512/b1` | 3.95029 ± 0.0121569 (W 0.00625105) | 8.27534 ± 0.0410461 (W 0.0215104) | 🔵 colmat 2.09× faster than `lapack-aocl` |  |
+| `solve/n128/b1` | 0.106571 ± 0.0004979 (W 0.000562224) | 0.0646625 ± 0.000653051 (W 0.000475077) | 🔴 colmat 1.65× slower than `lapack-aocl` |  |
+| `solve/n128/b1 [api-inclusive]` | 0.192116 ± 0.00285308 (W 0.00196692) | - | - | `*` one row has no measurement here |
+| `solve/n256/b1` | 0.394454 ± 0.000982601 (W 0.00183511) | 0.356263 ± 0.00146328 (W 0.00242132) | 🔴 colmat 1.11× slower than `lapack-aocl` |  |
+| `solve/n256/b1 [api-inclusive]` | 0.488434 ± 0.00204284 (W 0.0028138) | - | - | `*` one row has no measurement here |
+| `solve/n512/b1` | 1.91662 ± 0.00434496 (W 0.00365028) | 2.08357 ± 0.0104043 (W 0.00503985) | 🔵 colmat 1.09× faster than `lapack-aocl` |  |
+| `solve/n512/b1 [api-inclusive]` | 2.18939 ± 0.0150126 (W 0.0041567) | - | - | `*` one row has no measurement here |
+| `svd_thin/n128/b1` | 1.70675 ± 0.00453727 (W 0.00457975) | 2.2869 ± 0.0238759 (W 0.0108461) | 🔵 colmat 1.34× faster than `lapack-aocl` |  |
+| `svd_thin/n128/b1 [api-inclusive]` | 1.71434 ± 0.00201999 (W 0.00422108) | - | - | `*` one row has no measurement here |
+| `svd_thin/n256/b1` | 7.35178 ± 0.00875797 (W 0.00861404) | 11.9952 ± 0.0583184 (W 0.0221697) | 🔵 colmat 1.63× faster than `lapack-aocl` |  |
+| `svd_thin/n256/b1 [api-inclusive]` | 7.40456 ± 0.0155888 (W 0.0114246) | - | - | `*` one row has no measurement here |
+| `svd_thin/n512/b1` | 36.9708 ± 0.0483366 (W 0.0473786) | 64.5037 ± 3.52454 (W 0.352011) | 🔵 colmat 1.74× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `svd_thin/n512/b1 [api-inclusive]` | 37.0926 ± 0.118477 (W 0.0305001) | - | - | `*` one row has no measurement here |
+| `svd_values/n128/b1` | 0.841505 ± 0.00191923 (W 0.0019821) | 1.144 ± 0.00505946 (W 0.00251205) | 🔵 colmat 1.36× faster than `lapack-aocl` |  |
+| `svd_values/n128/b1 [api-inclusive]` | 0.839926 ± 0.000555424 (W 0.00209431) | - | - | `*` one row has no measurement here |
+| `svd_values/n256/b1` | 4.07476 ± 0.00513908 (W 0.00654126) | 6.78708 ± 0.0536912 (W 0.0141123) | 🔵 colmat 1.67× faster than `lapack-aocl` |  |
+| `svd_values/n256/b1 [api-inclusive]` | 4.07096 ± 0.00612739 (W 0.00744919) | - | - | `*` one row has no measurement here |
+| `svd_values/n512/b1` | 21.01 ± 0.0681059 (W 0.0160334) | 34.9876 ± 0.978601 (W 0.44975) | 🔵 colmat 1.67× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `svd_values/n512/b1 [api-inclusive]` | 21.0263 ± 0.105406 (W 0.0189938) | - | - | `*` one row has no measurement here |
+| `triangular_solve/n128/b1` | 0.0059195 ± 2.24833e-05 (W 3.77906e-05) | 0.00419 ± 1.83485e-05 (W 2.06891e-05) | 🔴 colmat 1.41× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n256/b1` | 0.015509 ± 7.38395e-05 (W 0.00010139) | 0.0129545 ± 0.000218639 (W 8.44717e-05) | 🔴 colmat 1.20× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n512/b1` | 0.039534 ± 0.000263046 (W 0.00022381) | 0.049583 ± 0.00027451 (W 0.000933882) | 🔵 colmat 1.25× faster than `lapack-aocl` |  |
+
+## linalg-mid, c64, f order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `cholesky/n128/b1` | 0.066328 ± 0.000307462 (W 0.000275056) | 0.152389 ± 0.00206688 (W 0.0039999) | 🔵 colmat 2.30× faster than `lapack-aocl` |  |
+| `cholesky/n128/b1 [api-inclusive]` | 0.075032 ± 0.000414079 (W 0.000161772) | - | - | `*` one row has no measurement here |
+| `cholesky/n256/b1` | 0.214167 ± 0.00113771 (W 0.00141753) | 0.397119 ± 6.1676 (W 0.00576594) | · | `!` between-start range over 5%; `p` position effect over 5% |
+| `cholesky/n256/b1 [api-inclusive]` | 0.270415 ± 0.00258717 (W 0.00154541) | - | - | `*` one row has no measurement here |
+| `cholesky/n512/b1` | 0.730189 ± 0.0016474 (W 0.00179408) | 1.10561 ± 0.0169631 (W 0.01074) | 🔵 colmat 1.51× faster than `lapack-aocl` |  |
+| `cholesky/n512/b1 [api-inclusive]` | 0.900486 ± 0.00954887 (W 0.00326608) | - | - | `*` one row has no measurement here |
+| `eigh/n128/b1` | 0.604008 ± 0.00254813 (W 0.0029049) | 1.95726 ± 0.0103132 (W 0.00624939) | 🔵 colmat 3.24× faster than `lapack-aocl` |  |
+| `eigh/n128/b1 [api-inclusive]` | 0.610917 ± 0.0024262 (W 0.00317461) | - | - | `*` one row has no measurement here |
+| `eigh/n256/b1` | 2.27028 ± 0.00304307 (W 0.00416905) | 10.7035 ± 0.121916 (W 0.0143553) | 🔵 colmat 4.71× faster than `lapack-aocl` |  |
+| `eigh/n256/b1 [api-inclusive]` | 2.29066 ± 0.0030225 (W 0.00396417) | - | - | `*` one row has no measurement here |
+| `eigh/n512/b1` | 10.3709 ± 0.0247261 (W 0.00497226) | 71.9244 ± 0.619463 (W 0.264478) | 🔵 colmat 6.94× faster than `lapack-aocl` |  |
+| `eigh/n512/b1 [api-inclusive]` | 10.4649 ± 0.018516 (W 0.00991195) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1` | 0.223867 ± 0.00309301 (W 0.00192721) | 14.8373 ± 0.042904 (W 0.0217973) | 🔵 colmat 66.28× faster than `lapack-aocl` |  |
+| `full_piv_lu/n128/b1 [api-inclusive]` | 0.309476 ± 0.00319783 (W 0.00295133) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1` | 0.8523 ± 0.0102986 (W 0.00241142) | 117.309 ± 0.582249 (W 0.0987513) | 🔵 colmat 137.64× faster than `lapack-aocl` |  |
+| `full_piv_lu/n256/b1 [api-inclusive]` | 1.27982 ± 0.00492214 (W 0.00356403) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1` | 3.96784 ± 0.0125694 (W 0.00849007) | 974.332 ± 5.35804 (W 0.478071) | 🔵 colmat 245.56× faster than `lapack-aocl` |  |
+| `full_piv_lu/n512/b1 [api-inclusive]` | 5.6635 ± 0.0138977 (W 0.0080963) | - | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [block(basis=128,target=128)]` | 0.0995515 ± 0.000729244 (W 0.00142629) | 0.345999 ± 0.00282896 (W 0.00254216) | 🔵 colmat 3.48× faster than `lapack-aocl` |  |
+| `householder_apply/n128/b1 [sequence(basis=128,target=128)]` | 0.100489 ± 0.000660236 (W 0.00122746) | 0.248792 ± 6.45147 (W 0.00420562) | · | `!` between-start range over 5%; `p` position effect over 5% |
+| `householder_apply/n256/b1 [block(basis=256,target=256)]` | 0.436594 ± 0.00438011 (W 0.00223947) | 2.05024 ± 0.0127254 (W 0.00602167) | 🔵 colmat 4.70× faster than `lapack-aocl` |  |
+| `householder_apply/n256/b1 [sequence(basis=256,target=256)]` | 0.437678 ± 0.00393784 (W 0.0033054) | 0.915517 ± 2.94133 (W 0.00581556) | · | `!` between-start range over 5%; `p` position effect over 5% |
+| `householder_apply/n512/b1 [block(basis=512,target=512)]` | 2.79776 ± 0.00898646 (W 0.0101753) | 9.66014 ± 0.141006 (W 0.0211537) | 🔵 colmat 3.45× faster than `lapack-aocl` |  |
+| `householder_apply/n512/b1 [sequence(basis=512,target=512)]` | 2.78823 ± 0.00822296 (W 0.0105199) | 4.16771 ± 0.0225464 (W 0.0122126) | 🔵 colmat 1.49× faster than `lapack-aocl` |  |
+| `lu/n128/b1` | 0.0976945 ± 0.000504521 (W 0.000544763) | 0.0714955 ± 0.000853086 (W 0.000669618) | 🔴 colmat 1.37× slower than `lapack-aocl` |  |
+| `lu/n128/b1 [api-inclusive]` | 0.184708 ± 0.00103933 (W 0.00182567) | - | - | `*` one row has no measurement here |
+| `lu/n256/b1` | 0.376706 ± 0.00268864 (W 0.00256176) | 0.421842 ± 0.00446902 (W 0.00319617) | 🔵 colmat 1.12× faster than `lapack-aocl` |  |
+| `lu/n256/b1 [api-inclusive]` | 0.816438 ± 0.0034634 (W 0.00394915) | - | - | `*` one row has no measurement here |
+| `lu/n512/b1` | 1.43902 ± 0.0111204 (W 0.00492142) | 1.65178 ± 0.0106163 (W 0.00561689) | 🔵 colmat 1.15× faster than `lapack-aocl` |  |
+| `lu/n512/b1 [api-inclusive]` | 3.25549 ± 0.0127158 (W 0.00743856) | - | - | `*` one row has no measurement here |
+| `qr/n128/b1` | 0.339537 ± 0.00217026 (W 0.00183885) | 0.629061 ± 0.00274365 (W 0.00513497) | 🔵 colmat 1.85× faster than `lapack-aocl` |  |
+| `qr/n128/b1 [api-inclusive]` | 0.493128 ± 0.00446262 (W 0.00478122) | - | - | `*` one row has no measurement here |
+| `qr/n256/b1` | 1.10157 ± 0.00452781 (W 0.00291102) | 2.78084 ± 0.0283522 (W 0.0180604) | 🔵 colmat 2.52× faster than `lapack-aocl` |  |
+| `qr/n256/b1 [api-inclusive]` | 1.7705 ± 0.00771222 (W 0.00364362) | - | - | `*` one row has no measurement here |
+| `qr/n512/b1` | 4.44472 ± 0.0204936 (W 0.00645074) | 11.8765 ± 0.201354 (W 0.0257381) | 🔵 colmat 2.67× faster than `lapack-aocl` |  |
+| `qr/n512/b1 [api-inclusive]` | 7.07639 ± 0.0350614 (W 0.0102598) | - | - | `*` one row has no measurement here |
+| `qr_factor/n128/b1` | 0.238001 ± 0.000489278 (W 0.00149275) | 0.371044 ± 0.00174222 (W 0.00252233) | 🔵 colmat 1.56× faster than `lapack-aocl` |  |
+| `qr_factor/n256/b1` | 0.758883 ± 0.00324781 (W 0.00199973) | 1.85932 ± 0.0161283 (W 0.0122489) | 🔵 colmat 2.45× faster than `lapack-aocl` |  |
+| `qr_factor/n512/b1` | 2.35269 ± 0.00344937 (W 0.00642374) | 7.68866 ± 0.292986 (W 0.0344889) | 🔵 colmat 3.27× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `solve/n128/b1` | 0.0929545 ± 0.000500351 (W 0.000365537) | 0.069401 ± 0.000516047 (W 0.00133478) | 🔴 colmat 1.34× slower than `lapack-aocl` |  |
+| `solve/n128/b1 [api-inclusive]` | 0.183888 ± 0.00123658 (W 0.00167555) | - | - | `*` one row has no measurement here |
+| `solve/n256/b1` | 0.367139 ± 0.0016698 (W 0.002137) | 0.322993 ± 0.00262955 (W 0.0032184) | 🔴 colmat 1.14× slower than `lapack-aocl` |  |
+| `solve/n256/b1 [api-inclusive]` | 0.440978 ± 0.00271037 (W 0.00238289) | - | - | `*` one row has no measurement here |
+| `solve/n512/b1` | 1.39641 ± 0.00992019 (W 0.00366921) | 1.287 ± 0.0121827 (W 0.00690107) | 🔴 colmat 1.09× slower than `lapack-aocl` |  |
+| `solve/n512/b1 [api-inclusive]` | 1.67595 ± 0.00273419 (W 0.00359629) | - | - | `*` one row has no measurement here |
+| `svd_thin/n128/b1` | 1.62009 ± 0.00298542 (W 0.00426227) | 2.32037 ± 5.0541 (W 0.00832246) | · | `!` between-start range over 5%; `p` position effect over 5% |
+| `svd_thin/n128/b1 [api-inclusive]` | 1.62487 ± 0.00369476 (W 0.00309052) | - | - | `*` one row has no measurement here |
+| `svd_thin/n256/b1` | 6.39386 ± 0.0146316 (W 0.00662552) | 11.4314 ± 0.140324 (W 0.029361) | 🔵 colmat 1.79× faster than `lapack-aocl` |  |
+| `svd_thin/n256/b1 [api-inclusive]` | 6.43947 ± 0.014254 (W 0.00675191) | - | - | `*` one row has no measurement here |
+| `svd_thin/n512/b1` | 28.0418 ± 0.0608929 (W 0.0312708) | 61.3024 ± 2.81322 (W 2.03017) | 🔵 colmat 2.19× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `svd_thin/n512/b1 [api-inclusive]` | 28.1969 ± 0.0339814 (W 0.0525479) | - | - | `*` one row has no measurement here |
+| `svd_values/n128/b1` | 0.842763 ± 0.00220382 (W 0.00244739) | 1.15582 ± 0.00615429 (W 0.00280148) | 🔵 colmat 1.37× faster than `lapack-aocl` |  |
+| `svd_values/n128/b1 [api-inclusive]` | 0.841341 ± 0.0027265 (W 0.00205954) | - | - | `*` one row has no measurement here |
+| `svd_values/n256/b1` | 3.74536 ± 0.0152705 (W 0.00417247) | 6.79543 ± 0.0460463 (W 0.0104089) | 🔵 colmat 1.81× faster than `lapack-aocl` |  |
+| `svd_values/n256/b1 [api-inclusive]` | 3.74001 ± 0.0113258 (W 0.00597294) | - | - | `*` one row has no measurement here |
+| `svd_values/n512/b1` | 16.523 ± 0.0532989 (W 0.0193498) | 30.8953 ± 4.15129 (W 0.166694) | 🔵 colmat 1.87× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `svd_values/n512/b1 [api-inclusive]` | 16.5543 ± 0.025327 (W 0.0142946) | - | - | `*` one row has no measurement here |
+| `triangular_solve/n128/b1` | 0.00617 ± 3.24987e-05 (W 2.96034e-05) | 0.004155 ± 1.26491e-05 (W 1.56138e-05) | 🔴 colmat 1.48× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n256/b1` | 0.0153345 ± 0.00012706 (W 7.83136e-05) | 0.012925 ± 0.000222651 (W 5.98872e-05) | 🔴 colmat 1.19× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n512/b1` | 0.0397625 ± 0.000553307 (W 0.000791422) | 0.050088 ± 0.00238124 (W 0.000304156) | 🔵 colmat 1.26× faster than `lapack-aocl` | `!` between-start range over 5% |
+
+## linalg-mid, f32, c order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `cholesky/n128/b1` | 0.0283395 ± 0.000185215 (W 5.94697e-05) | - | - | `*` one row has no measurement here |
+| `cholesky/n128/b1 [api-inclusive]` | 0.023404 ± 5.91292e-05 (W 5.6415e-05) | - | - | `*` one row has no measurement here |
+| `cholesky/n256/b1` | 0.115217 ± 0.00200814 (W 0.000744761) | - | - | `*` one row has no measurement here |
+| `cholesky/n256/b1 [api-inclusive]` | 0.121052 ± 0.00173725 (W 0.00170022) | - | - | `*` one row has no measurement here |
+| `cholesky/n512/b1` | 0.676577 ± 0.00496086 (W 0.00335531) | - | - | `*` one row has no measurement here |
+| `cholesky/n512/b1 [api-inclusive]` | 0.630122 ± 0.00590573 (W 0.00282091) | - | - | `*` one row has no measurement here |
+| `eigh/n128/b1` | 0.886119 ± 0.00225259 (W 0.00119193) | - | - | `*` one row has no measurement here |
+| `eigh/n128/b1 [api-inclusive]` | 0.88569 ± 0.00220178 (W 0.00199336) | - | - | `*` one row has no measurement here |
+| `eigh/n256/b1` | 3.4891 ± 0.0157648 (W 0.0115807) | - | - | `*` one row has no measurement here |
+| `eigh/n256/b1 [api-inclusive]` | 3.4892 ± 0.0323048 (W 0.0096312) | - | - | `*` one row has no measurement here |
+| `eigh/n512/b1` | 16.0383 ± 0.0805449 (W 0.0161968) | - | - | `*` one row has no measurement here |
+| `eigh/n512/b1 [api-inclusive]` | 16.1321 ± 0.0851922 (W 0.0218654) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1` | 0.165261 ± 0.000428556 (W 0.00119543) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1 [api-inclusive]` | 0.152319 ± 0.000981989 (W 0.00106379) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1` | 0.858917 ± 0.00298101 (W 0.00149021) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1 [api-inclusive]` | 0.879083 ± 0.00338825 (W 0.00269616) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1` | 5.3935 ± 0.0661632 (W 0.00493634) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1 [api-inclusive]` | 5.53358 ± 0.0573032 (W 0.0133023) | - | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [block(basis=128,target=128)]` | 0.072191 ± 0.000214889 (W 0.000601832) | - | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [sequence(basis=128,target=128)]` | 0.0717025 ± 0.000388462 (W 0.00016959) | - | - | `*` one row has no measurement here |
+| `householder_apply/n256/b1 [block(basis=256,target=256)]` | 0.434059 ± 0.00441244 (W 0.00223328) | - | - | `*` one row has no measurement here |
+| `householder_apply/n256/b1 [sequence(basis=256,target=256)]` | 0.433423 ± 0.00423114 (W 0.00167285) | - | - | `*` one row has no measurement here |
+| `householder_apply/n512/b1 [block(basis=512,target=512)]` | 3.04726 ± 0.0512991 (W 0.00795526) | - | - | `*` one row has no measurement here |
+| `householder_apply/n512/b1 [sequence(basis=512,target=512)]` | 3.0549 ± 0.0284843 (W 0.00598916) | - | - | `*` one row has no measurement here |
+| `lu/n128/b1` | 0.046403 ± 0.00045142 (W 0.000602853) | - | - | `*` one row has no measurement here |
+| `lu/n128/b1 [api-inclusive]` | 0.061203 ± 0.000552075 (W 0.000329731) | - | - | `*` one row has no measurement here |
+| `lu/n256/b1` | 0.197009 ± 0.000793265 (W 0.00159914) | - | - | `*` one row has no measurement here |
+| `lu/n256/b1 [api-inclusive]` | 0.338947 ± 0.00133174 (W 0.00199661) | - | - | `*` one row has no measurement here |
+| `lu/n512/b1` | 1.00045 ± 0.00226909 (W 0.000684604) | - | - | `*` one row has no measurement here |
+| `lu/n512/b1 [api-inclusive]` | 1.7462 ± 0.00799161 (W 0.0036249) | - | - | `*` one row has no measurement here |
+| `qr/n128/b1` | 0.21045 ± 0.000859151 (W 0.00137068) | - | - | `*` one row has no measurement here |
+| `qr/n128/b1 [api-inclusive]` | 0.219214 ± 0.00178903 (W 0.00326004) | - | - | `*` one row has no measurement here |
+| `qr/n256/b1` | 0.958658 ± 0.00509419 (W 0.00149121) | - | - | `*` one row has no measurement here |
+| `qr/n256/b1 [api-inclusive]` | 1.04722 ± 0.0036903 (W 0.00146391) | - | - | `*` one row has no measurement here |
+| `qr/n512/b1` | 5.23656 ± 0.0594782 (W 0.00788438) | - | - | `*` one row has no measurement here |
+| `qr/n512/b1 [api-inclusive]` | 5.39599 ± 0.0220307 (W 0.00895887) | - | - | `*` one row has no measurement here |
+| `qr_factor/n128/b1` | 0.114821 ± 0.000285653 (W 0.000877279) | - | - | `*` one row has no measurement here |
+| `qr_factor/n256/b1` | 0.607137 ± 0.00242488 (W 0.00203111) | - | - | `*` one row has no measurement here |
+| `qr_factor/n512/b1` | 2.74519 ± 0.00730584 (W 0.00552793) | - | - | `*` one row has no measurement here |
+| `solve/n128/b1` | 0.041343 ± 0.00049304 (W 0.000547605) | - | - | `*` one row has no measurement here |
+| `solve/n128/b1 [api-inclusive]` | 0.061883 ± 0.000457408 (W 0.000356297) | - | - | `*` one row has no measurement here |
+| `solve/n256/b1` | 0.171482 ± 0.000709565 (W 0.00155798) | - | - | `*` one row has no measurement here |
+| `solve/n256/b1 [api-inclusive]` | 0.335707 ± 0.00218272 (W 0.00250594) | - | - | `*` one row has no measurement here |
+| `solve/n512/b1` | 0.886408 ± 0.00367186 (W 0.000909224) | - | - | `*` one row has no measurement here |
+| `solve/n512/b1 [api-inclusive]` | 1.37312 ± 0.00731036 (W 0.00383826) | - | - | `*` one row has no measurement here |
+| `svd_thin/n128/b1` | 1.34623 ± 0.00344407 (W 0.00237693) | - | - | `*` one row has no measurement here |
+| `svd_thin/n128/b1 [api-inclusive]` | 1.35049 ± 0.00445208 (W 0.00306985) | - | - | `*` one row has no measurement here |
+| `svd_thin/n256/b1` | 5.46218 ± 0.00766358 (W 0.00920852) | - | - | `*` one row has no measurement here |
+| `svd_thin/n256/b1 [api-inclusive]` | 5.46043 ± 0.0096398 (W 0.00617391) | - | - | `*` one row has no measurement here |
+| `svd_thin/n512/b1` | 28.509 ± 0.203104 (W 0.0128146) | - | - | `*` one row has no measurement here |
+| `svd_thin/n512/b1 [api-inclusive]` | 28.5298 ± 0.11715 (W 0.0208551) | - | - | `*` one row has no measurement here |
+| `svd_values/n128/b1` | 0.440424 ± 0.00116489 (W 0.00161516) | - | - | `*` one row has no measurement here |
+| `svd_values/n128/b1 [api-inclusive]` | 0.440315 ± 0.00246032 (W 0.0020067) | - | - | `*` one row has no measurement here |
+| `svd_values/n256/b1` | 2.10677 ± 0.00650434 (W 0.00417786) | - | - | `*` one row has no measurement here |
+| `svd_values/n256/b1 [api-inclusive]` | 2.1095 ± 0.00788618 (W 0.00329603) | - | - | `*` one row has no measurement here |
+| `svd_values/n512/b1` | 12.9928 ± 0.170395 (W 0.0105049) | - | - | `*` one row has no measurement here |
+| `svd_values/n512/b1 [api-inclusive]` | 13.1536 ± 0.117854 (W 0.0170494) | - | - | `*` one row has no measurement here |
+| `triangular_solve/n128/b1` | 0.002295 ± 1.23356e-05 (W 2.16491e-05) | 0.00216 ± 4.08248e-06 (W 1.73809e-05) | 🔴 colmat 1.06× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n256/b1` | 0.0058445 ± 3.40529e-05 (W 3.70933e-05) | 0.004659 ± 2.43372e-05 (W 2.24055e-05) | 🔴 colmat 1.25× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n512/b1` | 0.0178195 ± 0.000169907 (W 9.17145e-05) | 0.0121195 ± 0.000144657 (W 5.03935e-05) | 🔴 colmat 1.47× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+
+## linalg-mid, f32, c order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `cholesky/n128/b1` | 0.0287935 ± 0.000128516 (W 0.000174239) | - | - | `*` one row has no measurement here |
+| `cholesky/n128/b1 [api-inclusive]` | 0.0248195 ± 0.00028764 (W 0.000232959) | - | - | `*` one row has no measurement here |
+| `cholesky/n256/b1` | 0.086639 ± 0.000449035 (W 0.000425756) | - | - | `*` one row has no measurement here |
+| `cholesky/n256/b1 [api-inclusive]` | 0.105211 ± 0.00083256 (W 0.00134843) | - | - | `*` one row has no measurement here |
+| `cholesky/n512/b1` | 0.363997 ± 0.00136536 (W 0.00326118) | - | - | `*` one row has no measurement here |
+| `cholesky/n512/b1 [api-inclusive]` | 0.406425 ± 0.0055547 (W 0.00237038) | - | - | `*` one row has no measurement here |
+| `eigh/n128/b1` | 0.426502 ± 0.00162811 (W 0.00186175) | - | - | `*` one row has no measurement here |
+| `eigh/n128/b1 [api-inclusive]` | 0.428263 ± 0.00106556 (W 0.00156716) | - | - | `*` one row has no measurement here |
+| `eigh/n256/b1` | 1.47965 ± 0.00631506 (W 0.00478392) | - | - | `*` one row has no measurement here |
+| `eigh/n256/b1 [api-inclusive]` | 1.48241 ± 0.00393496 (W 0.00379982) | - | - | `*` one row has no measurement here |
+| `eigh/n512/b1` | 5.85796 ± 0.0132295 (W 0.00802855) | - | - | `*` one row has no measurement here |
+| `eigh/n512/b1 [api-inclusive]` | 5.89284 ± 0.0310154 (W 0.011015) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1` | 0.136712 ± 0.000569277 (W 0.00107731) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1 [api-inclusive]` | 0.14705 ± 0.00113271 (W 0.000524493) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1` | 0.509799 ± 0.00877586 (W 0.00250665) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1 [api-inclusive]` | 0.623724 ± 0.00736317 (W 0.00274228) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1` | 2.0852 ± 0.00977277 (W 0.00744335) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1 [api-inclusive]` | 2.62793 ± 0.00566132 (W 0.00650076) | - | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [block(basis=128,target=128)]` | 0.0304835 ± 0.000194475 (W 0.000329288) | - | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [sequence(basis=128,target=128)]` | 0.030458 ± 0.000251685 (W 0.000228641) | - | - | `*` one row has no measurement here |
+| `householder_apply/n256/b1 [block(basis=256,target=256)]` | 0.134615 ± 0.00134222 (W 0.000683774) | - | - | `*` one row has no measurement here |
+| `householder_apply/n256/b1 [sequence(basis=256,target=256)]` | 0.135584 ± 0.00100735 (W 0.00147766) | - | - | `*` one row has no measurement here |
+| `householder_apply/n512/b1 [block(basis=512,target=512)]` | 0.845907 ± 0.00410287 (W 0.00300432) | - | - | `*` one row has no measurement here |
+| `householder_apply/n512/b1 [sequence(basis=512,target=512)]` | 0.847486 ± 0.0051638 (W 0.00238438) | - | - | `*` one row has no measurement here |
+| `lu/n128/b1` | 0.0626025 ± 0.000891674 (W 0.00113248) | - | - | `*` one row has no measurement here |
+| `lu/n128/b1 [api-inclusive]` | 0.0585525 ± 0.000398107 (W 0.000335018) | - | - | `*` one row has no measurement here |
+| `lu/n256/b1` | 0.168809 ± 0.00628247 (W 0.00169441) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `lu/n256/b1 [api-inclusive]` | 0.281979 ± 0.00233837 (W 0.00183248) | - | - | `*` one row has no measurement here |
+| `lu/n512/b1` | 0.673511 ± 0.00198659 (W 0.00353415) | - | - | `*` one row has no measurement here |
+| `lu/n512/b1 [api-inclusive]` | 1.22582 ± 0.00911258 (W 0.00469416) | - | - | `*` one row has no measurement here |
+| `qr/n128/b1` | 0.169915 ± 0.00166263 (W 0.00205212) | - | - | `*` one row has no measurement here |
+| `qr/n128/b1 [api-inclusive]` | 0.173133 ± 0.00698833 (W 0.00164747) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr/n256/b1` | 0.479536 ± 0.00193959 (W 0.00171503) | - | - | `*` one row has no measurement here |
+| `qr/n256/b1 [api-inclusive]` | 0.645674 ± 0.00262356 (W 0.00206081) | - | - | `*` one row has no measurement here |
+| `qr/n512/b1` | 2.06264 ± 0.0373838 (W 0.00522459) | - | - | `*` one row has no measurement here |
+| `qr/n512/b1 [api-inclusive]` | 2.72579 ± 0.00651269 (W 0.00895307) | - | - | `*` one row has no measurement here |
+| `qr_factor/n128/b1` | 0.0911275 ± 0.000346113 (W 0.000499064) | - | - | `*` one row has no measurement here |
+| `qr_factor/n256/b1` | 0.348298 ± 0.00110482 (W 0.00164492) | - | - | `*` one row has no measurement here |
+| `qr_factor/n512/b1` | 1.28481 ± 0.00316366 (W 0.00391197) | - | - | `*` one row has no measurement here |
+| `solve/n128/b1` | 0.0466985 ± 0.000467022 (W 0.000515926) | - | - | `*` one row has no measurement here |
+| `solve/n128/b1 [api-inclusive]` | 0.0618565 ± 0.000693459 (W 0.000624456) | - | - | `*` one row has no measurement here |
+| `solve/n256/b1` | 0.166747 ± 0.000944405 (W 0.00112846) | - | - | `*` one row has no measurement here |
+| `solve/n256/b1 [api-inclusive]` | 0.210903 ± 0.000986929 (W 0.00119925) | - | - | `*` one row has no measurement here |
+| `solve/n512/b1` | 0.646887 ± 0.00675933 (W 0.00284354) | - | - | `*` one row has no measurement here |
+| `solve/n512/b1 [api-inclusive]` | 0.860594 ± 0.00322786 (W 0.00296553) | - | - | `*` one row has no measurement here |
+| `svd_thin/n128/b1` | 0.97595 ± 0.00262736 (W 0.00120104) | - | - | `*` one row has no measurement here |
+| `svd_thin/n128/b1 [api-inclusive]` | 0.979384 ± 0.00159007 (W 0.001379) | - | - | `*` one row has no measurement here |
+| `svd_thin/n256/b1` | 3.64362 ± 0.00861761 (W 0.00655117) | - | - | `*` one row has no measurement here |
+| `svd_thin/n256/b1 [api-inclusive]` | 3.65286 ± 0.00761764 (W 0.00572595) | - | - | `*` one row has no measurement here |
+| `svd_thin/n512/b1` | 15.3319 ± 0.204588 (W 0.0120675) | - | - | `*` one row has no measurement here |
+| `svd_thin/n512/b1 [api-inclusive]` | 15.1774 ± 0.126663 (W 0.0152557) | - | - | `*` one row has no measurement here |
+| `svd_values/n128/b1` | 0.463041 ± 0.00209939 (W 0.00135407) | - | - | `*` one row has no measurement here |
+| `svd_values/n128/b1 [api-inclusive]` | 0.464102 ± 0.00148436 (W 0.0014603) | - | - | `*` one row has no measurement here |
+| `svd_values/n256/b1` | 1.9483 ± 0.00573476 (W 0.00539684) | - | - | `*` one row has no measurement here |
+| `svd_values/n256/b1 [api-inclusive]` | 1.95134 ± 0.00194149 (W 0.00552596) | - | - | `*` one row has no measurement here |
+| `svd_values/n512/b1` | 8.28051 ± 0.19786 (W 0.0121271) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_values/n512/b1 [api-inclusive]` | 8.42284 ± 0.181061 (W 0.00946661) | - | - | `*` one row has no measurement here |
+| `triangular_solve/n128/b1` | 0.002965 ± 1.64975e-05 (W 3.24767e-05) | 0.00216 ± 5.30723e-06 (W 2.31831e-05) | 🔴 colmat 1.37× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n256/b1` | 0.0072845 ± 4.99096e-05 (W 3.01412e-05) | 0.004645 ± 1.9346e-05 (W 1.66808e-05) | 🔴 colmat 1.57× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n512/b1` | 0.016155 ± 9.89626e-05 (W 8.31338e-05) | 0.012165 ± 0.000112864 (W 4.62039e-05) | 🔴 colmat 1.33× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+
+## linalg-mid, f32, c order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `cholesky/n128/b1` | 0.028264 ± 0.000819881 (W 9.17258e-05) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `cholesky/n128/b1 [api-inclusive]` | 0.024714 ± 0.000165097 (W 0.000151829) | - | - | `*` one row has no measurement here |
+| `cholesky/n256/b1` | 0.087156 ± 0.00189567 (W 0.000546268) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `cholesky/n256/b1 [api-inclusive]` | 0.104627 ± 0.00104568 (W 0.00224698) | - | - | `*` one row has no measurement here |
+| `cholesky/n512/b1` | 0.34216 ± 0.0047198 (W 0.00284028) | - | - | `*` one row has no measurement here |
+| `cholesky/n512/b1 [api-inclusive]` | 0.363807 ± 0.000916928 (W 0.00159619) | - | - | `*` one row has no measurement here |
+| `eigh/n128/b1` | 0.36111 ± 0.000839875 (W 0.00186385) | - | - | `*` one row has no measurement here |
+| `eigh/n128/b1 [api-inclusive]` | 0.361229 ± 0.00105893 (W 0.00230676) | - | - | `*` one row has no measurement here |
+| `eigh/n256/b1` | 1.19459 ± 0.00327053 (W 0.00357298) | - | - | `*` one row has no measurement here |
+| `eigh/n256/b1 [api-inclusive]` | 1.20299 ± 0.00385789 (W 0.00379713) | - | - | `*` one row has no measurement here |
+| `eigh/n512/b1` | 4.40935 ± 0.0122936 (W 0.00752821) | - | - | `*` one row has no measurement here |
+| `eigh/n512/b1 [api-inclusive]` | 4.42107 ± 0.0184892 (W 0.00593316) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1` | 0.135226 ± 0.000494078 (W 0.000749106) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1 [api-inclusive]` | 0.148951 ± 0.00094516 (W 0.000887268) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1` | 0.461487 ± 0.00297254 (W 0.00284199) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1 [api-inclusive]` | 0.598782 ± 0.00594454 (W 0.0053178) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1` | 1.63865 ± 0.0175283 (W 0.00651192) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1 [api-inclusive]` | 2.26978 ± 0.0191046 (W 0.00657038) | - | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [block(basis=128,target=128)]` | 0.027039 ± 0.000287091 (W 0.000812523) | - | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [sequence(basis=128,target=128)]` | 0.026125 ± 0.000438385 (W 0.000697728) | - | - | `*` one row has no measurement here |
+| `householder_apply/n256/b1 [block(basis=256,target=256)]` | 0.0888025 ± 0.00105274 (W 0.00123136) | - | - | `*` one row has no measurement here |
+| `householder_apply/n256/b1 [sequence(basis=256,target=256)]` | 0.089731 ± 0.00159479 (W 0.00172761) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `householder_apply/n512/b1 [block(basis=512,target=512)]` | 0.477389 ± 0.00302813 (W 0.00395451) | - | - | `*` one row has no measurement here |
+| `householder_apply/n512/b1 [sequence(basis=512,target=512)]` | 0.480621 ± 0.00420744 (W 0.00480525) | - | - | `*` one row has no measurement here |
+| `lu/n128/b1` | 0.064543 ± 0.00109405 (W 0.00161658) | - | - | `*` one row has no measurement here |
+| `lu/n128/b1 [api-inclusive]` | 0.058982 ± 0.000409358 (W 0.000812196) | - | - | `*` one row has no measurement here |
+| `lu/n256/b1` | 0.140196 ± 0.000493009 (W 0.00112959) | - | - | `*` one row has no measurement here |
+| `lu/n256/b1 [api-inclusive]` | 0.2754 ± 0.00270147 (W 0.00207428) | - | - | `*` one row has no measurement here |
+| `lu/n512/b1` | 0.503321 ± 0.00147081 (W 0.00214118) | - | - | `*` one row has no measurement here |
+| `lu/n512/b1 [api-inclusive]` | 1.1138 ± 0.00221331 (W 0.00369509) | - | - | `*` one row has no measurement here |
+| `qr/n128/b1` | 0.168878 ± 0.00154511 (W 0.00124589) | - | - | `*` one row has no measurement here |
+| `qr/n128/b1 [api-inclusive]` | 0.168551 ± 0.0010181 (W 0.00180104) | - | - | `*` one row has no measurement here |
+| `qr/n256/b1` | 0.430034 ± 0.00107411 (W 0.00191083) | - | - | `*` one row has no measurement here |
+| `qr/n256/b1 [api-inclusive]` | 0.615135 ± 0.00235186 (W 0.00253243) | - | - | `*` one row has no measurement here |
+| `qr/n512/b1` | 1.39961 ± 0.00279926 (W 0.00309449) | - | - | `*` one row has no measurement here |
+| `qr/n512/b1 [api-inclusive]` | 2.1946 ± 0.010477 (W 0.0077618) | - | - | `*` one row has no measurement here |
+| `qr_factor/n128/b1` | 0.0876015 ± 0.000455799 (W 0.000490626) | - | - | `*` one row has no measurement here |
+| `qr_factor/n256/b1` | 0.327507 ± 0.00132143 (W 0.00171724) | - | - | `*` one row has no measurement here |
+| `qr_factor/n512/b1` | 0.947302 ± 0.0107466 (W 0.00197823) | - | - | `*` one row has no measurement here |
+| `solve/n128/b1` | 0.046443 ± 0.000526394 (W 0.000984944) | - | - | `*` one row has no measurement here |
+| `solve/n128/b1 [api-inclusive]` | 0.0620625 ± 0.00039539 (W 0.000417685) | - | - | `*` one row has no measurement here |
+| `solve/n256/b1` | 0.138924 ± 0.000741449 (W 0.00112905) | - | - | `*` one row has no measurement here |
+| `solve/n256/b1 [api-inclusive]` | 0.202191 ± 0.000763959 (W 0.00132696) | - | - | `*` one row has no measurement here |
+| `solve/n512/b1` | 0.49648 ± 0.0136954 (W 0.0026411) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `solve/n512/b1 [api-inclusive]` | 0.771867 ± 0.00360068 (W 0.00456597) | - | - | `*` one row has no measurement here |
+| `svd_thin/n128/b1` | 0.979534 ± 0.00137014 (W 0.00184254) | - | - | `*` one row has no measurement here |
+| `svd_thin/n128/b1 [api-inclusive]` | 0.981146 ± 0.00246997 (W 0.00231063) | - | - | `*` one row has no measurement here |
+| `svd_thin/n256/b1` | 3.46532 ± 0.00663587 (W 0.0055293) | - | - | `*` one row has no measurement here |
+| `svd_thin/n256/b1 [api-inclusive]` | 3.49694 ± 0.00827235 (W 0.00787454) | - | - | `*` one row has no measurement here |
+| `svd_thin/n512/b1` | 13.6936 ± 0.262724 (W 0.0179272) | - | - | `*` one row has no measurement here |
+| `svd_thin/n512/b1 [api-inclusive]` | 13.5783 ± 0.184455 (W 0.017493) | - | - | `*` one row has no measurement here |
+| `svd_values/n128/b1` | 0.477532 ± 0.00150348 (W 0.00159704) | - | - | `*` one row has no measurement here |
+| `svd_values/n128/b1 [api-inclusive]` | 0.477292 ± 0.000905152 (W 0.00166656) | - | - | `*` one row has no measurement here |
+| `svd_values/n256/b1` | 1.94681 ± 0.00709231 (W 0.00613454) | - | - | `*` one row has no measurement here |
+| `svd_values/n256/b1 [api-inclusive]` | 1.96652 ± 0.00961661 (W 0.00391974) | - | - | `*` one row has no measurement here |
+| `svd_values/n512/b1` | 7.62067 ± 0.15963 (W 0.00942262) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_values/n512/b1 [api-inclusive]` | 7.68557 ± 0.194338 (W 0.0115261) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `triangular_solve/n128/b1` | 0.0028945 ± 3.70967e-05 (W 2.34776e-05) | 0.00216 ± 5.16398e-06 (W 1.94936e-05) | 🔴 colmat 1.34× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n256/b1` | 0.0069845 ± 2.88473e-05 (W 4.06553e-05) | 0.004665 ± 1.04881e-05 (W 1.84371e-05) | 🔴 colmat 1.50× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n512/b1` | 0.016559 ± 5.82088e-05 (W 0.000110839) | 0.012169 ± 0.000184893 (W 6.93283e-05) | 🔴 colmat 1.36× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+
+## linalg-mid, f32, f order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `cholesky/n128/b1` | 0.0192845 ± 0.00106625 (W 3.58431e-05) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n128/b1 [api-inclusive]` | 0.023695 ± 0.00103503 (W 5.52667e-05) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `cholesky/n256/b1` | 0.088416 ± 0.000198754 (W 0.00102537) | - | - | `*` one row has no measurement here |
+| `cholesky/n256/b1 [api-inclusive]` | 0.102669 ± 0.000300517 (W 0.0011431) | - | - | `*` one row has no measurement here |
+| `cholesky/n512/b1` | 0.482812 ± 0.0036223 (W 0.00218655) | - | - | `*` one row has no measurement here |
+| `cholesky/n512/b1 [api-inclusive]` | 0.533648 ± 0.00233589 (W 0.00251625) | - | - | `*` one row has no measurement here |
+| `eigh/n128/b1` | 0.887323 ± 0.00297828 (W 0.00140449) | - | - | `*` one row has no measurement here |
+| `eigh/n128/b1 [api-inclusive]` | 0.884375 ± 0.00120025 (W 0.00142282) | - | - | `*` one row has no measurement here |
+| `eigh/n256/b1` | 3.47176 ± 0.0113534 (W 0.014586) | - | - | `*` one row has no measurement here |
+| `eigh/n256/b1 [api-inclusive]` | 3.46499 ± 0.00480638 (W 0.0100533) | - | - | `*` one row has no measurement here |
+| `eigh/n512/b1` | 15.9817 ± 0.0680809 (W 0.0270379) | - | - | `*` one row has no measurement here |
+| `eigh/n512/b1 [api-inclusive]` | 15.9058 ± 0.0802092 (W 0.0178796) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1` | 0.130678 ± 0.00110416 (W 0.000739341) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1 [api-inclusive]` | 0.134996 ± 0.0011577 (W 0.00113117) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1` | 0.782765 ± 0.00519522 (W 0.00197435) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1 [api-inclusive]` | 0.814754 ± 0.0042856 (W 0.00308598) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1` | 5.3526 ± 0.0379795 (W 0.0064699) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1 [api-inclusive]` | 5.22508 ± 0.0273196 (W 0.0115596) | - | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [block(basis=128,target=128)]` | 0.076933 ± 0.000375586 (W 0.000266824) | - | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [sequence(basis=128,target=128)]` | 0.076478 ± 0.00103198 (W 0.000157134) | - | - | `*` one row has no measurement here |
+| `householder_apply/n256/b1 [block(basis=256,target=256)]` | 0.456771 ± 0.00351267 (W 0.00085626) | - | - | `*` one row has no measurement here |
+| `householder_apply/n256/b1 [sequence(basis=256,target=256)]` | 0.456656 ± 0.0026727 (W 0.00105244) | - | - | `*` one row has no measurement here |
+| `householder_apply/n512/b1 [block(basis=512,target=512)]` | 3.20422 ± 0.0141247 (W 0.00597759) | - | - | `*` one row has no measurement here |
+| `householder_apply/n512/b1 [sequence(basis=512,target=512)]` | 3.20917 ± 0.0146186 (W 0.00704685) | - | - | `*` one row has no measurement here |
+| `lu/n128/b1` | 0.0433835 ± 0.000513956 (W 0.000278874) | - | - | `*` one row has no measurement here |
+| `lu/n128/b1 [api-inclusive]` | 0.046834 ± 0.000599866 (W 0.000788794) | - | - | `*` one row has no measurement here |
+| `lu/n256/b1` | 0.192397 ± 0.000475828 (W 0.00126623) | - | - | `*` one row has no measurement here |
+| `lu/n256/b1 [api-inclusive]` | 0.272304 ± 0.00132305 (W 0.00193668) | - | - | `*` one row has no measurement here |
+| `lu/n512/b1` | 1.06986 ± 0.00210713 (W 0.00146448) | - | - | `*` one row has no measurement here |
+| `lu/n512/b1 [api-inclusive]` | 1.45443 ± 0.00542895 (W 0.00340289) | - | - | `*` one row has no measurement here |
+| `qr/n128/b1` | 0.18313 ± 0.00131364 (W 0.00143163) | - | - | `*` one row has no measurement here |
+| `qr/n128/b1 [api-inclusive]` | 0.202406 ± 0.000804675 (W 0.00238228) | - | - | `*` one row has no measurement here |
+| `qr/n256/b1` | 0.83309 ± 0.00561182 (W 0.00220405) | - | - | `*` one row has no measurement here |
+| `qr/n256/b1 [api-inclusive]` | 0.972042 ± 0.00437936 (W 0.00165005) | - | - | `*` one row has no measurement here |
+| `qr/n512/b1` | 4.5371 ± 0.0206522 (W 0.006428) | - | - | `*` one row has no measurement here |
+| `qr/n512/b1 [api-inclusive]` | 5.06646 ± 0.0136567 (W 0.00904538) | - | - | `*` one row has no measurement here |
+| `qr_factor/n128/b1` | 0.077542 ± 0.000723483 (W 0.000260966) | - | - | `*` one row has no measurement here |
+| `qr_factor/n256/b1` | 0.467953 ± 0.00232244 (W 0.00166413) | - | - | `*` one row has no measurement here |
+| `qr_factor/n512/b1` | 2.14773 ± 0.00918299 (W 0.00305398) | - | - | `*` one row has no measurement here |
+| `solve/n128/b1` | 0.0402735 ± 0.000458552 (W 0.000169342) | - | - | `*` one row has no measurement here |
+| `solve/n128/b1 [api-inclusive]` | 0.0450235 ± 0.000384444 (W 0.000319562) | - | - | `*` one row has no measurement here |
+| `solve/n256/b1` | 0.179504 ± 0.0015267 (W 0.00134626) | - | - | `*` one row has no measurement here |
+| `solve/n256/b1 [api-inclusive]` | 0.263897 ± 0.00288208 (W 0.00293606) | - | - | `*` one row has no measurement here |
+| `solve/n512/b1` | 1.0103 ± 0.00345277 (W 0.00134041) | - | - | `*` one row has no measurement here |
+| `solve/n512/b1 [api-inclusive]` | 1.07844 ± 0.0073871 (W 0.00311042) | - | - | `*` one row has no measurement here |
+| `svd_thin/n128/b1` | 1.34644 ± 0.00397625 (W 0.00245935) | - | - | `*` one row has no measurement here |
+| `svd_thin/n128/b1 [api-inclusive]` | 1.34485 ± 0.00317633 (W 0.00275865) | - | - | `*` one row has no measurement here |
+| `svd_thin/n256/b1` | 5.4432 ± 0.0042989 (W 0.00575566) | - | - | `*` one row has no measurement here |
+| `svd_thin/n256/b1 [api-inclusive]` | 5.45917 ± 0.0181123 (W 0.00566674) | - | - | `*` one row has no measurement here |
+| `svd_thin/n512/b1` | 27.5741 ± 0.041616 (W 0.0222168) | - | - | `*` one row has no measurement here |
+| `svd_thin/n512/b1 [api-inclusive]` | 27.6272 ± 0.0652506 (W 0.015932) | - | - | `*` one row has no measurement here |
+| `svd_values/n128/b1` | 0.438094 ± 0.00209378 (W 0.00148873) | - | - | `*` one row has no measurement here |
+| `svd_values/n128/b1 [api-inclusive]` | 0.43818 ± 0.00135928 (W 0.00207923) | - | - | `*` one row has no measurement here |
+| `svd_values/n256/b1` | 2.04466 ± 0.00966947 (W 0.00208149) | - | - | `*` one row has no measurement here |
+| `svd_values/n256/b1 [api-inclusive]` | 2.04755 ± 0.0066687 (W 0.00251953) | - | - | `*` one row has no measurement here |
+| `svd_values/n512/b1` | 12.1158 ± 0.032062 (W 0.00931583) | - | - | `*` one row has no measurement here |
+| `svd_values/n512/b1 [api-inclusive]` | 12.1667 ± 0.0487506 (W 0.0117702) | - | - | `*` one row has no measurement here |
+| `triangular_solve/n128/b1` | 0.002645 ± 2.09762e-05 (W 2.57977e-05) | 0.001815 ± 1.26491e-05 (W 2.22376e-05) | 🔴 colmat 1.46× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n256/b1` | 0.00662 ± 2.89856e-05 (W 4.67944e-05) | 0.00388 ± 1.16905e-05 (W 3.34498e-05) | 🔴 colmat 1.71× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n512/b1` | 0.0199885 ± 0.000147844 (W 6.96721e-05) | 0.01056 ± 0.000284176 (W 4.3185e-05) | 🔴 colmat 1.89× slower than `lapack-aocl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+
+## linalg-mid, f32, f order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `cholesky/n128/b1` | 0.019969 ± 0.000124523 (W 0.000143975) | - | - | `*` one row has no measurement here; dispatch-dominated (row under 20 us) |
+| `cholesky/n128/b1 [api-inclusive]` | 0.025089 ± 0.000239752 (W 0.000315262) | - | - | `*` one row has no measurement here |
+| `cholesky/n256/b1` | 0.0623375 ± 0.00186002 (W 0.000294701) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `cholesky/n256/b1 [api-inclusive]` | 0.0845015 ± 0.00148362 (W 0.000388725) | - | - | `*` one row has no measurement here |
+| `cholesky/n512/b1` | 0.212438 ± 0.000468233 (W 0.00139088) | - | - | `*` one row has no measurement here |
+| `cholesky/n512/b1 [api-inclusive]` | 0.302629 ± 0.000795005 (W 0.0018498) | - | - | `*` one row has no measurement here |
+| `eigh/n128/b1` | 0.428328 ± 0.00133515 (W 0.00158585) | - | - | `*` one row has no measurement here |
+| `eigh/n128/b1 [api-inclusive]` | 0.430121 ± 0.00150488 (W 0.00197949) | - | - | `*` one row has no measurement here |
+| `eigh/n256/b1` | 1.45779 ± 0.00171224 (W 0.00354876) | - | - | `*` one row has no measurement here |
+| `eigh/n256/b1 [api-inclusive]` | 1.45935 ± 0.00390205 (W 0.00397814) | - | - | `*` one row has no measurement here |
+| `eigh/n512/b1` | 5.75377 ± 0.00698642 (W 0.00971713) | - | - | `*` one row has no measurement here |
+| `eigh/n512/b1 [api-inclusive]` | 5.7817 ± 0.0128409 (W 0.0109421) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1` | 0.12635 ± 0.000642758 (W 0.000501459) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1 [api-inclusive]` | 0.129821 ± 0.000829251 (W 0.000792976) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1` | 0.47312 ± 0.00589784 (W 0.00186322) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1 [api-inclusive]` | 0.547475 ± 0.00244148 (W 0.00245058) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1` | 2.06522 ± 0.00708871 (W 0.00367426) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1 [api-inclusive]` | 2.34482 ± 0.00869314 (W 0.006038) | - | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [block(basis=128,target=128)]` | 0.031513 ± 0.000331272 (W 0.000194408) | - | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [sequence(basis=128,target=128)]` | 0.031569 ± 0.000419915 (W 0.000325776) | - | - | `*` one row has no measurement here |
+| `householder_apply/n256/b1 [block(basis=256,target=256)]` | 0.141949 ± 0.000544259 (W 0.00131895) | - | - | `*` one row has no measurement here |
+| `householder_apply/n256/b1 [sequence(basis=256,target=256)]` | 0.14284 ± 0.000787304 (W 0.00118291) | - | - | `*` one row has no measurement here |
+| `householder_apply/n512/b1 [block(basis=512,target=512)]` | 0.850097 ± 0.00372276 (W 0.0031886) | - | - | `*` one row has no measurement here |
+| `householder_apply/n512/b1 [sequence(basis=512,target=512)]` | 0.848527 ± 0.00204603 (W 0.00315397) | - | - | `*` one row has no measurement here |
+| `lu/n128/b1` | 0.038449 ± 0.000398515 (W 0.000559956) | - | - | `*` one row has no measurement here |
+| `lu/n128/b1 [api-inclusive]` | 0.042237 ± 0.000750061 (W 0.000528068) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `lu/n256/b1` | 0.124992 ± 0.000781011 (W 0.00102122) | - | - | `*` one row has no measurement here |
+| `lu/n256/b1 [api-inclusive]` | 0.214883 ± 0.00271041 (W 0.00166493) | - | - | `*` one row has no measurement here |
+| `lu/n512/b1` | 0.530119 ± 0.00279014 (W 0.00167788) | - | - | `*` one row has no measurement here |
+| `lu/n512/b1 [api-inclusive]` | 0.934837 ± 0.00448903 (W 0.00365419) | - | - | `*` one row has no measurement here |
+| `qr/n128/b1` | 0.13029 ± 0.000743256 (W 0.000552208) | - | - | `*` one row has no measurement here |
+| `qr/n128/b1 [api-inclusive]` | 0.155102 ± 0.00115883 (W 0.00136393) | - | - | `*` one row has no measurement here |
+| `qr/n256/b1` | 0.430153 ± 0.00178689 (W 0.00197234) | - | - | `*` one row has no measurement here |
+| `qr/n256/b1 [api-inclusive]` | 0.576137 ± 0.00115014 (W 0.00220238) | - | - | `*` one row has no measurement here |
+| `qr/n512/b1` | 1.80826 ± 0.00509379 (W 0.00257189) | - | - | `*` one row has no measurement here |
+| `qr/n512/b1 [api-inclusive]` | 2.42927 ± 0.00613855 (W 0.0060569) | - | - | `*` one row has no measurement here |
+| `qr_factor/n128/b1` | 0.0768875 ± 0.000205499 (W 0.000507368) | - | - | `*` one row has no measurement here |
+| `qr_factor/n256/b1` | 0.30097 ± 0.000540139 (W 0.00170851) | - | - | `*` one row has no measurement here |
+| `qr_factor/n512/b1` | 1.14113 ± 0.00391439 (W 0.0032064) | - | - | `*` one row has no measurement here |
+| `solve/n128/b1` | 0.0405235 ± 0.00021474 (W 0.000274169) | - | - | `*` one row has no measurement here |
+| `solve/n128/b1 [api-inclusive]` | 0.044459 ± 0.000307703 (W 0.000409432) | - | - | `*` one row has no measurement here |
+| `solve/n256/b1` | 0.125531 ± 0.000525993 (W 0.000801279) | - | - | `*` one row has no measurement here |
+| `solve/n256/b1 [api-inclusive]` | 0.142241 ± 0.00102861 (W 0.000813152) | - | - | `*` one row has no measurement here |
+| `solve/n512/b1` | 0.510522 ± 0.00155552 (W 0.00288365) | - | - | `*` one row has no measurement here |
+| `solve/n512/b1 [api-inclusive]` | 0.574412 ± 0.00302108 (W 0.00235394) | - | - | `*` one row has no measurement here |
+| `svd_thin/n128/b1` | 0.977635 ± 0.00285905 (W 0.00156797) | - | - | `*` one row has no measurement here |
+| `svd_thin/n128/b1 [api-inclusive]` | 0.980065 ± 0.00248274 (W 0.00104128) | - | - | `*` one row has no measurement here |
+| `svd_thin/n256/b1` | 3.60175 ± 0.00547103 (W 0.00470395) | - | - | `*` one row has no measurement here |
+| `svd_thin/n256/b1 [api-inclusive]` | 3.60415 ± 0.0076901 (W 0.00747046) | - | - | `*` one row has no measurement here |
+| `svd_thin/n512/b1` | 14.5108 ± 0.026401 (W 0.0173036) | - | - | `*` one row has no measurement here |
+| `svd_thin/n512/b1 [api-inclusive]` | 14.5454 ± 0.0298765 (W 0.0157264) | - | - | `*` one row has no measurement here |
+| `svd_values/n128/b1` | 0.460163 ± 0.0018372 (W 0.00155868) | - | - | `*` one row has no measurement here |
+| `svd_values/n128/b1 [api-inclusive]` | 0.461799 ± 0.00112896 (W 0.00170132) | - | - | `*` one row has no measurement here |
+| `svd_values/n256/b1` | 1.89524 ± 0.00537011 (W 0.00457461) | - | - | `*` one row has no measurement here |
+| `svd_values/n256/b1 [api-inclusive]` | 1.89439 ± 0.00975944 (W 0.00546276) | - | - | `*` one row has no measurement here |
+| `svd_values/n512/b1` | 7.6506 ± 0.0112764 (W 0.00914317) | - | - | `*` one row has no measurement here |
+| `svd_values/n512/b1 [api-inclusive]` | 7.64193 ± 0.00765139 (W 0.0105192) | - | - | `*` one row has no measurement here |
+| `triangular_solve/n128/b1` | 0.00337 ± 0.000389287 (W 4.25221e-05) | 0.00182 ± 1.18954e-05 (W 2.66367e-05) | 🔴 colmat 1.85× slower than `lapack-aocl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `triangular_solve/n256/b1` | 0.0081795 ± 4.03518e-05 (W 5.49193e-05) | 0.0039045 ± 1.51052e-05 (W 2.55804e-05) | 🔴 colmat 2.09× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n512/b1` | 0.0196045 ± 0.000140144 (W 0.000643799) | 0.010989 ± 0.000328189 (W 7.07274e-05) | 🔴 colmat 1.78× slower than `lapack-aocl` | `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+
+## linalg-mid, f32, f order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `cholesky/n128/b1` | 0.019784 ± 0.000863473 (W 0.000172125) | - | - | `*` one row has no measurement here; `!` between-start range over 5%; dispatch-dominated (row under 20 us) |
+| `cholesky/n128/b1 [api-inclusive]` | 0.024999 ± 0.000837183 (W 0.000255605) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `cholesky/n256/b1` | 0.0669525 ± 0.0002497 (W 0.000647277) | - | - | `*` one row has no measurement here |
+| `cholesky/n256/b1 [api-inclusive]` | 0.085102 ± 0.000205558 (W 0.000605008) | - | - | `*` one row has no measurement here |
+| `cholesky/n512/b1` | 0.201065 ± 0.000596681 (W 0.00275591) | - | - | `*` one row has no measurement here |
+| `cholesky/n512/b1 [api-inclusive]` | 0.273449 ± 0.00186808 (W 0.00136746) | - | - | `*` one row has no measurement here |
+| `eigh/n128/b1` | 0.360846 ± 0.00153535 (W 0.00208626) | - | - | `*` one row has no measurement here |
+| `eigh/n128/b1 [api-inclusive]` | 0.360449 ± 0.00220374 (W 0.00222813) | - | - | `*` one row has no measurement here |
+| `eigh/n256/b1` | 1.17427 ± 0.00387809 (W 0.00304675) | - | - | `*` one row has no measurement here |
+| `eigh/n256/b1 [api-inclusive]` | 1.1792 ± 0.00433262 (W 0.003369) | - | - | `*` one row has no measurement here |
+| `eigh/n512/b1` | 4.29272 ± 0.00940136 (W 0.0075232) | - | - | `*` one row has no measurement here |
+| `eigh/n512/b1 [api-inclusive]` | 4.30592 ± 0.0167242 (W 0.00594368) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1` | 0.127423 ± 0.00115567 (W 0.000439875) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1 [api-inclusive]` | 0.132848 ± 0.00114725 (W 0.000763982) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1` | 0.455038 ± 0.00732445 (W 0.00293628) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1 [api-inclusive]` | 0.530136 ± 0.00880686 (W 0.00509018) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1` | 1.63966 ± 0.00927132 (W 0.00549579) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1 [api-inclusive]` | 1.97207 ± 0.0133341 (W 0.00622219) | - | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [block(basis=128,target=128)]` | 0.0234295 ± 0.000210429 (W 0.000469386) | - | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [sequence(basis=128,target=128)]` | 0.0225545 ± 0.000303954 (W 0.000465708) | - | - | `*` one row has no measurement here |
+| `householder_apply/n256/b1 [block(basis=256,target=256)]` | 0.093982 ± 0.00107352 (W 0.00121694) | - | - | `*` one row has no measurement here |
+| `householder_apply/n256/b1 [sequence(basis=256,target=256)]` | 0.0940675 ± 0.000392295 (W 0.00134702) | - | - | `*` one row has no measurement here |
+| `householder_apply/n512/b1 [block(basis=512,target=512)]` | 0.501776 ± 0.00296974 (W 0.00383988) | - | - | `*` one row has no measurement here |
+| `householder_apply/n512/b1 [sequence(basis=512,target=512)]` | 0.50585 ± 0.00314326 (W 0.00298822) | - | - | `*` one row has no measurement here |
+| `lu/n128/b1` | 0.038623 ± 0.000395095 (W 0.000308343) | - | - | `*` one row has no measurement here |
+| `lu/n128/b1 [api-inclusive]` | 0.042638 ± 0.000406679 (W 0.000316147) | - | - | `*` one row has no measurement here |
+| `lu/n256/b1` | 0.116967 ± 0.000547334 (W 0.00116549) | - | - | `*` one row has no measurement here |
+| `lu/n256/b1 [api-inclusive]` | 0.207135 ± 0.00128662 (W 0.00189544) | - | - | `*` one row has no measurement here |
+| `lu/n512/b1` | 0.430172 ± 0.00369113 (W 0.00283016) | - | - | `*` one row has no measurement here |
+| `lu/n512/b1 [api-inclusive]` | 0.821274 ± 0.00212076 (W 0.00337669) | - | - | `*` one row has no measurement here |
+| `qr/n128/b1` | 0.126354 ± 0.000719164 (W 0.00143442) | - | - | `*` one row has no measurement here |
+| `qr/n128/b1 [api-inclusive]` | 0.150975 ± 0.00049982 (W 0.00159048) | - | - | `*` one row has no measurement here |
+| `qr/n256/b1` | 0.388526 ± 0.0018048 (W 0.00199681) | - | - | `*` one row has no measurement here |
+| `qr/n256/b1 [api-inclusive]` | 0.543476 ± 0.00208899 (W 0.00327557) | - | - | `*` one row has no measurement here |
+| `qr/n512/b1` | 1.25166 ± 0.00437534 (W 0.00265948) | - | - | `*` one row has no measurement here |
+| `qr/n512/b1 [api-inclusive]` | 1.90087 ± 0.00825462 (W 0.00347829) | - | - | `*` one row has no measurement here |
+| `qr_factor/n128/b1` | 0.077441 ± 0.00040145 (W 0.000347062) | - | - | `*` one row has no measurement here |
+| `qr_factor/n256/b1` | 0.302069 ± 0.00094073 (W 0.00203325) | - | - | `*` one row has no measurement here |
+| `qr_factor/n512/b1` | 0.856738 ± 0.00199383 (W 0.00150231) | - | - | `*` one row has no measurement here |
+| `solve/n128/b1` | 0.0391135 ± 0.000456718 (W 0.000398551) | - | - | `*` one row has no measurement here |
+| `solve/n128/b1 [api-inclusive]` | 0.0440635 ± 0.000728401 (W 0.00037374) | - | - | `*` one row has no measurement here |
+| `solve/n256/b1` | 0.114351 ± 0.000247114 (W 0.000988264) | - | - | `*` one row has no measurement here |
+| `solve/n256/b1 [api-inclusive]` | 0.134595 ± 0.000486968 (W 0.00061783) | - | - | `*` one row has no measurement here |
+| `solve/n512/b1` | 0.384071 ± 0.000559046 (W 0.00181848) | - | - | `*` one row has no measurement here |
+| `solve/n512/b1 [api-inclusive]` | 0.488696 ± 0.0024956 (W 0.00213606) | - | - | `*` one row has no measurement here |
+| `svd_thin/n128/b1` | 0.97839 ± 0.00226343 (W 0.00108117) | - | - | `*` one row has no measurement here |
+| `svd_thin/n128/b1 [api-inclusive]` | 0.979799 ± 0.00442262 (W 0.00140597) | - | - | `*` one row has no measurement here |
+| `svd_thin/n256/b1` | 3.4103 ± 0.00485407 (W 0.00600327) | - | - | `*` one row has no measurement here |
+| `svd_thin/n256/b1 [api-inclusive]` | 3.43787 ± 0.00760706 (W 0.00417055) | - | - | `*` one row has no measurement here |
+| `svd_thin/n512/b1` | 12.8525 ± 0.0242202 (W 0.0147789) | - | - | `*` one row has no measurement here |
+| `svd_thin/n512/b1 [api-inclusive]` | 12.8641 ± 0.01405 (W 0.0154241) | - | - | `*` one row has no measurement here |
+| `svd_values/n128/b1` | 0.474332 ± 0.00115411 (W 0.00162609) | - | - | `*` one row has no measurement here |
+| `svd_values/n128/b1 [api-inclusive]` | 0.474122 ± 0.00220559 (W 0.00157623) | - | - | `*` one row has no measurement here |
+| `svd_values/n256/b1` | 1.88521 ± 0.00487465 (W 0.00368404) | - | - | `*` one row has no measurement here |
+| `svd_values/n256/b1 [api-inclusive]` | 1.89221 ± 0.00755781 (W 0.00295807) | - | - | `*` one row has no measurement here |
+| `svd_values/n512/b1` | 7.04587 ± 0.00873373 (W 0.00705013) | - | - | `*` one row has no measurement here |
+| `svd_values/n512/b1 [api-inclusive]` | 7.05371 ± 0.0228958 (W 0.00940223) | - | - | `*` one row has no measurement here |
+| `triangular_solve/n128/b1` | 0.003175 ± 3.55903e-05 (W 3.26895e-05) | 0.001785 ± 1.04881e-05 (W 2.50752e-05) | 🔴 colmat 1.78× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n256/b1` | 0.0076495 ± 3.67718e-05 (W 4.87462e-05) | 0.00388 ± 1.31719e-05 (W 2.93538e-05) | 🔴 colmat 1.97× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n512/b1` | 0.020424 ± 0.0002103 (W 0.000229684) | 0.0109095 ± 0.00019551 (W 0.000109773) | 🔴 colmat 1.87× slower than `lapack-aocl` |  |
+
+## linalg-mid, c32, c order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `cholesky/n128/b1` | 0.127624 ± 0.000277635 (W 0.000433747) | - | - | `*` one row has no measurement here |
+| `cholesky/n128/b1 [api-inclusive]` | 0.125431 ± 8.84805e-05 (W 0.000566663) | - | - | `*` one row has no measurement here |
+| `cholesky/n256/b1` | 0.475957 ± 0.00112531 (W 0.00206269) | - | - | `*` one row has no measurement here |
+| `cholesky/n256/b1 [api-inclusive]` | 0.455249 ± 0.00178949 (W 0.00180274) | - | - | `*` one row has no measurement here |
+| `cholesky/n512/b1` | 2.32535 ± 0.00631827 (W 0.00334639) | - | - | `*` one row has no measurement here |
+| `cholesky/n512/b1 [api-inclusive]` | 2.11424 ± 0.00454839 (W 0.00248015) | - | - | `*` one row has no measurement here |
+| `eigh/n128/b1` | 1.18503 ± 0.00180384 (W 0.00155644) | - | - | `*` one row has no measurement here |
+| `eigh/n128/b1 [api-inclusive]` | 1.18622 ± 0.00405982 (W 0.00137632) | - | - | `*` one row has no measurement here |
+| `eigh/n256/b1` | 5.57408 ± 0.0132842 (W 0.00844064) | - | - | `*` one row has no measurement here |
+| `eigh/n256/b1 [api-inclusive]` | 5.57678 ± 0.0102149 (W 0.0116554) | - | - | `*` one row has no measurement here |
+| `eigh/n512/b1` | 30.6874 ± 0.070578 (W 0.150784) | - | - | `*` one row has no measurement here |
+| `eigh/n512/b1 [api-inclusive]` | 30.7184 ± 0.0598316 (W 0.0304894) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1` | 0.278092 ± 0.00100008 (W 0.00185391) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1 [api-inclusive]` | 0.287717 ± 0.00131581 (W 0.00218452) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1` | 1.70125 ± 0.00550161 (W 0.00389252) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1 [api-inclusive]` | 1.8013 ± 0.00674819 (W 0.00705033) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1` | 12.7958 ± 0.132725 (W 0.011998) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1 [api-inclusive]` | 13.3214 ± 0.0378707 (W 0.0234034) | - | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [block(basis=128,target=128)]` | 0.23692 ± 0.000875247 (W 0.00158719) | - | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [sequence(basis=128,target=128)]` | 0.236681 ± 0.000928961 (W 0.00140293) | - | - | `*` one row has no measurement here |
+| `householder_apply/n256/b1 [block(basis=256,target=256)]` | 1.51279 ± 0.0045483 (W 0.00151215) | - | - | `*` one row has no measurement here |
+| `householder_apply/n256/b1 [sequence(basis=256,target=256)]` | 1.50965 ± 0.00403155 (W 0.00147258) | - | - | `*` one row has no measurement here |
+| `householder_apply/n512/b1 [block(basis=512,target=512)]` | 10.8687 ± 0.230955 (W 0.0102346) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `householder_apply/n512/b1 [sequence(basis=512,target=512)]` | 10.8524 ± 0.0404899 (W 0.0106978) | - | - | `*` one row has no measurement here |
+| `lu/n128/b1` | 0.095792 ± 0.000260459 (W 0.00113305) | - | - | `*` one row has no measurement here |
+| `lu/n128/b1 [api-inclusive]` | 0.113817 ± 0.000888001 (W 0.00107976) | - | - | `*` one row has no measurement here |
+| `lu/n256/b1` | 0.482827 ± 0.00241704 (W 0.00172851) | - | - | `*` one row has no measurement here |
+| `lu/n256/b1 [api-inclusive]` | 0.752881 ± 0.00399969 (W 0.00269281) | - | - | `*` one row has no measurement here |
+| `lu/n512/b1` | 2.97545 ± 0.00849847 (W 0.00265529) | - | - | `*` one row has no measurement here |
+| `lu/n512/b1 [api-inclusive]` | 4.29167 ± 0.0090215 (W 0.00336749) | - | - | `*` one row has no measurement here |
+| `qr/n128/b1` | 0.452688 ± 0.00288868 (W 0.00160454) | - | - | `*` one row has no measurement here |
+| `qr/n128/b1 [api-inclusive]` | 0.520214 ± 0.00359895 (W 0.0019093) | - | - | `*` one row has no measurement here |
+| `qr/n256/b1` | 2.41715 ± 0.00781302 (W 0.00211207) | - | - | `*` one row has no measurement here |
+| `qr/n256/b1 [api-inclusive]` | 2.62826 ± 0.0041726 (W 0.00374702) | - | - | `*` one row has no measurement here |
+| `qr/n512/b1` | 15.4523 ± 0.0551122 (W 0.0140395) | - | - | `*` one row has no measurement here |
+| `qr/n512/b1 [api-inclusive]` | 15.4226 ± 0.0558072 (W 0.0135631) | - | - | `*` one row has no measurement here |
+| `qr_factor/n128/b1` | 0.225156 ± 0.00134921 (W 0.00152446) | - | - | `*` one row has no measurement here |
+| `qr_factor/n256/b1` | 1.27234 ± 0.00320197 (W 0.00180531) | - | - | `*` one row has no measurement here |
+| `qr_factor/n512/b1` | 6.69914 ± 0.0190926 (W 0.00623129) | - | - | `*` one row has no measurement here |
+| `solve/n128/b1` | 0.090183 ± 0.000539758 (W 0.000617681) | - | - | `*` one row has no measurement here |
+| `solve/n128/b1 [api-inclusive]` | 0.141342 ± 0.00152311 (W 0.0015443) | - | - | `*` one row has no measurement here |
+| `solve/n256/b1` | 0.456531 ± 0.00102708 (W 0.00215433) | - | - | `*` one row has no measurement here |
+| `solve/n256/b1 [api-inclusive]` | 0.576271 ± 0.00212532 (W 0.00283033) | - | - | `*` one row has no measurement here |
+| `solve/n512/b1` | 2.93427 ± 0.0229125 (W 0.00422144) | - | - | `*` one row has no measurement here |
+| `solve/n512/b1 [api-inclusive]` | 3.38133 ± 0.0163251 (W 0.0118279) | - | - | `*` one row has no measurement here |
+| `svd_thin/n128/b1` | 1.86079 ± 0.00381402 (W 0.00180652) | - | - | `*` one row has no measurement here |
+| `svd_thin/n128/b1 [api-inclusive]` | 1.86566 ± 0.0041566 (W 0.00270624) | - | - | `*` one row has no measurement here |
+| `svd_thin/n256/b1` | 8.81109 ± 0.0193198 (W 0.00608065) | - | - | `*` one row has no measurement here |
+| `svd_thin/n256/b1 [api-inclusive]` | 8.8217 ± 0.0263203 (W 0.00886478) | - | - | `*` one row has no measurement here |
+| `svd_thin/n512/b1` | 53.5472 ± 0.677935 (W 0.275626) | - | - | `*` one row has no measurement here |
+| `svd_thin/n512/b1 [api-inclusive]` | 54.8159 ± 0.114425 (W 0.0563791) | - | - | `*` one row has no measurement here |
+| `svd_values/n128/b1` | 0.671911 ± 0.00320234 (W 0.00221771) | - | - | `*` one row has no measurement here |
+| `svd_values/n128/b1 [api-inclusive]` | 0.6744 ± 0.00340947 (W 0.00228408) | - | - | `*` one row has no measurement here |
+| `svd_values/n256/b1` | 3.709 ± 0.0223667 (W 0.00825191) | - | - | `*` one row has no measurement here |
+| `svd_values/n256/b1 [api-inclusive]` | 3.71353 ± 0.0343741 (W 0.00648622) | - | - | `*` one row has no measurement here |
+| `svd_values/n512/b1` | 28.0533 ± 0.100683 (W 0.0719756) | - | - | `*` one row has no measurement here |
+| `svd_values/n512/b1 [api-inclusive]` | 28.1781 ± 0.100336 (W 0.0438194) | - | - | `*` one row has no measurement here |
+| `triangular_solve/n128/b1` | 0.00394 ± 1.87083e-05 (W 2.19861e-05) | 0.0039695 ± 1.48829e-05 (W 1.94739e-05) | · | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n256/b1` | 0.0105095 ± 7.57117e-05 (W 3.56045e-05) | 0.0094695 ± 1.49722e-05 (W 1.54774e-05) | 🔴 colmat 1.11× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n512/b1` | 0.034224 ± 0.000338302 (W 0.000390078) | 0.028435 ± 0.000389072 (W 0.000268624) | 🔴 colmat 1.20× slower than `lapack-aocl` |  |
+
+## linalg-mid, c32, c order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `cholesky/n128/b1` | 0.119015 ± 0.000372671 (W 0.0002213) | - | - | `*` one row has no measurement here |
+| `cholesky/n128/b1 [api-inclusive]` | 0.118952 ± 0.000301436 (W 0.000336065) | - | - | `*` one row has no measurement here |
+| `cholesky/n256/b1` | 0.345859 ± 0.00119709 (W 0.0033722) | - | - | `*` one row has no measurement here |
+| `cholesky/n256/b1 [api-inclusive]` | 0.343373 ± 0.00111793 (W 0.0013732) | - | - | `*` one row has no measurement here |
+| `cholesky/n512/b1` | 1.08907 ± 0.00298087 (W 0.00315729) | - | - | `*` one row has no measurement here |
+| `cholesky/n512/b1 [api-inclusive]` | 1.1144 ± 0.00472824 (W 0.0027198) | - | - | `*` one row has no measurement here |
+| `eigh/n128/b1` | 0.568712 ± 0.00238198 (W 0.00207178) | - | - | `*` one row has no measurement here |
+| `eigh/n128/b1 [api-inclusive]` | 0.575403 ± 0.00214081 (W 0.00226962) | - | - | `*` one row has no measurement here |
+| `eigh/n256/b1` | 2.17611 ± 0.0026516 (W 0.00410828) | - | - | `*` one row has no measurement here |
+| `eigh/n256/b1 [api-inclusive]` | 2.18625 ± 0.00252309 (W 0.00254567) | - | - | `*` one row has no measurement here |
+| `eigh/n512/b1` | 10.0928 ± 0.0249624 (W 0.0195969) | - | - | `*` one row has no measurement here |
+| `eigh/n512/b1 [api-inclusive]` | 10.1211 ± 0.018398 (W 0.0168859) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1` | 0.190128 ± 0.0013535 (W 0.0011303) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1 [api-inclusive]` | 0.199926 ± 0.0016814 (W 0.00178032) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1` | 0.769038 ± 0.00599335 (W 0.00330874) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1 [api-inclusive]` | 0.98111 ± 0.00307694 (W 0.00252118) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1` | 3.80257 ± 0.0103933 (W 0.00767484) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1 [api-inclusive]` | 4.90336 ± 0.0180286 (W 0.00659125) | - | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [block(basis=128,target=128)]` | 0.0754355 ± 0.000230287 (W 0.000305588) | - | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [sequence(basis=128,target=128)]` | 0.0756555 ± 0.000577317 (W 0.000805131) | - | - | `*` one row has no measurement here |
+| `householder_apply/n256/b1 [block(basis=256,target=256)]` | 0.417356 ± 0.00251384 (W 0.00240939) | - | - | `*` one row has no measurement here |
+| `householder_apply/n256/b1 [sequence(basis=256,target=256)]` | 0.416841 ± 0.00166617 (W 0.0018166) | - | - | `*` one row has no measurement here |
+| `householder_apply/n512/b1 [block(basis=512,target=512)]` | 2.78936 ± 0.0308201 (W 0.011488) | - | - | `*` one row has no measurement here |
+| `householder_apply/n512/b1 [sequence(basis=512,target=512)]` | 2.7955 ± 0.032553 (W 0.0128296) | - | - | `*` one row has no measurement here |
+| `lu/n128/b1` | 0.0991145 ± 0.00125116 (W 0.00102817) | - | - | `*` one row has no measurement here |
+| `lu/n128/b1 [api-inclusive]` | 0.0948245 ± 0.0110885 (W 0.000329526) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `lu/n256/b1` | 0.319217 ± 0.000737761 (W 0.00174727) | - | - | `*` one row has no measurement here |
+| `lu/n256/b1 [api-inclusive]` | 0.543494 ± 0.00527945 (W 0.00378174) | - | - | `*` one row has no measurement here |
+| `lu/n512/b1` | 1.46231 ± 0.0041409 (W 0.00332239) | - | - | `*` one row has no measurement here |
+| `lu/n512/b1 [api-inclusive]` | 2.5808 ± 0.0123401 (W 0.00493243) | - | - | `*` one row has no measurement here |
+| `qr/n128/b1` | 0.308742 ± 0.00193177 (W 0.00158335) | - | - | `*` one row has no measurement here |
+| `qr/n128/b1 [api-inclusive]` | 0.357673 ± 0.00219491 (W 0.00225523) | - | - | `*` one row has no measurement here |
+| `qr/n256/b1` | 0.93521 ± 0.00281246 (W 0.00203344) | - | - | `*` one row has no measurement here |
+| `qr/n256/b1 [api-inclusive]` | 1.26348 ± 0.00560421 (W 0.00446296) | - | - | `*` one row has no measurement here |
+| `qr/n512/b1` | 4.94273 ± 0.0132966 (W 0.00910281) | - | - | `*` one row has no measurement here |
+| `qr/n512/b1 [api-inclusive]` | 6.1135 ± 0.0152238 (W 0.00664804) | - | - | `*` one row has no measurement here |
+| `qr_factor/n128/b1` | 0.1988 ± 0.00195049 (W 0.00128214) | - | - | `*` one row has no measurement here |
+| `qr_factor/n256/b1` | 0.593721 ± 0.00169771 (W 0.00202646) | - | - | `*` one row has no measurement here |
+| `qr_factor/n512/b1` | 2.51988 ± 0.0283543 (W 0.00326) | - | - | `*` one row has no measurement here |
+| `solve/n128/b1` | 0.08175 ± 0.000548357 (W 0.00113701) | - | - | `*` one row has no measurement here |
+| `solve/n128/b1 [api-inclusive]` | 0.0960705 ± 0.0145384 (W 0.000479927) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `solve/n256/b1` | 0.310271 ± 0.00690678 (W 0.00179062) | - | - | `*` one row has no measurement here |
+| `solve/n256/b1 [api-inclusive]` | 0.370922 ± 0.00339422 (W 0.00177087) | - | - | `*` one row has no measurement here |
+| `solve/n512/b1` | 1.36072 ± 0.00289981 (W 0.00369964) | - | - | `*` one row has no measurement here |
+| `solve/n512/b1 [api-inclusive]` | 1.68896 ± 0.0083914 (W 0.00460375) | - | - | `*` one row has no measurement here |
+| `svd_thin/n128/b1` | 1.24252 ± 0.00259519 (W 0.0027516) | - | - | `*` one row has no measurement here |
+| `svd_thin/n128/b1 [api-inclusive]` | 1.25034 ± 0.00307525 (W 0.00227099) | - | - | `*` one row has no measurement here |
+| `svd_thin/n256/b1` | 4.86223 ± 0.0171759 (W 0.00496435) | - | - | `*` one row has no measurement here |
+| `svd_thin/n256/b1 [api-inclusive]` | 4.89511 ± 0.0163456 (W 0.00796168) | - | - | `*` one row has no measurement here |
+| `svd_thin/n512/b1` | 23.3652 ± 0.551054 (W 0.0229727) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_thin/n512/b1 [api-inclusive]` | 23.4732 ± 0.54432 (W 0.0164209) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_values/n128/b1` | 0.626286 ± 0.00231945 (W 0.00199991) | - | - | `*` one row has no measurement here |
+| `svd_values/n128/b1 [api-inclusive]` | 0.627297 ± 0.00214497 (W 0.00281621) | - | - | `*` one row has no measurement here |
+| `svd_values/n256/b1` | 2.62056 ± 0.00862936 (W 0.00692843) | - | - | `*` one row has no measurement here |
+| `svd_values/n256/b1 [api-inclusive]` | 2.62143 ± 0.0129267 (W 0.00765402) | - | - | `*` one row has no measurement here |
+| `svd_values/n512/b1` | 13.3872 ± 0.49126 (W 0.018598) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_values/n512/b1 [api-inclusive]` | 13.392 ± 0.0721626 (W 0.0279734) | - | - | `*` one row has no measurement here |
+| `triangular_solve/n128/b1` | 0.00466 ± 2.78598e-05 (W 3.14038e-05) | 0.003975 ± 1.14717e-05 (W 1.81843e-05) | 🔴 colmat 1.17× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n256/b1` | 0.0108695 ± 4.55664e-05 (W 5.34531e-05) | 0.009495 ± 6.93409e-05 (W 2.49149e-05) | 🔴 colmat 1.14× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n512/b1` | 0.026084 ± 0.000182821 (W 0.000114533) | 0.0282885 ± 0.000350601 (W 0.00019598) | 🔵 colmat 1.08× faster than `lapack-aocl` |  |
+
+## linalg-mid, c32, c order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `cholesky/n128/b1` | 0.120882 ± 0.000142711 (W 0.000247277) | - | - | `*` one row has no measurement here |
+| `cholesky/n128/b1 [api-inclusive]` | 0.119452 ± 0.000367778 (W 0.000554713) | - | - | `*` one row has no measurement here |
+| `cholesky/n256/b1` | 0.340256 ± 0.00162786 (W 0.00247933) | - | - | `*` one row has no measurement here |
+| `cholesky/n256/b1 [api-inclusive]` | 0.332547 ± 0.00166597 (W 0.00182948) | - | - | `*` one row has no measurement here |
+| `cholesky/n512/b1` | 0.989655 ± 0.00362223 (W 0.0029701) | - | - | `*` one row has no measurement here |
+| `cholesky/n512/b1 [api-inclusive]` | 0.996358 ± 0.0122136 (W 0.00107458) | - | - | `*` one row has no measurement here |
+| `eigh/n128/b1` | 0.483977 ± 0.000665271 (W 0.00255647) | - | - | `*` one row has no measurement here |
+| `eigh/n128/b1 [api-inclusive]` | 0.487212 ± 0.00132528 (W 0.0022073) | - | - | `*` one row has no measurement here |
+| `eigh/n256/b1` | 1.7523 ± 0.00766307 (W 0.00362078) | - | - | `*` one row has no measurement here |
+| `eigh/n256/b1 [api-inclusive]` | 1.76887 ± 0.00690075 (W 0.00321654) | - | - | `*` one row has no measurement here |
+| `eigh/n512/b1` | 7.25925 ± 0.0222393 (W 0.0159766) | - | - | `*` one row has no measurement here |
+| `eigh/n512/b1 [api-inclusive]` | 7.3117 ± 0.0175604 (W 0.0148342) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1` | 0.186871 ± 0.00147011 (W 0.00163432) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1 [api-inclusive]` | 0.207269 ± 0.000717394 (W 0.00181472) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1` | 0.655191 ± 0.00624406 (W 0.00428153) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1 [api-inclusive]` | 0.907363 ± 0.00828322 (W 0.00293456) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1` | 2.59427 ± 0.0156528 (W 0.00637732) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1 [api-inclusive]` | 3.80093 ± 0.0189366 (W 0.00699943) | - | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [block(basis=128,target=128)]` | 0.058889 ± 0.000483294 (W 0.000961234) | - | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [sequence(basis=128,target=128)]` | 0.0588885 ± 0.000560942 (W 0.000575182) | - | - | `*` one row has no measurement here |
+| `householder_apply/n256/b1 [block(basis=256,target=256)]` | 0.232953 ± 0.00261218 (W 0.00257297) | - | - | `*` one row has no measurement here |
+| `householder_apply/n256/b1 [sequence(basis=256,target=256)]` | 0.235632 ± 0.00165572 (W 0.0027333) | - | - | `*` one row has no measurement here |
+| `householder_apply/n512/b1 [block(basis=512,target=512)]` | 1.51635 ± 0.00481039 (W 0.0050847) | - | - | `*` one row has no measurement here |
+| `householder_apply/n512/b1 [sequence(basis=512,target=512)]` | 1.51631 ± 0.00334208 (W 0.00474638) | - | - | `*` one row has no measurement here |
+| `lu/n128/b1` | 0.104911 ± 0.000684825 (W 0.000802401) | - | - | `*` one row has no measurement here |
+| `lu/n128/b1 [api-inclusive]` | 0.0915735 ± 0.000610192 (W 0.000406207) | - | - | `*` one row has no measurement here |
+| `lu/n256/b1` | 0.267564 ± 0.0122658 (W 0.00192249) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `lu/n256/b1 [api-inclusive]` | 0.509416 ± 0.00193604 (W 0.00294177) | - | - | `*` one row has no measurement here |
+| `lu/n512/b1` | 1.07107 ± 0.00283338 (W 0.00166953) | - | - | `*` one row has no measurement here |
+| `lu/n512/b1 [api-inclusive]` | 2.26929 ± 0.0113051 (W 0.00564035) | - | - | `*` one row has no measurement here |
+| `qr/n128/b1` | 0.268087 ± 0.000738129 (W 0.00169137) | - | - | `*` one row has no measurement here |
+| `qr/n128/b1 [api-inclusive]` | 0.328474 ± 0.00328092 (W 0.00310831) | - | - | `*` one row has no measurement here |
+| `qr/n256/b1` | 0.753229 ± 0.00429373 (W 0.00151451) | - | - | `*` one row has no measurement here |
+| `qr/n256/b1 [api-inclusive]` | 1.11164 ± 0.00291744 (W 0.00235146) | - | - | `*` one row has no measurement here |
+| `qr/n512/b1` | 3.01968 ± 0.0137312 (W 0.0073548) | - | - | `*` one row has no measurement here |
+| `qr/n512/b1 [api-inclusive]` | 4.39015 ± 0.010507 (W 0.00883533) | - | - | `*` one row has no measurement here |
+| `qr_factor/n128/b1` | 0.178231 ± 0.000956139 (W 0.0012036) | - | - | `*` one row has no measurement here |
+| `qr_factor/n256/b1` | 0.549802 ± 0.0016793 (W 0.00203555) | - | - | `*` one row has no measurement here |
+| `qr_factor/n512/b1` | 1.66737 ± 0.00409524 (W 0.00387415) | - | - | `*` one row has no measurement here |
+| `solve/n128/b1` | 0.076051 ± 0.000692713 (W 0.000589991) | - | - | `*` one row has no measurement here |
+| `solve/n128/b1 [api-inclusive]` | 0.0922105 ± 0.000470764 (W 0.000267521) | - | - | `*` one row has no measurement here |
+| `solve/n256/b1` | 0.257992 ± 0.000542388 (W 0.00191332) | - | - | `*` one row has no measurement here |
+| `solve/n256/b1 [api-inclusive]` | 0.348441 ± 0.0099951 (W 0.0021699) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `solve/n512/b1` | 1.01143 ± 0.00386455 (W 0.00216339) | - | - | `*` one row has no measurement here |
+| `solve/n512/b1 [api-inclusive]` | 1.41914 ± 0.00740899 (W 0.00564834) | - | - | `*` one row has no measurement here |
+| `svd_thin/n128/b1` | 1.21953 ± 0.00174791 (W 0.00363463) | - | - | `*` one row has no measurement here |
+| `svd_thin/n128/b1 [api-inclusive]` | 1.22682 ± 0.00390451 (W 0.00278414) | - | - | `*` one row has no measurement here |
+| `svd_thin/n256/b1` | 4.51905 ± 0.00920349 (W 0.00801449) | - | - | `*` one row has no measurement here |
+| `svd_thin/n256/b1 [api-inclusive]` | 4.55116 ± 0.0415092 (W 0.004145) | - | - | `*` one row has no measurement here |
+| `svd_thin/n512/b1` | 19.6394 ± 0.690594 (W 0.0155098) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_thin/n512/b1 [api-inclusive]` | 20.3367 ± 0.699683 (W 0.020956) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_values/n128/b1` | 0.647489 ± 0.00215798 (W 0.00333192) | - | - | `*` one row has no measurement here |
+| `svd_values/n128/b1 [api-inclusive]` | 0.649836 ± 0.00192846 (W 0.00260097) | - | - | `*` one row has no measurement here |
+| `svd_values/n256/b1` | 2.61217 ± 0.00669984 (W 0.00677654) | - | - | `*` one row has no measurement here |
+| `svd_values/n256/b1 [api-inclusive]` | 2.6179 ± 0.0145772 (W 0.00543647) | - | - | `*` one row has no measurement here |
+| `svd_values/n512/b1` | 12.0076 ± 0.0323422 (W 0.0128042) | - | - | `*` one row has no measurement here |
+| `svd_values/n512/b1 [api-inclusive]` | 12.054 ± 0.0347006 (W 0.013858) | - | - | `*` one row has no measurement here |
+| `triangular_solve/n128/b1` | 0.0046345 ± 2.77879e-05 (W 2.96475e-05) | 0.003975 ± 1.63299e-05 (W 1.64467e-05) | 🔴 colmat 1.17× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n256/b1` | 0.010765 ± 5.4626e-05 (W 4.89074e-05) | 0.009494 ± 1.77839e-05 (W 1.64033e-05) | 🔴 colmat 1.13× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n512/b1` | 0.0245295 ± 0.000129704 (W 6.24452e-05) | 0.028589 ± 0.000608013 (W 0.000184658) | 🔵 colmat 1.17× faster than `lapack-aocl` | `!` between-start range over 5% |
+
+## linalg-mid, c32, f order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `cholesky/n128/b1` | 0.118121 ± 0.000420577 (W 0.000675185) | - | - | `*` one row has no measurement here |
+| `cholesky/n128/b1 [api-inclusive]` | 0.121387 ± 7.78034e-05 (W 0.000656207) | - | - | `*` one row has no measurement here |
+| `cholesky/n256/b1` | 0.410601 ± 0.00130762 (W 0.00216914) | - | - | `*` one row has no measurement here |
+| `cholesky/n256/b1 [api-inclusive]` | 0.425198 ± 0.00135319 (W 0.00169444) | - | - | `*` one row has no measurement here |
+| `cholesky/n512/b1` | 1.93399 ± 0.00241055 (W 0.00197908) | - | - | `*` one row has no measurement here |
+| `cholesky/n512/b1 [api-inclusive]` | 1.98793 ± 0.00336875 (W 0.00168758) | - | - | `*` one row has no measurement here |
+| `eigh/n128/b1` | 1.18464 ± 0.00210035 (W 0.00136433) | - | - | `*` one row has no measurement here |
+| `eigh/n128/b1 [api-inclusive]` | 1.18527 ± 0.00361491 (W 0.00326679) | - | - | `*` one row has no measurement here |
+| `eigh/n256/b1` | 5.55549 ± 0.010863 (W 0.00718437) | - | - | `*` one row has no measurement here |
+| `eigh/n256/b1 [api-inclusive]` | 5.56468 ± 0.0104101 (W 0.00584417) | - | - | `*` one row has no measurement here |
+| `eigh/n512/b1` | 30.5763 ± 0.0349803 (W 0.0250092) | - | - | `*` one row has no measurement here |
+| `eigh/n512/b1 [api-inclusive]` | 30.6272 ± 0.0677391 (W 0.0175177) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1` | 0.240293 ± 0.00185962 (W 0.0010704) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1 [api-inclusive]` | 0.268957 ± 0.000798221 (W 0.00142647) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1` | 1.57165 ± 0.0466423 (W 0.00495864) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `full_piv_lu/n256/b1 [api-inclusive]` | 1.72525 ± 0.00429725 (W 0.00313669) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1` | 12.5534 ± 0.11181 (W 0.0169475) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1 [api-inclusive]` | 12.995 ± 0.054324 (W 0.0318092) | - | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [block(basis=128,target=128)]` | 0.237417 ± 0.000572437 (W 0.00179424) | - | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [sequence(basis=128,target=128)]` | 0.237911 ± 0.00141513 (W 0.0011974) | - | - | `*` one row has no measurement here |
+| `householder_apply/n256/b1 [block(basis=256,target=256)]` | 1.53929 ± 0.00948464 (W 0.00261808) | - | - | `*` one row has no measurement here |
+| `householder_apply/n256/b1 [sequence(basis=256,target=256)]` | 1.54032 ± 0.0138892 (W 0.00225755) | - | - | `*` one row has no measurement here |
+| `householder_apply/n512/b1 [block(basis=512,target=512)]` | 10.7717 ± 0.017958 (W 0.00543104) | - | - | `*` one row has no measurement here |
+| `householder_apply/n512/b1 [sequence(basis=512,target=512)]` | 10.7756 ± 0.0178353 (W 0.00953304) | - | - | `*` one row has no measurement here |
+| `lu/n128/b1` | 0.0920715 ± 0.000327349 (W 0.000282453) | - | - | `*` one row has no measurement here |
+| `lu/n128/b1 [api-inclusive]` | 0.097366 ± 0.000274247 (W 0.000334407) | - | - | `*` one row has no measurement here |
+| `lu/n256/b1` | 0.488383 ± 0.00137492 (W 0.0019076) | - | - | `*` one row has no measurement here |
+| `lu/n256/b1 [api-inclusive]` | 0.676508 ± 0.00350939 (W 0.00216525) | - | - | `*` one row has no measurement here |
+| `lu/n512/b1` | 2.97609 ± 0.00789682 (W 0.00291659) | - | - | `*` one row has no measurement here |
+| `lu/n512/b1 [api-inclusive]` | 3.85244 ± 0.013647 (W 0.00443719) | - | - | `*` one row has no measurement here |
+| `qr/n128/b1` | 0.443163 ± 0.00612535 (W 0.00161668) | - | - | `*` one row has no measurement here |
+| `qr/n128/b1 [api-inclusive]` | 0.503417 ± 0.00182642 (W 0.00262852) | - | - | `*` one row has no measurement here |
+| `qr/n256/b1` | 2.25639 ± 0.00250223 (W 0.00171163) | - | - | `*` one row has no measurement here |
+| `qr/n256/b1 [api-inclusive]` | 2.55408 ± 0.00792023 (W 0.00334928) | - | - | `*` one row has no measurement here |
+| `qr/n512/b1` | 14.0091 ± 0.0294311 (W 0.0143409) | - | - | `*` one row has no measurement here |
+| `qr/n512/b1 [api-inclusive]` | 15.0405 ± 0.0208881 (W 0.0146007) | - | - | `*` one row has no measurement here |
+| `qr_factor/n128/b1` | 0.206006 ± 0.000676281 (W 0.00103056) | - | - | `*` one row has no measurement here |
+| `qr_factor/n256/b1` | 1.1017 ± 0.00234044 (W 0.00185539) | - | - | `*` one row has no measurement here |
+| `qr_factor/n512/b1` | 6.11952 ± 0.015248 (W 0.00392365) | - | - | `*` one row has no measurement here |
+| `solve/n128/b1` | 0.089316 ± 0.000361025 (W 0.000834452) | - | - | `*` one row has no measurement here |
+| `solve/n128/b1 [api-inclusive]` | 0.122232 ± 0.001072 (W 0.00126203) | - | - | `*` one row has no measurement here |
+| `solve/n256/b1` | 0.470847 ± 0.00124202 (W 0.00258255) | - | - | `*` one row has no measurement here |
+| `solve/n256/b1 [api-inclusive]` | 0.503737 ± 0.00233906 (W 0.0023044) | - | - | `*` one row has no measurement here |
+| `solve/n512/b1` | 2.90922 ± 0.00595294 (W 0.00301122) | - | - | `*` one row has no measurement here |
+| `solve/n512/b1 [api-inclusive]` | 3.00851 ± 0.00768095 (W 0.00171449) | - | - | `*` one row has no measurement here |
+| `svd_thin/n128/b1` | 1.85409 ± 0.0107714 (W 0.00263449) | - | - | `*` one row has no measurement here |
+| `svd_thin/n128/b1 [api-inclusive]` | 1.85617 ± 0.00306827 (W 0.00196383) | - | - | `*` one row has no measurement here |
+| `svd_thin/n256/b1` | 8.73368 ± 0.0107685 (W 0.00941097) | - | - | `*` one row has no measurement here |
+| `svd_thin/n256/b1 [api-inclusive]` | 8.73299 ± 0.0196547 (W 0.00998974) | - | - | `*` one row has no measurement here |
+| `svd_thin/n512/b1` | 51.4694 ± 0.114968 (W 0.0824475) | - | - | `*` one row has no measurement here |
+| `svd_thin/n512/b1 [api-inclusive]` | 51.5401 ± 0.13569 (W 0.0354693) | - | - | `*` one row has no measurement here |
+| `svd_values/n128/b1` | 0.65871 ± 0.00362905 (W 0.0014414) | - | - | `*` one row has no measurement here |
+| `svd_values/n128/b1 [api-inclusive]` | 0.658483 ± 0.00102695 (W 0.0014558) | - | - | `*` one row has no measurement here |
+| `svd_values/n256/b1` | 3.61089 ± 0.021724 (W 0.00329966) | - | - | `*` one row has no measurement here |
+| `svd_values/n256/b1 [api-inclusive]` | 3.61361 ± 0.0309322 (W 0.00479787) | - | - | `*` one row has no measurement here |
+| `svd_values/n512/b1` | 24.8733 ± 0.0870574 (W 0.0140086) | - | - | `*` one row has no measurement here |
+| `svd_values/n512/b1 [api-inclusive]` | 24.8798 ± 0.101344 (W 0.0306832) | - | - | `*` one row has no measurement here |
+| `triangular_solve/n128/b1` | 0.0039145 ± 1.62942e-05 (W 3.06604e-05) | 0.00345 ± 4.08248e-06 (W 2.59806e-05) | 🔴 colmat 1.13× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n256/b1` | 0.010935 ± 0.000133552 (W 5.17498e-05) | 0.0095695 ± 2.6311e-05 (W 3.22102e-05) | 🔴 colmat 1.14× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n512/b1` | 0.035369 ± 0.000182203 (W 0.000162438) | 0.0313795 ± 0.000146935 (W 0.000153655) | 🔴 colmat 1.13× slower than `lapack-aocl` |  |
+
+## linalg-mid, c32, f order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `cholesky/n128/b1` | 0.108729 ± 0.000211897 (W 0.000244315) | - | - | `*` one row has no measurement here |
+| `cholesky/n128/b1 [api-inclusive]` | 0.114976 ± 0.000211739 (W 0.000237614) | - | - | `*` one row has no measurement here |
+| `cholesky/n256/b1` | 0.285644 ± 0.000964097 (W 0.00122735) | - | - | `*` one row has no measurement here |
+| `cholesky/n256/b1 [api-inclusive]` | 0.314377 ± 0.000576839 (W 0.00130393) | - | - | `*` one row has no measurement here |
+| `cholesky/n512/b1` | 0.868545 ± 0.00110981 (W 0.00159843) | - | - | `*` one row has no measurement here |
+| `cholesky/n512/b1 [api-inclusive]` | 0.984916 ± 0.00176235 (W 0.00253569) | - | - | `*` one row has no measurement here |
+| `eigh/n128/b1` | 0.566954 ± 0.00207422 (W 0.00209128) | - | - | `*` one row has no measurement here |
+| `eigh/n128/b1 [api-inclusive]` | 0.571238 ± 0.00268495 (W 0.00146585) | - | - | `*` one row has no measurement here |
+| `eigh/n256/b1` | 2.13929 ± 0.00295265 (W 0.0028741) | - | - | `*` one row has no measurement here |
+| `eigh/n256/b1 [api-inclusive]` | 2.15247 ± 0.00281895 (W 0.00287729) | - | - | `*` one row has no measurement here |
+| `eigh/n512/b1` | 9.94778 ± 0.00730983 (W 0.0182039) | - | - | `*` one row has no measurement here |
+| `eigh/n512/b1 [api-inclusive]` | 9.99668 ± 0.0159268 (W 0.0182202) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1` | 0.178626 ± 0.000863518 (W 0.00119299) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1 [api-inclusive]` | 0.184441 ± 0.00203631 (W 0.00116849) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1` | 0.727374 ± 0.00327722 (W 0.0023141) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1 [api-inclusive]` | 0.900048 ± 0.00323491 (W 0.00345642) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1` | 3.71088 ± 0.00609637 (W 0.00819487) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1 [api-inclusive]` | 4.50999 ± 0.00665552 (W 0.010523) | - | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [block(basis=128,target=128)]` | 0.0751285 ± 0.000430043 (W 0.00085215) | - | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [sequence(basis=128,target=128)]` | 0.075218 ± 0.000144896 (W 0.000749841) | - | - | `*` one row has no measurement here |
+| `householder_apply/n256/b1 [block(basis=256,target=256)]` | 0.417841 ± 0.00176165 (W 0.00240767) | - | - | `*` one row has no measurement here |
+| `householder_apply/n256/b1 [sequence(basis=256,target=256)]` | 0.416527 ± 0.00255185 (W 0.00177301) | - | - | `*` one row has no measurement here |
+| `householder_apply/n512/b1 [block(basis=512,target=512)]` | 2.81972 ± 0.00679371 (W 0.00566363) | - | - | `*` one row has no measurement here |
+| `householder_apply/n512/b1 [sequence(basis=512,target=512)]` | 2.82716 ± 0.0157259 (W 0.0084541) | - | - | `*` one row has no measurement here |
+| `lu/n128/b1` | 0.069607 ± 0.000379064 (W 0.000527536) | - | - | `*` one row has no measurement here |
+| `lu/n128/b1 [api-inclusive]` | 0.104448 ± 0.0141318 (W 0.000466633) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `lu/n256/b1` | 0.273259 ± 0.0014494 (W 0.00192853) | - | - | `*` one row has no measurement here |
+| `lu/n256/b1 [api-inclusive]` | 0.463978 ± 0.00363634 (W 0.0022326) | - | - | `*` one row has no measurement here |
+| `lu/n512/b1` | 1.29036 ± 0.00249926 (W 0.00314121) | - | - | `*` one row has no measurement here |
+| `lu/n512/b1 [api-inclusive]` | 2.17716 ± 0.00677567 (W 0.00554609) | - | - | `*` one row has no measurement here |
+| `qr/n128/b1` | 0.278622 ± 0.00110008 (W 0.00145896) | - | - | `*` one row has no measurement here |
+| `qr/n128/b1 [api-inclusive]` | 0.340691 ± 0.00262034 (W 0.00175906) | - | - | `*` one row has no measurement here |
+| `qr/n256/b1` | 0.868629 ± 0.00111566 (W 0.00163464) | - | - | `*` one row has no measurement here |
+| `qr/n256/b1 [api-inclusive]` | 1.19104 ± 0.00416672 (W 0.00511731) | - | - | `*` one row has no measurement here |
+| `qr/n512/b1` | 4.44952 ± 0.0119892 (W 0.0129847) | - | - | `*` one row has no measurement here |
+| `qr/n512/b1 [api-inclusive]` | 5.72379 ± 0.0212029 (W 0.0114013) | - | - | `*` one row has no measurement here |
+| `qr_factor/n128/b1` | 0.182528 ± 0.00068741 (W 0.00144432) | - | - | `*` one row has no measurement here |
+| `qr_factor/n256/b1` | 0.533505 ± 0.000446033 (W 0.00178132) | - | - | `*` one row has no measurement here |
+| `qr_factor/n512/b1` | 2.37898 ± 0.00369263 (W 0.00391319) | - | - | `*` one row has no measurement here |
+| `solve/n128/b1` | 0.0704755 ± 0.000392911 (W 0.000505522) | - | - | `*` one row has no measurement here |
+| `solve/n128/b1 [api-inclusive]` | 0.106236 ± 0.011291 (W 0.000480083) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `solve/n256/b1` | 0.264752 ± 0.00104737 (W 0.00123782) | - | - | `*` one row has no measurement here |
+| `solve/n256/b1 [api-inclusive]` | 0.297285 ± 0.00169146 (W 0.00156735) | - | - | `*` one row has no measurement here |
+| `solve/n512/b1` | 1.15963 ± 0.0056904 (W 0.0029607) | - | - | `*` one row has no measurement here |
+| `solve/n512/b1 [api-inclusive]` | 1.34575 ± 0.00699518 (W 0.00354756) | - | - | `*` one row has no measurement here |
+| `svd_thin/n128/b1` | 1.23742 ± 0.00703109 (W 0.00331643) | - | - | `*` one row has no measurement here |
+| `svd_thin/n128/b1 [api-inclusive]` | 1.24066 ± 0.00399127 (W 0.00301252) | - | - | `*` one row has no measurement here |
+| `svd_thin/n256/b1` | 4.7878 ± 0.0120259 (W 0.0070499) | - | - | `*` one row has no measurement here |
+| `svd_thin/n256/b1 [api-inclusive]` | 4.80154 ± 0.00524653 (W 0.0063467) | - | - | `*` one row has no measurement here |
+| `svd_thin/n512/b1` | 21.3899 ± 0.0286804 (W 0.0255364) | - | - | `*` one row has no measurement here |
+| `svd_thin/n512/b1 [api-inclusive]` | 21.5043 ± 0.0522182 (W 0.0243436) | - | - | `*` one row has no measurement here |
+| `svd_values/n128/b1` | 0.61029 ± 0.0026753 (W 0.00166154) | - | - | `*` one row has no measurement here |
+| `svd_values/n128/b1 [api-inclusive]` | 0.611118 ± 0.00266023 (W 0.00167689) | - | - | `*` one row has no measurement here |
+| `svd_values/n256/b1` | 2.52553 ± 0.0102591 (W 0.00419811) | - | - | `*` one row has no measurement here |
+| `svd_values/n256/b1 [api-inclusive]` | 2.51935 ± 0.0114517 (W 0.00474422) | - | - | `*` one row has no measurement here |
+| `svd_values/n512/b1` | 11.4543 ± 0.0387944 (W 0.0231744) | - | - | `*` one row has no measurement here |
+| `svd_values/n512/b1 [api-inclusive]` | 11.4909 ± 0.0514812 (W 0.0212602) | - | - | `*` one row has no measurement here |
+| `triangular_solve/n128/b1` | 0.0048 ± 2.63944e-05 (W 4.04352e-05) | 0.0034695 ± 8.73308e-06 (W 1.99988e-05) | 🔴 colmat 1.38× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n256/b1` | 0.0111145 ± 6.75201e-05 (W 0.0001329) | 0.009545 ± 2.38383e-05 (W 2.6925e-05) | 🔴 colmat 1.16× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n512/b1` | 0.028809 ± 0.000100111 (W 0.000294516) | 0.0313635 ± 0.000140853 (W 0.00016784) | 🔵 colmat 1.09× faster than `lapack-aocl` |  |
+
+## linalg-mid, c32, f order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `cholesky/n128/b1` | 0.111922 ± 0.000435078 (W 0.000543375) | - | - | `*` one row has no measurement here |
+| `cholesky/n128/b1 [api-inclusive]` | 0.115351 ± 0.000415277 (W 0.000509679) | - | - | `*` one row has no measurement here |
+| `cholesky/n256/b1` | 0.28432 ± 0.000454639 (W 0.00190222) | - | - | `*` one row has no measurement here |
+| `cholesky/n256/b1 [api-inclusive]` | 0.303846 ± 0.000825458 (W 0.00162315) | - | - | `*` one row has no measurement here |
+| `cholesky/n512/b1` | 0.769385 ± 0.00145769 (W 0.0025555) | - | - | `*` one row has no measurement here |
+| `cholesky/n512/b1 [api-inclusive]` | 0.865761 ± 0.00326248 (W 0.003789) | - | - | `*` one row has no measurement here |
+| `eigh/n128/b1` | 0.480756 ± 0.000774357 (W 0.00256979) | - | - | `*` one row has no measurement here |
+| `eigh/n128/b1 [api-inclusive]` | 0.481688 ± 0.00148961 (W 0.00173879) | - | - | `*` one row has no measurement here |
+| `eigh/n256/b1` | 1.70948 ± 0.00414849 (W 0.00295802) | - | - | `*` one row has no measurement here |
+| `eigh/n256/b1 [api-inclusive]` | 1.72406 ± 0.00401886 (W 0.00413739) | - | - | `*` one row has no measurement here |
+| `eigh/n512/b1` | 7.10348 ± 0.00895631 (W 0.0150258) | - | - | `*` one row has no measurement here |
+| `eigh/n512/b1 [api-inclusive]` | 7.14886 ± 0.010427 (W 0.0163436) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n128/b1` | 0.180084 ± 0.00363102 (W 0.00208817) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `full_piv_lu/n128/b1 [api-inclusive]` | 0.191593 ± 0.00142048 (W 0.00148878) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1` | 0.633042 ± 0.00589893 (W 0.00511299) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n256/b1 [api-inclusive]` | 0.823873 ± 0.00457652 (W 0.00413758) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1` | 2.53814 ± 0.0121991 (W 0.00645902) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/n512/b1 [api-inclusive]` | 3.40242 ± 0.0131892 (W 0.00546244) | - | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [block(basis=128,target=128)]` | 0.056448 ± 0.000305628 (W 0.000469054) | - | - | `*` one row has no measurement here |
+| `householder_apply/n128/b1 [sequence(basis=128,target=128)]` | 0.056853 ± 0.000351183 (W 0.000469631) | - | - | `*` one row has no measurement here |
+| `householder_apply/n256/b1 [block(basis=256,target=256)]` | 0.235807 ± 0.0018327 (W 0.00252968) | - | - | `*` one row has no measurement here |
+| `householder_apply/n256/b1 [sequence(basis=256,target=256)]` | 0.237843 ± 0.000991808 (W 0.0017602) | - | - | `*` one row has no measurement here |
+| `householder_apply/n512/b1 [block(basis=512,target=512)]` | 1.51419 ± 0.00458611 (W 0.00683778) | - | - | `*` one row has no measurement here |
+| `householder_apply/n512/b1 [sequence(basis=512,target=512)]` | 1.5124 ± 0.0118694 (W 0.00573256) | - | - | `*` one row has no measurement here |
+| `lu/n128/b1` | 0.0664305 ± 0.000314663 (W 0.000352193) | - | - | `*` one row has no measurement here |
+| `lu/n128/b1 [api-inclusive]` | 0.0743235 ± 0.000621302 (W 0.000650791) | - | - | `*` one row has no measurement here |
+| `lu/n256/b1` | 0.242574 ± 0.00164061 (W 0.00181111) | - | - | `*` one row has no measurement here |
+| `lu/n256/b1 [api-inclusive]` | 0.434453 ± 0.00361378 (W 0.00208303) | - | - | `*` one row has no measurement here |
+| `lu/n512/b1` | 0.991593 ± 0.00475461 (W 0.0024551) | - | - | `*` one row has no measurement here |
+| `lu/n512/b1 [api-inclusive]` | 1.88232 ± 0.00868145 (W 0.00292578) | - | - | `*` one row has no measurement here |
+| `qr/n128/b1` | 0.238511 ± 0.000778634 (W 0.00195686) | - | - | `*` one row has no measurement here |
+| `qr/n128/b1 [api-inclusive]` | 0.307571 ± 0.00197698 (W 0.00251352) | - | - | `*` one row has no measurement here |
+| `qr/n256/b1` | 0.712363 ± 0.00107979 (W 0.00332063) | - | - | `*` one row has no measurement here |
+| `qr/n256/b1 [api-inclusive]` | 1.0375 ± 0.00460972 (W 0.00456379) | - | - | `*` one row has no measurement here |
+| `qr/n512/b1` | 2.69615 ± 0.00526707 (W 0.00473996) | - | - | `*` one row has no measurement here |
+| `qr/n512/b1 [api-inclusive]` | 3.99566 ± 0.0207918 (W 0.00552043) | - | - | `*` one row has no measurement here |
+| `qr_factor/n128/b1` | 0.168322 ± 0.000898773 (W 0.00157971) | - | - | `*` one row has no measurement here |
+| `qr_factor/n256/b1` | 0.512174 ± 0.00142873 (W 0.00200214) | - | - | `*` one row has no measurement here |
+| `qr_factor/n512/b1` | 1.5468 ± 0.00448427 (W 0.00282092) | - | - | `*` one row has no measurement here |
+| `solve/n128/b1` | 0.0653135 ± 0.000320351 (W 0.000333454) | - | - | `*` one row has no measurement here |
+| `solve/n128/b1 [api-inclusive]` | 0.0750755 ± 0.000636264 (W 0.00120176) | - | - | `*` one row has no measurement here |
+| `solve/n256/b1` | 0.222262 ± 0.00115809 (W 0.00187561) | - | - | `*` one row has no measurement here |
+| `solve/n256/b1 [api-inclusive]` | 0.27271 ± 0.00083625 (W 0.00192515) | - | - | `*` one row has no measurement here |
+| `solve/n512/b1` | 0.918262 ± 0.00307579 (W 0.00199857) | - | - | `*` one row has no measurement here |
+| `solve/n512/b1 [api-inclusive]` | 1.08316 ± 0.00246918 (W 0.00283227) | - | - | `*` one row has no measurement here |
+| `svd_thin/n128/b1` | 1.20725 ± 0.00418484 (W 0.00323236) | - | - | `*` one row has no measurement here |
+| `svd_thin/n128/b1 [api-inclusive]` | 1.21245 ± 0.00163642 (W 0.00311139) | - | - | `*` one row has no measurement here |
+| `svd_thin/n256/b1` | 4.44655 ± 0.0135378 (W 0.00567973) | - | - | `*` one row has no measurement here |
+| `svd_thin/n256/b1 [api-inclusive]` | 4.45299 ± 0.0121042 (W 0.0065704) | - | - | `*` one row has no measurement here |
+| `svd_thin/n512/b1` | 17.6822 ± 0.0353364 (W 0.0276368) | - | - | `*` one row has no measurement here |
+| `svd_thin/n512/b1 [api-inclusive]` | 17.7544 ± 0.0275502 (W 0.033598) | - | - | `*` one row has no measurement here |
+| `svd_values/n128/b1` | 0.635257 ± 0.00176089 (W 0.00219643) | - | - | `*` one row has no measurement here |
+| `svd_values/n128/b1 [api-inclusive]` | 0.635393 ± 0.00197626 (W 0.00289493) | - | - | `*` one row has no measurement here |
+| `svd_values/n256/b1` | 2.5243 ± 0.00911733 (W 0.00547568) | - | - | `*` one row has no measurement here |
+| `svd_values/n256/b1 [api-inclusive]` | 2.53191 ± 0.00876396 (W 0.00593152) | - | - | `*` one row has no measurement here |
+| `svd_values/n512/b1` | 10.0837 ± 0.0168955 (W 0.011486) | - | - | `*` one row has no measurement here |
+| `svd_values/n512/b1 [api-inclusive]` | 10.1269 ± 0.0197013 (W 0.0138703) | - | - | `*` one row has no measurement here |
+| `triangular_solve/n128/b1` | 0.004545 ± 1.66183e-05 (W 4.16901e-05) | 0.0034645 ± 1.9395e-05 (W 2.33724e-05) | 🔴 colmat 1.31× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n256/b1` | 0.0120695 ± 5.08789e-05 (W 6.45155e-05) | 0.009585 ± 2.28619e-05 (W 2.66667e-05) | 🔴 colmat 1.26× slower than `lapack-aocl` | dispatch-dominated (row under 20 us) |
+| `triangular_solve/n512/b1` | 0.028318 ± 0.000460246 (W 0.000212657) | 0.0315835 ± 0.000281367 (W 0.000140881) | 🔵 colmat 1.12× faster than `lapack-aocl` |  |
+
+Not applicable to this population's shapes and reported as skipped: `cholesky/128`, `cholesky/256`, `cholesky/512`, `eig/128`, `eig/256`, `eig/512`, `eigh/128`, `eigh/256`, `eigh/512`, `full_piv_lu/128`, `full_piv_lu/256`, `full_piv_lu/512`, `householder_apply/128`, `householder_apply/256`, `householder_apply/512`, `lu/128`, `lu/256`, `lu/512`, `qr/128`, `qr/256`, `qr/512`, `qr_factor/128`, `qr_factor/256`, `qr_factor/512`, `solve/128`, `solve/256`, `solve/512`, `svd_thin/128`, `svd_thin/256`, `svd_thin/512`, `svd_values/128`, `svd_values/256`, `svd_values/512`, `upgrade_factor/128`, `upgrade_factor/256`, `upgrade_factor/512`.
+
+## linalg-tall, f64, c order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `full_piv_lu/1024x64/b1` | 0.574971 ± 0.00199728 (W 0.00206179) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/1024x64/b1 [api-inclusive]` | 0.502914 ± 0.00185058 (W 0.0024006) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1` | 29.3743 ± 0.0531133 (W 0.0591991) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1 [api-inclusive]` | 27.8568 ± 0.128538 (W 0.0330212) | - | - | `*` one row has no measurement here |
+| `householder_apply/1024x64/b1 [block(basis=64,target=64)]` | 0.223745 ± 0.00217035 (W 0.00238232) | - | - | `*` one row has no measurement here |
+| `householder_apply/1024x64/b1 [sequence(basis=64,target=64)]` | 0.225399 ± 0.00126883 (W 0.00255291) | - | - | `*` one row has no measurement here |
+| `householder_apply/4096x256/b1 [block(basis=256,target=256)]` | 13.3567 ± 0.0350918 (W 0.0213571) | - | - | `*` one row has no measurement here |
+| `householder_apply/4096x256/b1 [sequence(basis=256,target=256)]` | 13.3594 ± 0.0356727 (W 0.0214213) | - | - | `*` one row has no measurement here |
+| `lu/1024x64/b1` | 0.184303 ± 0.00220048 (W 0.00157245) | - | - | `*` one row has no measurement here |
+| `lu/1024x64/b1 [api-inclusive]` | 0.19845 ± 0.00120997 (W 0.002566) | - | - | `*` one row has no measurement here |
+| `lu/4096x256/b1` | 5.63772 ± 0.0191706 (W 0.0146064) | - | - | `*` one row has no measurement here |
+| `lu/4096x256/b1 [api-inclusive]` | 5.70701 ± 0.0286697 (W 0.0113958) | - | - | `*` one row has no measurement here |
+| `qr/1024x64/b1` | 0.728789 ± 0.00541901 (W 0.00386816) | - | - | `*` one row has no measurement here |
+| `qr/1024x64/b1 [api-inclusive]` | 0.898142 ± 0.00723133 (W 0.00298511) | - | - | `*` one row has no measurement here |
+| `qr/4096x256/b1` | 26.3873 ± 0.0365635 (W 0.0596261) | - | - | `*` one row has no measurement here |
+| `qr/4096x256/b1 [api-inclusive]` | 28.693 ± 0.130655 (W 0.0525704) | - | - | `*` one row has no measurement here |
+| `qr_factor/1024x64/b1` | 0.532282 ± 0.00158052 (W 0.00225189) | - | - | `*` one row has no measurement here |
+| `qr_factor/4096x256/b1` | 13.381 ± 0.0495544 (W 0.0365722) | - | - | `*` one row has no measurement here |
+| `svd_thin/1024x64/b1` | 1.09037 ± 0.00310978 (W 0.00378497) | - | - | `*` one row has no measurement here |
+| `svd_thin/1024x64/b1 [api-inclusive]` | 1.09223 ± 0.00839589 (W 0.00532282) | - | - | `*` one row has no measurement here |
+| `svd_thin/4096x256/b1` | 35.9778 ± 0.0577226 (W 0.0356828) | - | - | `*` one row has no measurement here |
+| `svd_thin/4096x256/b1 [api-inclusive]` | 36.0626 ± 0.0777164 (W 0.026748) | - | - | `*` one row has no measurement here |
+| `svd_values/1024x64/b1` | 0.599845 ± 0.00151013 (W 0.0042024) | - | - | `*` one row has no measurement here |
+| `svd_values/1024x64/b1 [api-inclusive]` | 0.600762 ± 0.00292425 (W 0.00619382) | - | - | `*` one row has no measurement here |
+| `svd_values/4096x256/b1` | 18.7143 ± 0.0516565 (W 0.021354) | - | - | `*` one row has no measurement here |
+| `svd_values/4096x256/b1 [api-inclusive]` | 18.7366 ± 0.029427 (W 0.0288429) | - | - | `*` one row has no measurement here |
+
+## linalg-tall, f64, c order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `full_piv_lu/1024x64/b1` | 0.320933 ± 0.00105055 (W 0.00130767) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/1024x64/b1 [api-inclusive]` | 0.349912 ± 0.00202748 (W 0.00189559) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1` | 8.54386 ± 0.0326726 (W 0.0179022) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1 [api-inclusive]` | 9.29149 ± 0.0305677 (W 0.014109) | - | - | `*` one row has no measurement here |
+| `householder_apply/1024x64/b1 [block(basis=64,target=64)]` | 0.083987 ± 0.00162318 (W 0.00192496) | - | - | `*` one row has no measurement here |
+| `householder_apply/1024x64/b1 [sequence(basis=64,target=64)]` | 0.0832825 ± 0.000942374 (W 0.00181804) | - | - | `*` one row has no measurement here |
+| `householder_apply/4096x256/b1 [block(basis=256,target=256)]` | 3.73907 ± 0.0123033 (W 0.0151591) | - | - | `*` one row has no measurement here |
+| `householder_apply/4096x256/b1 [sequence(basis=256,target=256)]` | 3.72794 ± 0.00696057 (W 0.0118703) | - | - | `*` one row has no measurement here |
+| `lu/1024x64/b1` | 0.17036 ± 0.000996705 (W 0.000940836) | - | - | `*` one row has no measurement here |
+| `lu/1024x64/b1 [api-inclusive]` | 0.198924 ± 0.0020909 (W 0.00123605) | - | - | `*` one row has no measurement here |
+| `lu/4096x256/b1` | 2.6869 ± 0.0353201 (W 0.00997859) | - | - | `*` one row has no measurement here |
+| `lu/4096x256/b1 [api-inclusive]` | 3.34095 ± 0.125323 (W 0.0143428) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr/1024x64/b1` | 0.460824 ± 0.0101027 (W 0.00366155) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr/1024x64/b1 [api-inclusive]` | 0.662993 ± 0.00214288 (W 0.00248384) | - | - | `*` one row has no measurement here |
+| `qr/4096x256/b1` | 10.3626 ± 0.198675 (W 0.0486351) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr/4096x256/b1 [api-inclusive]` | 14.7297 ± 0.136828 (W 0.0527948) | - | - | `*` one row has no measurement here |
+| `qr_factor/1024x64/b1` | 0.358045 ± 0.00922554 (W 0.00212912) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr_factor/4096x256/b1` | 6.21102 ± 0.0112644 (W 0.0134854) | - | - | `*` one row has no measurement here |
+| `svd_thin/1024x64/b1` | 0.822245 ± 0.00788508 (W 0.00421437) | - | - | `*` one row has no measurement here |
+| `svd_thin/1024x64/b1 [api-inclusive]` | 0.826326 ± 0.00423454 (W 0.00439748) | - | - | `*` one row has no measurement here |
+| `svd_thin/4096x256/b1` | 19.0037 ± 0.0532676 (W 0.0279314) | - | - | `*` one row has no measurement here |
+| `svd_thin/4096x256/b1 [api-inclusive]` | 19.0222 ± 0.0606558 (W 0.0423282) | - | - | `*` one row has no measurement here |
+| `svd_values/1024x64/b1` | 0.553839 ± 0.0076238 (W 0.00263156) | - | - | `*` one row has no measurement here |
+| `svd_values/1024x64/b1 [api-inclusive]` | 0.550531 ± 0.00837724 (W 0.00511137) | - | - | `*` one row has no measurement here |
+| `svd_values/4096x256/b1` | 13.1783 ± 0.0128925 (W 0.0170734) | - | - | `*` one row has no measurement here |
+| `svd_values/4096x256/b1 [api-inclusive]` | 13.1884 ± 0.0252744 (W 0.0201433) | - | - | `*` one row has no measurement here |
+
+## linalg-tall, f64, c order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `full_piv_lu/1024x64/b1` | 0.289898 ± 0.00102271 (W 0.0020465) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/1024x64/b1 [api-inclusive]` | 0.336574 ± 0.00200447 (W 0.00265186) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1` | 5.14635 ± 0.00916449 (W 0.0113541) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1 [api-inclusive]` | 6.23528 ± 0.0829307 (W 0.0138152) | - | - | `*` one row has no measurement here |
+| `householder_apply/1024x64/b1 [block(basis=64,target=64)]` | 0.0649425 ± 0.00180227 (W 0.0016317) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `householder_apply/1024x64/b1 [sequence(basis=64,target=64)]` | 0.066267 ± 0.00202392 (W 0.0017607) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `householder_apply/4096x256/b1 [block(basis=256,target=256)]` | 2.1652 ± 0.0252323 (W 0.02331) | - | - | `*` one row has no measurement here |
+| `householder_apply/4096x256/b1 [sequence(basis=256,target=256)]` | 2.17568 ± 0.0276831 (W 0.0183166) | - | - | `*` one row has no measurement here |
+| `lu/1024x64/b1` | 0.153771 ± 0.000860265 (W 0.00134162) | - | - | `*` one row has no measurement here |
+| `lu/1024x64/b1 [api-inclusive]` | 0.19632 ± 0.00149418 (W 0.00174187) | - | - | `*` one row has no measurement here |
+| `lu/4096x256/b1` | 2.05871 ± 0.0114214 (W 0.00647022) | - | - | `*` one row has no measurement here |
+| `lu/4096x256/b1 [api-inclusive]` | 3.05318 ± 0.0282317 (W 0.00882226) | - | - | `*` one row has no measurement here |
+| `qr/1024x64/b1` | 0.423679 ± 0.00225558 (W 0.00304594) | - | - | `*` one row has no measurement here |
+| `qr/1024x64/b1 [api-inclusive]` | 0.625868 ± 0.00407371 (W 0.00299799) | - | - | `*` one row has no measurement here |
+| `qr/4096x256/b1` | 7.20822 ± 0.0201471 (W 0.0191597) | - | - | `*` one row has no measurement here |
+| `qr/4096x256/b1 [api-inclusive]` | 12.7458 ± 0.103389 (W 0.0398697) | - | - | `*` one row has no measurement here |
+| `qr_factor/1024x64/b1` | 0.340896 ± 0.00116735 (W 0.00256054) | - | - | `*` one row has no measurement here |
+| `qr_factor/4096x256/b1` | 4.90717 ± 0.00780564 (W 0.00970313) | - | - | `*` one row has no measurement here |
+| `svd_thin/1024x64/b1` | 0.791633 ± 0.00540826 (W 0.00481663) | - | - | `*` one row has no measurement here |
+| `svd_thin/1024x64/b1 [api-inclusive]` | 0.79722 ± 0.0060795 (W 0.0046771) | - | - | `*` one row has no measurement here |
+| `svd_thin/4096x256/b1` | 16.3982 ± 0.0444803 (W 0.0533547) | - | - | `*` one row has no measurement here |
+| `svd_thin/4096x256/b1 [api-inclusive]` | 16.4968 ± 0.0314132 (W 0.043136) | - | - | `*` one row has no measurement here |
+| `svd_values/1024x64/b1` | 0.542545 ± 0.00805565 (W 0.0036253) | - | - | `*` one row has no measurement here |
+| `svd_values/1024x64/b1 [api-inclusive]` | 0.543894 ± 0.0101359 (W 0.00285097) | - | - | `*` one row has no measurement here |
+| `svd_values/4096x256/b1` | 12.1327 ± 0.0728861 (W 0.0197636) | - | - | `*` one row has no measurement here |
+| `svd_values/4096x256/b1 [api-inclusive]` | 12.1739 ± 0.0791391 (W 0.0330456) | - | - | `*` one row has no measurement here |
+
+## linalg-tall, f64, f order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `full_piv_lu/1024x64/b1` | 0.46771 ± 0.0020461 (W 0.00159745) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/1024x64/b1 [api-inclusive]` | 0.431145 ± 0.00163024 (W 0.00152856) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1` | 29.4857 ± 0.0440496 (W 0.0183662) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1 [api-inclusive]` | 26.5145 ± 0.044776 (W 0.0180693) | - | - | `*` one row has no measurement here |
+| `householder_apply/1024x64/b1 [block(basis=64,target=64)]` | 0.238841 ± 0.0016074 (W 0.00164747) | 0.32443 ± 0.00636763 (W 0.00245386) | 🔵 colmat 1.36× faster than `lapack-aocl` |  |
+| `householder_apply/1024x64/b1 [sequence(basis=64,target=64)]` | 0.237874 ± 0.00129568 (W 0.00154575) | 0.439514 ± 0.0017096 (W 0.00353922) | 🔵 colmat 1.85× faster than `lapack-aocl` |  |
+| `householder_apply/4096x256/b1 [block(basis=256,target=256)]` | 12.7087 ± 0.0445393 (W 0.0164222) | 18.2738 ± 0.602886 (W 0.0761145) | 🔵 colmat 1.44× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `householder_apply/4096x256/b1 [sequence(basis=256,target=256)]` | 12.7463 ± 0.0115531 (W 0.0316174) | 19.4516 ± 0.253474 (W 0.0343205) | 🔵 colmat 1.53× faster than `lapack-aocl` |  |
+| `lu/1024x64/b1` | 0.122178 ± 0.000536095 (W 0.000514633) | 0.143524 ± 0.000842939 (W 0.00154592) | 🔵 colmat 1.17× faster than `lapack-aocl` |  |
+| `lu/1024x64/b1 [api-inclusive]` | 0.12909 ± 0.000899583 (W 0.00209414) | - | - | `*` one row has no measurement here |
+| `lu/4096x256/b1` | 4.44684 ± 0.0167707 (W 0.00883378) | 5.4605 ± 0.0219134 (W 0.00638362) | 🔵 colmat 1.23× faster than `lapack-aocl` |  |
+| `lu/4096x256/b1 [api-inclusive]` | 4.48205 ± 0.0118719 (W 0.00529083) | - | - | `*` one row has no measurement here |
+| `qr/1024x64/b1` | 0.598725 ± 0.00523316 (W 0.00193578) | 0.840149 ± 0.00765891 (W 0.0049823) | 🔵 colmat 1.40× faster than `lapack-aocl` |  |
+| `qr/1024x64/b1 [api-inclusive]` | 0.802026 ± 0.0051305 (W 0.00291419) | - | - | `*` one row has no measurement here |
+| `qr/4096x256/b1` | 23.3044 ± 0.0136786 (W 0.0218033) | 31.1145 ± 0.571582 (W 0.0364872) | 🔵 colmat 1.34× faster than `lapack-aocl` |  |
+| `qr/4096x256/b1 [api-inclusive]` | 26.647 ± 0.057057 (W 0.0189974) | - | - | `*` one row has no measurement here |
+| `qr_factor/1024x64/b1` | 0.362312 ± 0.0013375 (W 0.00164068) | 0.401155 ± 0.00370651 (W 0.00362298) | 🔵 colmat 1.11× faster than `lapack-aocl` |  |
+| `qr_factor/4096x256/b1` | 10.4783 ± 0.0202092 (W 0.00936438) | 11.7673 ± 0.216167 (W 0.0168528) | 🔵 colmat 1.12× faster than `lapack-aocl` |  |
+| `svd_thin/1024x64/b1` | 1.04432 ± 0.00362836 (W 0.00243269) | 1.42139 ± 0.00836383 (W 0.00617623) | 🔵 colmat 1.36× faster than `lapack-aocl` |  |
+| `svd_thin/1024x64/b1 [api-inclusive]` | 1.05456 ± 0.0211087 (W 0.00313006) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_thin/4096x256/b1` | 32.0361 ± 0.0358937 (W 0.0601021) | 50.6328 ± 1.10816 (W 0.53667) | 🔵 colmat 1.58× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `svd_thin/4096x256/b1 [api-inclusive]` | 32.1366 ± 0.082893 (W 0.0358324) | - | - | `*` one row has no measurement here |
+| `svd_values/1024x64/b1` | 0.550804 ± 0.00140819 (W 0.00269827) | 0.605804 ± 0.00458583 (W 0.00381547) | 🔵 colmat 1.10× faster than `lapack-aocl` |  |
+| `svd_values/1024x64/b1 [api-inclusive]` | 0.550339 ± 0.00255615 (W 0.00233105) | - | - | `*` one row has no measurement here |
+| `svd_values/4096x256/b1` | 14.7406 ± 0.0226989 (W 0.0137668) | 17.7641 ± 0.108623 (W 0.0179825) | 🔵 colmat 1.21× faster than `lapack-aocl` |  |
+| `svd_values/4096x256/b1 [api-inclusive]` | 14.7246 ± 0.0229087 (W 0.0168717) | - | - | `*` one row has no measurement here |
+
+## linalg-tall, f64, f order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `full_piv_lu/1024x64/b1` | 0.260246 ± 0.000908645 (W 0.00195993) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/1024x64/b1 [api-inclusive]` | 0.275559 ± 0.00107287 (W 0.00175533) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1` | 8.63043 ± 0.0127815 (W 0.0065008) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1 [api-inclusive]` | 8.16436 ± 0.0163432 (W 0.00953729) | - | - | `*` one row has no measurement here |
+| `householder_apply/1024x64/b1 [block(basis=64,target=64)]` | 0.104309 ± 0.00110032 (W 0.000782358) | 0.191964 ± 0.00171437 (W 0.00292986) | 🔵 colmat 1.84× faster than `lapack-aocl` |  |
+| `householder_apply/1024x64/b1 [sequence(basis=64,target=64)]` | 0.103925 ± 0.000439513 (W 0.000865792) | 0.339632 ± 0.0023849 (W 0.00303448) | 🔵 colmat 3.27× faster than `lapack-aocl` |  |
+| `householder_apply/4096x256/b1 [block(basis=256,target=256)]` | 4.48679 ± 0.0763407 (W 0.0795502) | 7.68334 ± 0.709675 (W 0.0181604) | 🔵 colmat 1.71× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `householder_apply/4096x256/b1 [sequence(basis=256,target=256)]` | 4.40095 ± 0.0696995 (W 0.0583204) | 7.961 ± 0.150939 (W 0.0249276) | 🔵 colmat 1.81× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `lu/1024x64/b1` | 0.108744 ± 0.000372205 (W 0.000484626) | 0.133681 ± 0.000985991 (W 0.00156095) | 🔵 colmat 1.23× faster than `lapack-aocl` |  |
+| `lu/1024x64/b1 [api-inclusive]` | 0.127963 ± 0.000315075 (W 0.000623129) | - | - | `*` one row has no measurement here |
+| `lu/4096x256/b1` | 1.98572 ± 0.0238552 (W 0.00499281) | 4.56571 ± 0.0171193 (W 0.00895155) | 🔵 colmat 2.30× faster than `lapack-aocl` |  |
+| `lu/4096x256/b1 [api-inclusive]` | 2.19203 ± 0.0363316 (W 0.00616371) | - | - | `*` one row has no measurement here |
+| `qr/1024x64/b1` | 0.396067 ± 0.00150762 (W 0.00244091) | 0.724998 ± 0.00266895 (W 0.00466297) | 🔵 colmat 1.83× faster than `lapack-aocl` |  |
+| `qr/1024x64/b1 [api-inclusive]` | 0.58055 ± 0.00436275 (W 0.00211611) | - | - | `*` one row has no measurement here |
+| `qr/4096x256/b1` | 9.23446 ± 0.0135242 (W 0.0135656) | 12.0694 ± 0.0395926 (W 0.0206208) | 🔵 colmat 1.31× faster than `lapack-aocl` |  |
+| `qr/4096x256/b1 [api-inclusive]` | 12.625 ± 0.0825339 (W 0.039905) | - | - | `*` one row has no measurement here |
+| `qr_factor/1024x64/b1` | 0.305361 ± 0.000893545 (W 0.00162587) | 0.401152 ± 0.00139173 (W 0.0043746) | 🔵 colmat 1.31× faster than `lapack-aocl` |  |
+| `qr_factor/4096x256/b1` | 5.52242 ± 0.0145986 (W 0.00626883) | 4.39472 ± 0.0145156 (W 0.00866404) | 🔴 colmat 1.26× slower than `lapack-aocl` |  |
+| `svd_thin/1024x64/b1` | 0.778471 ± 0.00288602 (W 0.00363831) | 1.28921 ± 0.00976991 (W 0.00684042) | 🔵 colmat 1.66× faster than `lapack-aocl` |  |
+| `svd_thin/1024x64/b1 [api-inclusive]` | 0.783986 ± 0.00347671 (W 0.00279581) | - | - | `*` one row has no measurement here |
+| `svd_thin/4096x256/b1` | 14.9568 ± 0.0656358 (W 0.0323604) | 24.9226 ± 0.635566 (W 0.0339101) | 🔵 colmat 1.67× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `svd_thin/4096x256/b1 [api-inclusive]` | 15.0388 ± 0.0589551 (W 0.0208697) | - | - | `*` one row has no measurement here |
+| `svd_values/1024x64/b1` | 0.501946 ± 0.00148526 (W 0.00150199) | 0.630334 ± 0.00270881 (W 0.00525469) | 🔵 colmat 1.26× faster than `lapack-aocl` |  |
+| `svd_values/1024x64/b1 [api-inclusive]` | 0.500193 ± 0.00032198 (W 0.00210286) | - | - | `*` one row has no measurement here |
+| `svd_values/4096x256/b1` | 9.11575 ± 0.0163601 (W 0.0104508) | 10.5509 ± 0.0291872 (W 0.0159562) | 🔵 colmat 1.16× faster than `lapack-aocl` |  |
+| `svd_values/4096x256/b1 [api-inclusive]` | 9.11017 ± 0.150277 (W 0.0143765) | - | - | `*` one row has no measurement here |
+
+## linalg-tall, f64, f order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `full_piv_lu/1024x64/b1` | 0.244779 ± 0.00164886 (W 0.00180608) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/1024x64/b1 [api-inclusive]` | 0.266789 ± 0.00160086 (W 0.00200453) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1` | 5.18361 ± 0.02339 (W 0.00864416) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1 [api-inclusive]` | 5.08776 ± 0.0148043 (W 0.00738564) | - | - | `*` one row has no measurement here |
+| `householder_apply/1024x64/b1 [block(basis=64,target=64)]` | 0.0738815 ± 0.00202341 (W 0.000734216) | 0.19038 ± 0.0025268 (W 0.00509656) | 🔵 colmat 2.58× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `householder_apply/1024x64/b1 [sequence(basis=64,target=64)]` | 0.075081 ± 0.00484163 (W 0.000879792) | 0.340623 ± 0.0150613 (W 0.00639441) | 🔵 colmat 4.54× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `householder_apply/4096x256/b1 [block(basis=256,target=256)]` | 4.22743 ± 0.166896 (W 0.27784) | 4.58551 ± 0.545242 (W 0.0260642) | · | `!` between-start range over 5% |
+| `householder_apply/4096x256/b1 [sequence(basis=256,target=256)]` | 3.8072 ± 0.134845 (W 0.0813011) | 6.62298 ± 0.494425 (W 0.0222941) | 🔵 colmat 1.74× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `lu/1024x64/b1` | 0.107652 ± 0.000462309 (W 0.000638643) | 0.166225 ± 0.00159621 (W 0.00335848) | 🔵 colmat 1.54× faster than `lapack-aocl` |  |
+| `lu/1024x64/b1 [api-inclusive]` | 0.127844 ± 0.000473464 (W 0.00113655) | - | - | `*` one row has no measurement here |
+| `lu/4096x256/b1` | 1.71284 ± 0.00575798 (W 0.00419694) | 4.54337 ± 0.286786 (W 0.00775714) | 🔵 colmat 2.65× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `lu/4096x256/b1 [api-inclusive]` | 1.98523 ± 0.00509184 (W 0.00488972) | - | - | `*` one row has no measurement here |
+| `qr/1024x64/b1` | 0.347503 ± 0.00211522 (W 0.00210989) | 0.744118 ± 0.0105497 (W 0.00708798) | 🔵 colmat 2.14× faster than `lapack-aocl` |  |
+| `qr/1024x64/b1 [api-inclusive]` | 0.540539 ± 0.00435443 (W 0.00392549) | - | - | `*` one row has no measurement here |
+| `qr/4096x256/b1` | 6.80284 ± 0.0269721 (W 0.0302099) | 10.1093 ± 0.233952 (W 0.0422082) | 🔵 colmat 1.49× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `qr/4096x256/b1 [api-inclusive]` | 10.7009 ± 0.0707971 (W 0.0274297) | - | - | `*` one row has no measurement here |
+| `qr_factor/1024x64/b1` | 0.287659 ± 0.00135079 (W 0.00143022) | 0.400884 ± 0.00234253 (W 0.00413435) | 🔵 colmat 1.39× faster than `lapack-aocl` |  |
+| `qr_factor/4096x256/b1` | 4.5072 ± 0.0666461 (W 0.00773305) | 3.50551 ± 0.0155365 (W 0.0115794) | 🔴 colmat 1.29× slower than `lapack-aocl` |  |
+| `svd_thin/1024x64/b1` | 0.737347 ± 0.00166831 (W 0.00163402) | 1.28799 ± 0.00551997 (W 0.0078438) | 🔵 colmat 1.75× faster than `lapack-aocl` |  |
+| `svd_thin/1024x64/b1 [api-inclusive]` | 0.749259 ± 0.00311233 (W 0.00293429) | - | - | `*` one row has no measurement here |
+| `svd_thin/4096x256/b1` | 12.4016 ± 0.0375589 (W 0.0356813) | 20.4585 ± 0.337123 (W 0.043884) | 🔵 colmat 1.65× faster than `lapack-aocl` |  |
+| `svd_thin/4096x256/b1 [api-inclusive]` | 12.4782 ± 0.0675116 (W 0.0281085) | - | - | `*` one row has no measurement here |
+| `svd_values/1024x64/b1` | 0.486121 ± 0.00137017 (W 0.00243841) | 0.607519 ± 0.00743117 (W 0.00423459) | 🔵 colmat 1.25× faster than `lapack-aocl` |  |
+| `svd_values/1024x64/b1 [api-inclusive]` | 0.487391 ± 0.000699003 (W 0.00256466) | - | - | `*` one row has no measurement here |
+| `svd_values/4096x256/b1` | 8.0529 ± 0.0209369 (W 0.0181433) | 9.55961 ± 0.176449 (W 0.019519) | 🔵 colmat 1.19× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `svd_values/4096x256/b1 [api-inclusive]` | 8.08888 ± 0.0994552 (W 0.0238127) | - | - | `*` one row has no measurement here |
+
+## linalg-tall, c64, c order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `full_piv_lu/1024x64/b1` | 1.22931 ± 0.00459522 (W 0.0029186) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/1024x64/b1 [api-inclusive]` | 1.13865 ± 0.002366 (W 0.00274842) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1` | 69.136 ± 0.119011 (W 0.226445) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1 [api-inclusive]` | 66.2704 ± 0.171443 (W 0.119446) | - | - | `*` one row has no measurement here |
+| `householder_apply/1024x64/b1 [block(basis=64,target=64)]` | 0.771742 ± 0.00241397 (W 0.00268919) | - | - | `*` one row has no measurement here |
+| `householder_apply/1024x64/b1 [sequence(basis=64,target=64)]` | 0.773973 ± 0.0120997 (W 0.00222642) | - | - | `*` one row has no measurement here |
+| `householder_apply/4096x256/b1 [block(basis=256,target=256)]` | 49.0804 ± 0.106041 (W 0.104792) | - | - | `*` one row has no measurement here |
+| `householder_apply/4096x256/b1 [sequence(basis=256,target=256)]` | 48.9478 ± 0.12643 (W 0.0819375) | - | - | `*` one row has no measurement here |
+| `lu/1024x64/b1` | 0.482686 ± 0.00158051 (W 0.0018429) | - | - | `*` one row has no measurement here |
+| `lu/1024x64/b1 [api-inclusive]` | 0.498553 ± 0.00528851 (W 0.00178367) | - | - | `*` one row has no measurement here |
+| `lu/4096x256/b1` | 18.308 ± 0.0737114 (W 0.0420711) | - | - | `*` one row has no measurement here |
+| `lu/4096x256/b1 [api-inclusive]` | 19.9655 ± 0.107245 (W 0.0731037) | - | - | `*` one row has no measurement here |
+| `qr/1024x64/b1` | 1.96549 ± 0.00645059 (W 0.00194377) | - | - | `*` one row has no measurement here |
+| `qr/1024x64/b1 [api-inclusive]` | 2.33776 ± 0.00859823 (W 0.0025539) | - | - | `*` one row has no measurement here |
+| `qr/4096x256/b1` | 94.2474 ± 1.33138 (W 1.11348) | - | - | `*` one row has no measurement here |
+| `qr/4096x256/b1 [api-inclusive]` | 95.1218 ± 0.339465 (W 0.092606) | - | - | `*` one row has no measurement here |
+| `qr_factor/1024x64/b1` | 1.17354 ± 0.00306644 (W 0.00308385) | - | - | `*` one row has no measurement here |
+| `qr_factor/4096x256/b1` | 39.3488 ± 0.332373 (W 0.105064) | - | - | `*` one row has no measurement here |
+| `svd_thin/1024x64/b1` | 2.51538 ± 0.006364 (W 0.00358257) | - | - | `*` one row has no measurement here |
+| `svd_thin/1024x64/b1 [api-inclusive]` | 2.53205 ± 0.00676222 (W 0.00252575) | - | - | `*` one row has no measurement here |
+| `svd_thin/4096x256/b1` | 107.028 ± 0.1283 (W 0.0809962) | - | - | `*` one row has no measurement here |
+| `svd_thin/4096x256/b1 [api-inclusive]` | 107.442 ± 0.233976 (W 0.115942) | - | - | `*` one row has no measurement here |
+| `svd_values/1024x64/b1` | 1.30916 ± 0.00372204 (W 0.00225281) | - | - | `*` one row has no measurement here |
+| `svd_values/1024x64/b1 [api-inclusive]` | 1.30798 ± 0.00718758 (W 0.00260635) | - | - | `*` one row has no measurement here |
+| `svd_values/4096x256/b1` | 55.0323 ± 2.40113 (W 0.0369489) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_values/4096x256/b1 [api-inclusive]` | 52.7636 ± 2.44839 (W 0.0612849) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+
+## linalg-tall, c64, c order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `full_piv_lu/1024x64/b1` | 0.536126 ± 0.00332016 (W 0.00293638) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/1024x64/b1 [api-inclusive]` | 0.575599 ± 0.0043296 (W 0.00209852) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1` | 20.026 ± 0.107908 (W 0.0442388) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1 [api-inclusive]` | 21.526 ± 0.152247 (W 0.13945) | - | - | `*` one row has no measurement here |
+| `householder_apply/1024x64/b1 [block(basis=64,target=64)]` | 0.24578 ± 0.00156292 (W 0.00193743) | - | - | `*` one row has no measurement here |
+| `householder_apply/1024x64/b1 [sequence(basis=64,target=64)]` | 0.246761 ± 0.00144739 (W 0.00278616) | - | - | `*` one row has no measurement here |
+| `householder_apply/4096x256/b1 [block(basis=256,target=256)]` | 13.4115 ± 0.0588224 (W 0.070352) | - | - | `*` one row has no measurement here |
+| `householder_apply/4096x256/b1 [sequence(basis=256,target=256)]` | 13.3826 ± 0.0645169 (W 0.0517029) | - | - | `*` one row has no measurement here |
+| `lu/1024x64/b1` | 0.340261 ± 0.00120584 (W 0.00191038) | - | - | `*` one row has no measurement here |
+| `lu/1024x64/b1 [api-inclusive]` | 0.381507 ± 0.00232544 (W 0.002166) | - | - | `*` one row has no measurement here |
+| `lu/4096x256/b1` | 8.71593 ± 0.0390627 (W 0.0438905) | - | - | `*` one row has no measurement here |
+| `lu/4096x256/b1 [api-inclusive]` | 10.6041 ± 0.0718265 (W 0.0566268) | - | - | `*` one row has no measurement here |
+| `qr/1024x64/b1` | 0.920294 ± 0.0123113 (W 0.00217185) | - | - | `*` one row has no measurement here |
+| `qr/1024x64/b1 [api-inclusive]` | 1.37785 ± 0.00450181 (W 0.00505146) | - | - | `*` one row has no measurement here |
+| `qr/4096x256/b1` | 30.8756 ± 0.10173 (W 0.173095) | - | - | `*` one row has no measurement here |
+| `qr/4096x256/b1 [api-inclusive]` | 40.7064 ± 0.325865 (W 0.0738232) | - | - | `*` one row has no measurement here |
+| `qr_factor/1024x64/b1` | 0.67775 ± 0.00435022 (W 0.00232104) | - | - | `*` one row has no measurement here |
+| `qr_factor/4096x256/b1` | 16.6432 ± 0.0155636 (W 0.0291283) | - | - | `*` one row has no measurement here |
+| `svd_thin/1024x64/b1` | 1.44937 ± 0.00285053 (W 0.00331788) | - | - | `*` one row has no measurement here |
+| `svd_thin/1024x64/b1 [api-inclusive]` | 1.47 ± 0.00612661 (W 0.00346211) | - | - | `*` one row has no measurement here |
+| `svd_thin/4096x256/b1` | 45.2049 ± 0.0914056 (W 0.068508) | - | - | `*` one row has no measurement here |
+| `svd_thin/4096x256/b1 [api-inclusive]` | 45.4453 ± 0.0705165 (W 0.0787934) | - | - | `*` one row has no measurement here |
+| `svd_values/1024x64/b1` | 0.959439 ± 0.00677903 (W 0.001261) | - | - | `*` one row has no measurement here |
+| `svd_values/1024x64/b1 [api-inclusive]` | 0.96002 ± 0.00295365 (W 0.00222543) | - | - | `*` one row has no measurement here |
+| `svd_values/4096x256/b1` | 28.4777 ± 0.178455 (W 0.0892161) | - | - | `*` one row has no measurement here |
+| `svd_values/4096x256/b1 [api-inclusive]` | 28.4349 ± 0.0886178 (W 0.0901782) | - | - | `*` one row has no measurement here |
+
+## linalg-tall, c64, c order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `full_piv_lu/1024x64/b1` | 0.439558 ± 0.00665388 (W 0.00215622) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/1024x64/b1 [api-inclusive]` | 0.489868 ± 0.00338926 (W 0.00234976) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1` | 11.5092 ± 0.025082 (W 0.0301375) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1 [api-inclusive]` | 13.929 ± 0.104595 (W 0.129955) | - | - | `*` one row has no measurement here |
+| `householder_apply/1024x64/b1 [block(basis=64,target=64)]` | 0.157954 ± 0.00340541 (W 0.00288732) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `householder_apply/1024x64/b1 [sequence(basis=64,target=64)]` | 0.160168 ± 0.00231613 (W 0.00338669) | - | - | `*` one row has no measurement here |
+| `householder_apply/4096x256/b1 [block(basis=256,target=256)]` | 8.81874 ± 0.0400933 (W 0.0500849) | - | - | `*` one row has no measurement here |
+| `householder_apply/4096x256/b1 [sequence(basis=256,target=256)]` | 8.79358 ± 0.0371171 (W 0.0566208) | - | - | `*` one row has no measurement here |
+| `lu/1024x64/b1` | 0.316272 ± 0.00107656 (W 0.00140629) | - | - | `*` one row has no measurement here |
+| `lu/1024x64/b1 [api-inclusive]` | 0.36941 ± 0.00209345 (W 0.00159813) | - | - | `*` one row has no measurement here |
+| `lu/4096x256/b1` | 6.25895 ± 0.0223911 (W 0.0271281) | - | - | `*` one row has no measurement here |
+| `lu/4096x256/b1 [api-inclusive]` | 9.08132 ± 0.0541058 (W 0.0875117) | - | - | `*` one row has no measurement here |
+| `qr/1024x64/b1` | 0.770647 ± 0.00301517 (W 0.00266075) | - | - | `*` one row has no measurement here |
+| `qr/1024x64/b1 [api-inclusive]` | 1.22892 ± 0.00532712 (W 0.00527461) | - | - | `*` one row has no measurement here |
+| `qr/4096x256/b1` | 20.5633 ± 1.11391 (W 0.0556453) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr/4096x256/b1 [api-inclusive]` | 32.2986 ± 0.319196 (W 0.223997) | - | - | `*` one row has no measurement here |
+| `qr_factor/1024x64/b1` | 0.605205 ± 0.00265861 (W 0.00295326) | - | - | `*` one row has no measurement here |
+| `qr_factor/4096x256/b1` | 11.9769 ± 0.0390886 (W 0.0282104) | - | - | `*` one row has no measurement here |
+| `svd_thin/1024x64/b1` | 1.30155 ± 0.00982032 (W 0.00429805) | - | - | `*` one row has no measurement here |
+| `svd_thin/1024x64/b1 [api-inclusive]` | 1.32279 ± 0.0224064 (W 0.00325149) | - | - | `*` one row has no measurement here |
+| `svd_thin/4096x256/b1` | 36.0487 ± 0.0938901 (W 0.124169) | - | - | `*` one row has no measurement here |
+| `svd_thin/4096x256/b1 [api-inclusive]` | 36.334 ± 0.0674145 (W 0.0524359) | - | - | `*` one row has no measurement here |
+| `svd_values/1024x64/b1` | 0.91327 ± 0.0109991 (W 0.00178386) | - | - | `*` one row has no measurement here |
+| `svd_values/1024x64/b1 [api-inclusive]` | 0.915213 ± 0.00438808 (W 0.00297435) | - | - | `*` one row has no measurement here |
+| `svd_values/4096x256/b1` | 24.411 ± 0.0753336 (W 0.0909853) | - | - | `*` one row has no measurement here |
+| `svd_values/4096x256/b1 [api-inclusive]` | 24.4482 ± 0.0401106 (W 0.0968158) | - | - | `*` one row has no measurement here |
+
+## linalg-tall, c64, f order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `full_piv_lu/1024x64/b1` | 1.06404 ± 0.00507189 (W 0.00184955) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/1024x64/b1 [api-inclusive]` | 1.0642 ± 0.00262961 (W 0.001666) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1` | 67.0166 ± 0.414506 (W 0.179885) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1 [api-inclusive]` | 63.3758 ± 0.190532 (W 0.0543781) | - | - | `*` one row has no measurement here |
+| `householder_apply/1024x64/b1 [block(basis=64,target=64)]` | 0.833325 ± 0.0163985 (W 0.00288044) | 1.0482 ± 0.00480465 (W 0.00371156) | 🔵 colmat 1.26× faster than `lapack-aocl` |  |
+| `householder_apply/1024x64/b1 [sequence(basis=64,target=64)]` | 0.83095 ± 0.0121971 (W 0.00252768) | 1.34043 ± 0.00515459 (W 0.00479681) | 🔵 colmat 1.61× faster than `lapack-aocl` |  |
+| `householder_apply/4096x256/b1 [block(basis=256,target=256)]` | 48.4978 ± 0.08867 (W 0.0981917) | 52.2259 ± 0.410668 (W 0.0322635) | 🔵 colmat 1.08× faster than `lapack-aocl` |  |
+| `householder_apply/4096x256/b1 [sequence(basis=256,target=256)]` | 48.5313 ± 0.145632 (W 0.0824793) | 66.7998 ± 0.431778 (W 0.0545598) | 🔵 colmat 1.38× faster than `lapack-aocl` |  |
+| `lu/1024x64/b1` | 0.407919 ± 0.003475 (W 0.0017991) | 0.398942 ± 0.00393098 (W 0.00232354) | · |  |
+| `lu/1024x64/b1 [api-inclusive]` | 0.423304 ± 0.00319242 (W 0.00166329) | - | - | `*` one row has no measurement here |
+| `lu/4096x256/b1` | 15.6865 ± 0.0338265 (W 0.0130538) | 17.6915 ± 0.0685154 (W 0.0184056) | 🔵 colmat 1.13× faster than `lapack-aocl` |  |
+| `lu/4096x256/b1 [api-inclusive]` | 16.0351 ± 0.0747553 (W 0.0215424) | - | - | `*` one row has no measurement here |
+| `qr/1024x64/b1` | 1.81554 ± 0.0100763 (W 0.00487099) | 2.21239 ± 0.00999631 (W 0.00668257) | 🔵 colmat 1.22× faster than `lapack-aocl` |  |
+| `qr/1024x64/b1 [api-inclusive]` | 2.22827 ± 0.0103741 (W 0.00236883) | - | - | `*` one row has no measurement here |
+| `qr/4096x256/b1` | 82.4088 ± 0.375758 (W 0.143302) | 113.537 ± 1.11582 (W 0.23365) | 🔵 colmat 1.38× faster than `lapack-aocl` |  |
+| `qr/4096x256/b1 [api-inclusive]` | 91.02 ± 0.19588 (W 0.0861665) | - | - | `*` one row has no measurement here |
+| `qr_factor/1024x64/b1` | 0.975477 ± 0.00245759 (W 0.00137042) | 0.846973 ± 0.0110945 (W 0.0043734) | 🔴 colmat 1.15× slower than `lapack-aocl` |  |
+| `qr_factor/4096x256/b1` | 33.6113 ± 0.0694357 (W 0.0178881) | 49.4451 ± 1.53746 (W 0.198495) | 🔵 colmat 1.47× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `svd_thin/1024x64/b1` | 2.43369 ± 0.00262757 (W 0.00384918) | 2.67649 ± 0.0201874 (W 0.00839231) | 🔵 colmat 1.10× faster than `lapack-aocl` |  |
+| `svd_thin/1024x64/b1 [api-inclusive]` | 2.45033 ± 0.00228036 (W 0.00540552) | - | - | `*` one row has no measurement here |
+| `svd_thin/4096x256/b1` | 98.5173 ± 0.12976 (W 0.0723326) | 139.344 ± 1.79553 (W 0.516578) | 🔵 colmat 1.41× faster than `lapack-aocl` |  |
+| `svd_thin/4096x256/b1 [api-inclusive]` | 98.9277 ± 0.177721 (W 0.126174) | - | - | `*` one row has no measurement here |
+| `svd_values/1024x64/b1` | 1.23526 ± 0.00266315 (W 0.00256212) | 1.14152 ± 0.00399907 (W 0.00371667) | 🔴 colmat 1.08× slower than `lapack-aocl` |  |
+| `svd_values/1024x64/b1 [api-inclusive]` | 1.23705 ± 0.00291091 (W 0.00207431) | - | - | `*` one row has no measurement here |
+| `svd_values/4096x256/b1` | 41.9111 ± 0.155151 (W 0.0397058) | 59.7001 ± 1.03686 (W 0.324239) | 🔵 colmat 1.42× faster than `lapack-aocl` |  |
+| `svd_values/4096x256/b1 [api-inclusive]` | 41.9411 ± 0.224338 (W 0.0484733) | - | - | `*` one row has no measurement here |
+
+## linalg-tall, c64, f order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `full_piv_lu/1024x64/b1` | 0.470795 ± 0.00468703 (W 0.00213272) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/1024x64/b1 [api-inclusive]` | 0.506443 ± 0.00357099 (W 0.003033) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1` | 18.9418 ± 0.0591428 (W 0.0271998) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1 [api-inclusive]` | 18.7427 ± 0.0505562 (W 0.0297811) | - | - | `*` one row has no measurement here |
+| `householder_apply/1024x64/b1 [block(basis=64,target=64)]` | 0.284998 ± 0.00184412 (W 0.001798) | 0.421912 ± 0.00387275 (W 0.00358451) | 🔵 colmat 1.48× faster than `lapack-aocl` |  |
+| `householder_apply/1024x64/b1 [sequence(basis=64,target=64)]` | 0.288518 ± 0.00486612 (W 0.0018966) | 0.619188 ± 0.00549079 (W 0.00397003) | 🔵 colmat 2.15× faster than `lapack-aocl` |  |
+| `householder_apply/4096x256/b1 [block(basis=256,target=256)]` | 14.8385 ± 0.136783 (W 0.0131273) | 15.3939 ± 0.637076 (W 0.0265172) | · | `!` between-start range over 5% |
+| `householder_apply/4096x256/b1 [sequence(basis=256,target=256)]` | 15.0003 ± 0.0651292 (W 0.0258007) | 22.1789 ± 0.0546484 (W 0.0326155) | 🔵 colmat 1.48× faster than `lapack-aocl` |  |
+| `lu/1024x64/b1` | 0.278021 ± 0.00140173 (W 0.0016362) | 0.299063 ± 0.00425471 (W 0.00199818) | 🔵 colmat 1.08× faster than `lapack-aocl` |  |
+| `lu/1024x64/b1 [api-inclusive]` | 0.317098 ± 0.0016524 (W 0.00147708) | - | - | `*` one row has no measurement here |
+| `lu/4096x256/b1` | 6.29269 ± 0.0170669 (W 0.00923694) | 6.30555 ± 0.0289279 (W 0.0195586) | · |  |
+| `lu/4096x256/b1 [api-inclusive]` | 6.9249 ± 0.0115888 (W 0.0105556) | - | - | `*` one row has no measurement here |
+| `qr/1024x64/b1` | 0.873409 ± 0.00488219 (W 0.00221145) | 1.51648 ± 0.0171993 (W 0.00769916) | 🔵 colmat 1.74× faster than `lapack-aocl` |  |
+| `qr/1024x64/b1 [api-inclusive]` | 1.26239 ± 0.00470602 (W 0.00377381) | - | - | `*` one row has no measurement here |
+| `qr/4096x256/b1` | 27.8435 ± 0.0779082 (W 0.0301404) | 57.7946 ± 0.446959 (W 0.381025) | 🔵 colmat 2.08× faster than `lapack-aocl` |  |
+| `qr/4096x256/b1 [api-inclusive]` | 36.4977 ± 0.334402 (W 0.0720094) | - | - | `*` one row has no measurement here |
+| `qr_factor/1024x64/b1` | 0.611396 ± 0.00328554 (W 0.00235976) | 0.846917 ± 0.0131275 (W 0.00396896) | 🔵 colmat 1.39× faster than `lapack-aocl` |  |
+| `qr_factor/4096x256/b1` | 14.3913 ± 0.0417161 (W 0.0186951) | 35.5477 ± 0.243456 (W 0.036972) | 🔵 colmat 2.47× faster than `lapack-aocl` |  |
+| `svd_thin/1024x64/b1` | 1.40044 ± 0.00778229 (W 0.00426689) | 2.39317 ± 0.0118733 (W 0.00520388) | 🔵 colmat 1.71× faster than `lapack-aocl` |  |
+| `svd_thin/1024x64/b1 [api-inclusive]` | 1.41255 ± 0.00677077 (W 0.00447779) | - | - | `*` one row has no measurement here |
+| `svd_thin/4096x256/b1` | 36.8083 ± 0.118726 (W 0.0456743) | 89.6087 ± 0.776483 (W 0.14861) | 🔵 colmat 2.43× faster than `lapack-aocl` |  |
+| `svd_thin/4096x256/b1 [api-inclusive]` | 37.0642 ± 0.0482 (W 0.0568979) | - | - | `*` one row has no measurement here |
+| `svd_values/1024x64/b1` | 0.904389 ± 0.0055443 (W 0.00241496) | 1.15991 ± 0.012064 (W 0.00540159) | 🔵 colmat 1.28× faster than `lapack-aocl` |  |
+| `svd_values/1024x64/b1 [api-inclusive]` | 0.907647 ± 0.00232787 (W 0.00284491) | - | - | `*` one row has no measurement here |
+| `svd_values/4096x256/b1` | 19.929 ± 0.025076 (W 0.0191378) | 43.3041 ± 0.770027 (W 0.0475272) | 🔵 colmat 2.17× faster than `lapack-aocl` |  |
+| `svd_values/4096x256/b1 [api-inclusive]` | 19.9569 ± 0.0193645 (W 0.0159619) | - | - | `*` one row has no measurement here |
+
+## linalg-tall, c64, f order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `full_piv_lu/1024x64/b1` | 0.386229 ± 0.00400302 (W 0.00243623) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/1024x64/b1 [api-inclusive]` | 0.432618 ± 0.0016209 (W 0.00226512) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1` | 10.9276 ± 0.0146121 (W 0.0281357) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1 [api-inclusive]` | 11.2161 ± 0.0300184 (W 0.0272025) | - | - | `*` one row has no measurement here |
+| `householder_apply/1024x64/b1 [block(basis=64,target=64)]` | 0.187529 ± 0.00199232 (W 0.00130283) | 0.365329 ± 0.00742425 (W 0.00602912) | 🔵 colmat 1.95× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `householder_apply/1024x64/b1 [sequence(basis=64,target=64)]` | 0.192873 ± 0.00358477 (W 0.00121168) | 0.463403 ± 0.00663268 (W 0.00367058) | 🔵 colmat 2.40× faster than `lapack-aocl` |  |
+| `householder_apply/4096x256/b1 [block(basis=256,target=256)]` | 11.8181 ± 0.480033 (W 0.028227) | 9.66122 ± 0.385413 (W 0.0236943) | 🔴 colmat 1.22× slower than `lapack-aocl` | `!` between-start range over 5%; `p` position effect over 5% |
+| `householder_apply/4096x256/b1 [sequence(basis=256,target=256)]` | 11.5952 ± 0.717025 (W 0.0313466) | 14.5081 ± 0.245702 (W 0.0348636) | 🔵 colmat 1.25× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `lu/1024x64/b1` | 0.267045 ± 0.000359466 (W 0.0013903) | 0.338977 ± 0.00302822 (W 0.00344809) | 🔵 colmat 1.27× faster than `lapack-aocl` |  |
+| `lu/1024x64/b1 [api-inclusive]` | 0.308632 ± 0.00329658 (W 0.00213613) | - | - | `*` one row has no measurement here |
+| `lu/4096x256/b1` | 5.17754 ± 0.0638757 (W 0.0089131) | 5.28494 ± 0.0265546 (W 0.0156538) | · |  |
+| `lu/4096x256/b1 [api-inclusive]` | 5.7791 ± 0.0169094 (W 0.01274) | - | - | `*` one row has no measurement here |
+| `qr/1024x64/b1` | 0.710135 ± 0.00552729 (W 0.00268266) | 1.34812 ± 0.0219394 (W 0.00563277) | 🔵 colmat 1.90× faster than `lapack-aocl` |  |
+| `qr/1024x64/b1 [api-inclusive]` | 1.1174 ± 0.00339889 (W 0.00388823) | - | - | `*` one row has no measurement here |
+| `qr/4096x256/b1` | 18.9998 ± 0.131182 (W 0.0298646) | 47.9418 ± 0.326838 (W 0.108106) | 🔵 colmat 2.52× faster than `lapack-aocl` |  |
+| `qr/4096x256/b1 [api-inclusive]` | 28.2515 ± 0.243225 (W 0.0923432) | - | - | `*` one row has no measurement here |
+| `qr_factor/1024x64/b1` | 0.549462 ± 0.00312556 (W 0.00270232) | 0.839865 ± 0.0157202 (W 0.00381935) | 🔵 colmat 1.53× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `qr_factor/4096x256/b1` | 10.4355 ± 0.0194204 (W 0.0160814) | 33.0922 ± 0.165444 (W 1.99294) | 🔵 colmat 3.17× faster than `lapack-aocl` |  |
+| `svd_thin/1024x64/b1` | 1.23842 ± 0.00593457 (W 0.00293402) | 2.38283 ± 0.0808787 (W 0.0072208) | 🔵 colmat 1.92× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `svd_thin/1024x64/b1 [api-inclusive]` | 1.26278 ± 0.00861068 (W 0.0033316) | - | - | `*` one row has no measurement here |
+| `svd_thin/4096x256/b1` | 27.4672 ± 0.159223 (W 0.0587977) | 80.9218 ± 0.594651 (W 0.177433) | 🔵 colmat 2.95× faster than `lapack-aocl` |  |
+| `svd_thin/4096x256/b1 [api-inclusive]` | 27.7694 ± 0.0479271 (W 0.0654263) | - | - | `*` one row has no measurement here |
+| `svd_values/1024x64/b1` | 0.859852 ± 0.00247087 (W 0.00183717) | 1.16803 ± 0.0249004 (W 0.00513182) | 🔵 colmat 1.36× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `svd_values/1024x64/b1 [api-inclusive]` | 0.870132 ± 0.0033262 (W 0.00223286) | - | - | `*` one row has no measurement here |
+| `svd_values/4096x256/b1` | 15.7904 ± 0.0625481 (W 0.0283998) | 41.1793 ± 0.291287 (W 5.2732) | 🔵 colmat 2.61× faster than `lapack-aocl` |  |
+| `svd_values/4096x256/b1 [api-inclusive]` | 15.7967 ± 0.134823 (W 0.0266102) | - | - | `*` one row has no measurement here |
+
+## linalg-tall, f32, c order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `full_piv_lu/1024x64/b1` | 0.380175 ± 0.00111465 (W 0.00149998) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/1024x64/b1 [api-inclusive]` | 0.31708 ± 0.00136518 (W 0.0015945) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1` | 15.6946 ± 0.0617383 (W 0.0529461) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1 [api-inclusive]` | 14.4081 ± 0.0492384 (W 0.0108762) | - | - | `*` one row has no measurement here |
+| `householder_apply/1024x64/b1 [block(basis=64,target=64)]` | 0.106878 ± 0.000649857 (W 0.000364977) | - | - | `*` one row has no measurement here |
+| `householder_apply/1024x64/b1 [sequence(basis=64,target=64)]` | 0.107178 ± 0.000426004 (W 0.0012915) | - | - | `*` one row has no measurement here |
+| `householder_apply/4096x256/b1 [block(basis=256,target=256)]` | 6.2043 ± 0.107064 (W 0.00606301) | - | - | `*` one row has no measurement here |
+| `householder_apply/4096x256/b1 [sequence(basis=256,target=256)]` | 6.20514 ± 0.109469 (W 0.00666141) | - | - | `*` one row has no measurement here |
+| `lu/1024x64/b1` | 0.199816 ± 0.000631154 (W 0.00152408) | - | - | `*` one row has no measurement here |
+| `lu/1024x64/b1 [api-inclusive]` | 0.158069 ± 0.00145645 (W 0.00151688) | - | - | `*` one row has no measurement here |
+| `lu/4096x256/b1` | 3.93448 ± 0.0109714 (W 0.00561742) | - | - | `*` one row has no measurement here |
+| `lu/4096x256/b1 [api-inclusive]` | 3.8061 ± 0.075208 (W 0.0179391) | - | - | `*` one row has no measurement here |
+| `qr/1024x64/b1` | 0.530615 ± 0.00153613 (W 0.00224716) | - | - | `*` one row has no measurement here |
+| `qr/1024x64/b1 [api-inclusive]` | 0.584796 ± 0.00204444 (W 0.00248323) | - | - | `*` one row has no measurement here |
+| `qr/4096x256/b1` | 15.8984 ± 0.0527714 (W 0.0762205) | - | - | `*` one row has no measurement here |
+| `qr/4096x256/b1 [api-inclusive]` | 16.4313 ± 0.0829629 (W 0.0177043) | - | - | `*` one row has no measurement here |
+| `qr_factor/1024x64/b1` | 0.404075 ± 0.00222361 (W 0.00187025) | - | - | `*` one row has no measurement here |
+| `qr_factor/4096x256/b1` | 9.02872 ± 0.107136 (W 0.0426059) | - | - | `*` one row has no measurement here |
+| `svd_thin/1024x64/b1` | 0.799435 ± 0.0056548 (W 0.00285731) | - | - | `*` one row has no measurement here |
+| `svd_thin/1024x64/b1 [api-inclusive]` | 0.802623 ± 0.00635206 (W 0.00252973) | - | - | `*` one row has no measurement here |
+| `svd_thin/4096x256/b1` | 21.1743 ± 0.644229 (W 0.0264601) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_thin/4096x256/b1 [api-inclusive]` | 21.1984 ± 0.663642 (W 0.0197242) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_values/1024x64/b1` | 0.468133 ± 0.00293149 (W 0.00271365) | - | - | `*` one row has no measurement here |
+| `svd_values/1024x64/b1 [api-inclusive]` | 0.468916 ± 0.00240406 (W 0.00304581) | - | - | `*` one row has no measurement here |
+| `svd_values/4096x256/b1` | 11.6842 ± 0.0207097 (W 0.00984001) | - | - | `*` one row has no measurement here |
+| `svd_values/4096x256/b1 [api-inclusive]` | 11.7253 ± 0.395915 (W 0.0151612) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+
+## linalg-tall, f32, c order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `full_piv_lu/1024x64/b1` | 0.246844 ± 0.00243705 (W 0.00136625) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/1024x64/b1 [api-inclusive]` | 0.274876 ± 0.00138796 (W 0.00207171) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1` | 5.1167 ± 0.0222505 (W 0.0326407) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1 [api-inclusive]` | 5.74822 ± 0.0138199 (W 0.016523) | - | - | `*` one row has no measurement here |
+| `householder_apply/1024x64/b1 [block(basis=64,target=64)]` | 0.0484185 ± 0.00117591 (W 0.00132367) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `householder_apply/1024x64/b1 [sequence(basis=64,target=64)]` | 0.0486135 ± 0.000938238 (W 0.000920035) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `householder_apply/4096x256/b1 [block(basis=256,target=256)]` | 1.68943 ± 0.0248651 (W 0.00675938) | - | - | `*` one row has no measurement here |
+| `householder_apply/4096x256/b1 [sequence(basis=256,target=256)]` | 1.69607 ± 0.023649 (W 0.00790041) | - | - | `*` one row has no measurement here |
+| `lu/1024x64/b1` | 0.134684 ± 0.000420466 (W 0.000755954) | - | - | `*` one row has no measurement here |
+| `lu/1024x64/b1 [api-inclusive]` | 0.164233 ± 0.000803469 (W 0.000728454) | - | - | `*` one row has no measurement here |
+| `lu/4096x256/b1` | 2.03439 ± 0.0150818 (W 0.0145365) | - | - | `*` one row has no measurement here |
+| `lu/4096x256/b1 [api-inclusive]` | 2.65391 ± 0.0202243 (W 0.0190197) | - | - | `*` one row has no measurement here |
+| `qr/1024x64/b1` | 0.347807 ± 0.00139678 (W 0.00219812) | - | - | `*` one row has no measurement here |
+| `qr/1024x64/b1 [api-inclusive]` | 0.459863 ± 0.00221333 (W 0.00222986) | - | - | `*` one row has no measurement here |
+| `qr/4096x256/b1` | 6.52768 ± 0.0658791 (W 0.0195399) | - | - | `*` one row has no measurement here |
+| `qr/4096x256/b1 [api-inclusive]` | 8.60582 ± 0.0622934 (W 0.0304501) | - | - | `*` one row has no measurement here |
+| `qr_factor/1024x64/b1` | 0.293909 ± 0.00112887 (W 0.00178382) | - | - | `*` one row has no measurement here |
+| `qr_factor/4096x256/b1` | 4.25028 ± 0.0288717 (W 0.0166436) | - | - | `*` one row has no measurement here |
+| `svd_thin/1024x64/b1` | 0.640838 ± 0.00241582 (W 0.00293816) | - | - | `*` one row has no measurement here |
+| `svd_thin/1024x64/b1 [api-inclusive]` | 0.651133 ± 0.00376638 (W 0.00247116) | - | - | `*` one row has no measurement here |
+| `svd_thin/4096x256/b1` | 11.798 ± 0.0857909 (W 0.010712) | - | - | `*` one row has no measurement here |
+| `svd_thin/4096x256/b1 [api-inclusive]` | 11.7766 ± 0.084213 (W 0.0187984) | - | - | `*` one row has no measurement here |
+| `svd_values/1024x64/b1` | 0.445061 ± 0.00281763 (W 0.00344229) | - | - | `*` one row has no measurement here |
+| `svd_values/1024x64/b1 [api-inclusive]` | 0.450318 ± 0.00260102 (W 0.00295333) | - | - | `*` one row has no measurement here |
+| `svd_values/4096x256/b1` | 8.78011 ± 0.0255036 (W 0.00851596) | - | - | `*` one row has no measurement here |
+| `svd_values/4096x256/b1 [api-inclusive]` | 8.80254 ± 0.26591 (W 0.0204527) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+
+## linalg-tall, f32, c order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `full_piv_lu/1024x64/b1` | 0.234754 ± 0.00108106 (W 0.00227294) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/1024x64/b1 [api-inclusive]` | 0.271173 ± 0.00124374 (W 0.00199052) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1` | 3.42606 ± 0.00814142 (W 0.0159822) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1 [api-inclusive]` | 4.36178 ± 0.00640892 (W 0.0132497) | - | - | `*` one row has no measurement here |
+| `householder_apply/1024x64/b1 [block(basis=64,target=64)]` | 0.0470185 ± 0.000665738 (W 0.0012649) | - | - | `*` one row has no measurement here |
+| `householder_apply/1024x64/b1 [sequence(basis=64,target=64)]` | 0.047598 ± 0.00103482 (W 0.00145426) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `householder_apply/4096x256/b1 [block(basis=256,target=256)]` | 1.03057 ± 0.00938066 (W 0.00801057) | - | - | `*` one row has no measurement here |
+| `householder_apply/4096x256/b1 [sequence(basis=256,target=256)]` | 1.01845 ± 0.0101926 (W 0.0194735) | - | - | `*` one row has no measurement here |
+| `lu/1024x64/b1` | 0.123554 ± 0.00510045 (W 0.00105618) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `lu/1024x64/b1 [api-inclusive]` | 0.165309 ± 0.000583527 (W 0.000979575) | - | - | `*` one row has no measurement here |
+| `lu/4096x256/b1` | 1.63838 ± 0.0121268 (W 0.0112598) | - | - | `*` one row has no measurement here |
+| `lu/4096x256/b1 [api-inclusive]` | 2.57009 ± 0.0222612 (W 0.0223048) | - | - | `*` one row has no measurement here |
+| `qr/1024x64/b1` | 0.328319 ± 0.00178388 (W 0.00271609) | - | - | `*` one row has no measurement here |
+| `qr/1024x64/b1 [api-inclusive]` | 0.435377 ± 0.00129981 (W 0.00252472) | - | - | `*` one row has no measurement here |
+| `qr/4096x256/b1` | 4.78093 ± 0.0753486 (W 0.0224612) | - | - | `*` one row has no measurement here |
+| `qr/4096x256/b1 [api-inclusive]` | 7.04397 ± 0.0760557 (W 0.0213262) | - | - | `*` one row has no measurement here |
+| `qr_factor/1024x64/b1` | 0.267937 ± 0.000506171 (W 0.00195264) | - | - | `*` one row has no measurement here |
+| `qr_factor/4096x256/b1` | 3.27009 ± 0.0154712 (W 0.0121634) | - | - | `*` one row has no measurement here |
+| `svd_thin/1024x64/b1` | 0.622369 ± 0.00387315 (W 0.00299245) | - | - | `*` one row has no measurement here |
+| `svd_thin/1024x64/b1 [api-inclusive]` | 0.630956 ± 0.00481131 (W 0.00348782) | - | - | `*` one row has no measurement here |
+| `svd_thin/4096x256/b1` | 9.98744 ± 0.0174689 (W 0.0108115) | - | - | `*` one row has no measurement here |
+| `svd_thin/4096x256/b1 [api-inclusive]` | 10.2372 ± 0.504607 (W 0.0299218) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_values/1024x64/b1` | 0.439567 ± 0.00255795 (W 0.00358928) | - | - | `*` one row has no measurement here |
+| `svd_values/1024x64/b1 [api-inclusive]` | 0.440088 ± 0.000871209 (W 0.00425442) | - | - | `*` one row has no measurement here |
+| `svd_values/4096x256/b1` | 7.92055 ± 0.0217721 (W 0.00603818) | - | - | `*` one row has no measurement here |
+| `svd_values/4096x256/b1 [api-inclusive]` | 7.90398 ± 0.0200105 (W 0.0095267) | - | - | `*` one row has no measurement here |
+
+## linalg-tall, f32, f order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `full_piv_lu/1024x64/b1` | 0.265463 ± 0.000813704 (W 0.00145989) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/1024x64/b1 [api-inclusive]` | 0.249218 ± 0.00076309 (W 0.00122035) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1` | 14.8362 ± 0.0749801 (W 0.0141729) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1 [api-inclusive]` | 13.1595 ± 0.0568429 (W 0.0106665) | - | - | `*` one row has no measurement here |
+| `householder_apply/1024x64/b1 [block(basis=64,target=64)]` | 0.122466 ± 0.000644172 (W 0.00148499) | - | - | `*` one row has no measurement here |
+| `householder_apply/1024x64/b1 [sequence(basis=64,target=64)]` | 0.122398 ± 0.000617005 (W 0.000476591) | - | - | `*` one row has no measurement here |
+| `householder_apply/4096x256/b1 [block(basis=256,target=256)]` | 6.363 ± 0.109287 (W 0.00682274) | - | - | `*` one row has no measurement here |
+| `householder_apply/4096x256/b1 [sequence(basis=256,target=256)]` | 6.36582 ± 0.113812 (W 0.0106992) | - | - | `*` one row has no measurement here |
+| `lu/1024x64/b1` | 0.085836 ± 0.000338238 (W 0.000985924) | - | - | `*` one row has no measurement here |
+| `lu/1024x64/b1 [api-inclusive]` | 0.089185 ± 0.000783385 (W 0.000968754) | - | - | `*` one row has no measurement here |
+| `lu/4096x256/b1` | 2.56596 ± 0.0629225 (W 0.006074) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `lu/4096x256/b1 [api-inclusive]` | 2.61004 ± 0.0592695 (W 0.00449508) | - | - | `*` one row has no measurement here |
+| `qr/1024x64/b1` | 0.397574 ± 0.00199408 (W 0.00247108) | - | - | `*` one row has no measurement here |
+| `qr/1024x64/b1 [api-inclusive]` | 0.499666 ± 0.00230151 (W 0.00248125) | - | - | `*` one row has no measurement here |
+| `qr/4096x256/b1` | 13.4853 ± 0.175097 (W 0.0150934) | - | - | `*` one row has no measurement here |
+| `qr/4096x256/b1 [api-inclusive]` | 15.1655 ± 0.244025 (W 0.0139184) | - | - | `*` one row has no measurement here |
+| `qr_factor/1024x64/b1` | 0.266798 ± 0.00119448 (W 0.00144032) | - | - | `*` one row has no measurement here |
+| `qr_factor/4096x256/b1` | 6.54143 ± 0.0572253 (W 0.0063282) | - | - | `*` one row has no measurement here |
+| `svd_thin/1024x64/b1` | 0.775913 ± 0.00154153 (W 0.00258963) | - | - | `*` one row has no measurement here |
+| `svd_thin/1024x64/b1 [api-inclusive]` | 0.780173 ± 0.00226221 (W 0.0020117) | - | - | `*` one row has no measurement here |
+| `svd_thin/4096x256/b1` | 19.1209 ± 0.107889 (W 0.0143649) | - | - | `*` one row has no measurement here |
+| `svd_thin/4096x256/b1 [api-inclusive]` | 19.2398 ± 0.127733 (W 0.0204265) | - | - | `*` one row has no measurement here |
+| `svd_values/1024x64/b1` | 0.441183 ± 0.00157 (W 0.0022069) | - | - | `*` one row has no measurement here |
+| `svd_values/1024x64/b1 [api-inclusive]` | 0.441231 ± 0.00185495 (W 0.00171208) | - | - | `*` one row has no measurement here |
+| `svd_values/4096x256/b1` | 9.62272 ± 0.0532899 (W 0.00626989) | - | - | `*` one row has no measurement here |
+| `svd_values/4096x256/b1 [api-inclusive]` | 9.61403 ± 0.0684124 (W 0.00859541) | - | - | `*` one row has no measurement here |
+
+## linalg-tall, f32, f order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `full_piv_lu/1024x64/b1` | 0.191397 ± 0.00228228 (W 0.00153946) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/1024x64/b1 [api-inclusive]` | 0.204149 ± 0.000984306 (W 0.00167997) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1` | 4.85845 ± 0.0168944 (W 0.00368478) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1 [api-inclusive]` | 4.6002 ± 0.019609 (W 0.00899442) | - | - | `*` one row has no measurement here |
+| `householder_apply/1024x64/b1 [block(basis=64,target=64)]` | 0.0536245 ± 0.000648909 (W 0.000543538) | - | - | `*` one row has no measurement here |
+| `householder_apply/1024x64/b1 [sequence(basis=64,target=64)]` | 0.053143 ± 0.000999633 (W 0.000406804) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `householder_apply/4096x256/b1 [block(basis=256,target=256)]` | 1.98809 ± 0.0256093 (W 0.0110751) | - | - | `*` one row has no measurement here |
+| `householder_apply/4096x256/b1 [sequence(basis=256,target=256)]` | 2.00915 ± 0.0168039 (W 0.0134712) | - | - | `*` one row has no measurement here |
+| `lu/1024x64/b1` | 0.084847 ± 0.000495574 (W 0.000519607) | - | - | `*` one row has no measurement here |
+| `lu/1024x64/b1 [api-inclusive]` | 0.094385 ± 0.000557524 (W 0.000454021) | - | - | `*` one row has no measurement here |
+| `lu/4096x256/b1` | 1.37706 ± 0.00626476 (W 0.0034646) | - | - | `*` one row has no measurement here |
+| `lu/4096x256/b1 [api-inclusive]` | 1.52443 ± 0.00536844 (W 0.00300811) | - | - | `*` one row has no measurement here |
+| `qr/1024x64/b1` | 0.29348 ± 0.00115312 (W 0.00143754) | - | - | `*` one row has no measurement here |
+| `qr/1024x64/b1 [api-inclusive]` | 0.379625 ± 0.00177879 (W 0.00212982) | - | - | `*` one row has no measurement here |
+| `qr/4096x256/b1` | 5.76759 ± 0.0320816 (W 0.0121825) | - | - | `*` one row has no measurement here |
+| `qr/4096x256/b1 [api-inclusive]` | 7.26136 ± 0.0830046 (W 0.00804478) | - | - | `*` one row has no measurement here |
+| `qr_factor/1024x64/b1` | 0.241349 ± 0.00106389 (W 0.00152246) | - | - | `*` one row has no measurement here |
+| `qr_factor/4096x256/b1` | 3.81802 ± 0.0273357 (W 0.0057331) | - | - | `*` one row has no measurement here |
+| `svd_thin/1024x64/b1` | 0.612474 ± 0.00168338 (W 0.00204973) | - | - | `*` one row has no measurement here |
+| `svd_thin/1024x64/b1 [api-inclusive]` | 0.619332 ± 0.00316483 (W 0.00232178) | - | - | `*` one row has no measurement here |
+| `svd_thin/4096x256/b1` | 9.73849 ± 0.0627646 (W 0.0104075) | - | - | `*` one row has no measurement here |
+| `svd_thin/4096x256/b1 [api-inclusive]` | 9.77947 ± 0.0793034 (W 0.0143752) | - | - | `*` one row has no measurement here |
+| `svd_values/1024x64/b1` | 0.415818 ± 0.000630816 (W 0.00177267) | - | - | `*` one row has no measurement here |
+| `svd_values/1024x64/b1 [api-inclusive]` | 0.41868 ± 0.000595775 (W 0.00147161) | - | - | `*` one row has no measurement here |
+| `svd_values/4096x256/b1` | 6.70747 ± 0.0282199 (W 0.00885094) | - | - | `*` one row has no measurement here |
+| `svd_values/4096x256/b1 [api-inclusive]` | 6.69924 ± 0.0209953 (W 0.0055689) | - | - | `*` one row has no measurement here |
+
+## linalg-tall, f32, f order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `full_piv_lu/1024x64/b1` | 0.1955 ± 0.000827285 (W 0.00136667) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/1024x64/b1 [api-inclusive]` | 0.203099 ± 0.00160437 (W 0.00152929) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1` | 3.2674 ± 0.00802136 (W 0.00536887) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1 [api-inclusive]` | 3.25409 ± 0.0182401 (W 0.00835823) | - | - | `*` one row has no measurement here |
+| `householder_apply/1024x64/b1 [block(basis=64,target=64)]` | 0.040025 ± 0.000622763 (W 0.000322835) | - | - | `*` one row has no measurement here |
+| `householder_apply/1024x64/b1 [sequence(basis=64,target=64)]` | 0.0398095 ± 0.000305438 (W 0.000928627) | - | - | `*` one row has no measurement here |
+| `householder_apply/4096x256/b1 [block(basis=256,target=256)]` | 1.40428 ± 0.0297895 (W 0.0197523) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `householder_apply/4096x256/b1 [sequence(basis=256,target=256)]` | 1.38523 ± 0.022431 (W 0.0241391) | - | - | `*` one row has no measurement here |
+| `lu/1024x64/b1` | 0.086832 ± 0.000555493 (W 0.000919725) | - | - | `*` one row has no measurement here |
+| `lu/1024x64/b1 [api-inclusive]` | 0.095066 ± 0.000461854 (W 0.000529369) | - | - | `*` one row has no measurement here |
+| `lu/4096x256/b1` | 1.29913 ± 0.00300001 (W 0.00374149) | - | - | `*` one row has no measurement here |
+| `lu/4096x256/b1 [api-inclusive]` | 1.45872 ± 0.00856472 (W 0.00348915) | - | - | `*` one row has no measurement here |
+| `qr/1024x64/b1` | 0.268796 ± 0.00179064 (W 0.00161551) | - | - | `*` one row has no measurement here |
+| `qr/1024x64/b1 [api-inclusive]` | 0.358953 ± 0.00106003 (W 0.00303681) | - | - | `*` one row has no measurement here |
+| `qr/4096x256/b1` | 4.16163 ± 0.162298 (W 0.0142866) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr/4096x256/b1 [api-inclusive]` | 5.6748 ± 0.073296 (W 0.0112575) | - | - | `*` one row has no measurement here |
+| `qr_factor/1024x64/b1` | 0.232457 ± 0.000862212 (W 0.00191158) | - | - | `*` one row has no measurement here |
+| `qr_factor/4096x256/b1` | 2.93437 ± 0.0678263 (W 0.00428867) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_thin/1024x64/b1` | 0.590596 ± 0.00179313 (W 0.00226242) | - | - | `*` one row has no measurement here |
+| `svd_thin/1024x64/b1 [api-inclusive]` | 0.597088 ± 0.00201964 (W 0.00272744) | - | - | `*` one row has no measurement here |
+| `svd_thin/4096x256/b1` | 7.93151 ± 0.0517843 (W 0.00949036) | - | - | `*` one row has no measurement here |
+| `svd_thin/4096x256/b1 [api-inclusive]` | 8.04236 ± 0.0541282 (W 0.0111655) | - | - | `*` one row has no measurement here |
+| `svd_values/1024x64/b1` | 0.407338 ± 0.000855681 (W 0.00199983) | - | - | `*` one row has no measurement here |
+| `svd_values/1024x64/b1 [api-inclusive]` | 0.40927 ± 0.000919063 (W 0.00180109) | - | - | `*` one row has no measurement here |
+| `svd_values/4096x256/b1` | 5.79979 ± 0.0230403 (W 0.0065623) | - | - | `*` one row has no measurement here |
+| `svd_values/4096x256/b1 [api-inclusive]` | 5.79043 ± 0.00980233 (W 0.00734151) | - | - | `*` one row has no measurement here |
+
+## linalg-tall, c32, c order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `full_piv_lu/1024x64/b1` | 0.730627 ± 0.00240327 (W 0.00199634) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/1024x64/b1 [api-inclusive]` | 0.646226 ± 0.00211722 (W 0.00182184) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1` | 35.7231 ± 0.0425148 (W 0.0489523) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1 [api-inclusive]` | 33.7228 ± 0.0385001 (W 0.0404432) | - | - | `*` one row has no measurement here |
+| `householder_apply/1024x64/b1 [block(basis=64,target=64)]` | 0.406398 ± 0.00154915 (W 0.0014253) | - | - | `*` one row has no measurement here |
+| `householder_apply/1024x64/b1 [sequence(basis=64,target=64)]` | 0.406956 ± 0.00153622 (W 0.00171896) | - | - | `*` one row has no measurement here |
+| `householder_apply/4096x256/b1 [block(basis=256,target=256)]` | 23.7383 ± 0.0697364 (W 0.0442339) | - | - | `*` one row has no measurement here |
+| `householder_apply/4096x256/b1 [sequence(basis=256,target=256)]` | 23.6966 ± 0.0508787 (W 0.0292751) | - | - | `*` one row has no measurement here |
+| `lu/1024x64/b1` | 0.375622 ± 0.00276058 (W 0.00225597) | - | - | `*` one row has no measurement here |
+| `lu/1024x64/b1 [api-inclusive]` | 0.349361 ± 0.00283722 (W 0.0032004) | - | - | `*` one row has no measurement here |
+| `lu/4096x256/b1` | 10.1605 ± 0.0351831 (W 0.0136955) | - | - | `*` one row has no measurement here |
+| `lu/4096x256/b1 [api-inclusive]` | 10.0724 ± 0.0456559 (W 0.0090962) | - | - | `*` one row has no measurement here |
+| `qr/1024x64/b1` | 1.15311 ± 0.00369134 (W 0.00348957) | - | - | `*` one row has no measurement here |
+| `qr/1024x64/b1 [api-inclusive]` | 1.32898 ± 0.0032164 (W 0.00312992) | - | - | `*` one row has no measurement here |
+| `qr/4096x256/b1` | 46.7094 ± 1.14736 (W 0.0805856) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr/4096x256/b1 [api-inclusive]` | 48.9142 ± 0.094771 (W 0.042129) | - | - | `*` one row has no measurement here |
+| `qr_factor/1024x64/b1` | 0.763628 ± 0.00349251 (W 0.00232287) | - | - | `*` one row has no measurement here |
+| `qr_factor/4096x256/b1` | 22.2555 ± 0.0376183 (W 0.0473406) | - | - | `*` one row has no measurement here |
+| `svd_thin/1024x64/b1` | 1.50367 ± 0.00592643 (W 0.00347868) | - | - | `*` one row has no measurement here |
+| `svd_thin/1024x64/b1 [api-inclusive]` | 1.51308 ± 0.00675799 (W 0.00503959) | - | - | `*` one row has no measurement here |
+| `svd_thin/4096x256/b1` | 56.2142 ± 0.0210166 (W 0.0551092) | - | - | `*` one row has no measurement here |
+| `svd_thin/4096x256/b1 [api-inclusive]` | 56.2317 ± 0.12916 (W 0.0588092) | - | - | `*` one row has no measurement here |
+| `svd_values/1024x64/b1` | 0.833975 ± 0.00222927 (W 0.00353076) | - | - | `*` one row has no measurement here |
+| `svd_values/1024x64/b1 [api-inclusive]` | 0.835561 ± 0.0034635 (W 0.00476956) | - | - | `*` one row has no measurement here |
+| `svd_values/4096x256/b1` | 27.1828 ± 0.0270922 (W 0.0243357) | - | - | `*` one row has no measurement here |
+| `svd_values/4096x256/b1 [api-inclusive]` | 27.2193 ± 0.0643947 (W 0.025756) | - | - | `*` one row has no measurement here |
+
+## linalg-tall, c32, c order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `full_piv_lu/1024x64/b1` | 0.38786 ± 0.00114519 (W 0.00253561) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/1024x64/b1 [api-inclusive]` | 0.414095 ± 0.00181188 (W 0.00265421) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1` | 10.6288 ± 0.0186503 (W 0.0121673) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1 [api-inclusive]` | 11.3079 ± 0.027602 (W 0.015454) | - | - | `*` one row has no measurement here |
+| `householder_apply/1024x64/b1 [block(basis=64,target=64)]` | 0.13551 ± 0.00208827 (W 0.0015167) | - | - | `*` one row has no measurement here |
+| `householder_apply/1024x64/b1 [sequence(basis=64,target=64)]` | 0.134601 ± 0.00101048 (W 0.00131782) | - | - | `*` one row has no measurement here |
+| `householder_apply/4096x256/b1 [block(basis=256,target=256)]` | 6.29507 ± 0.0238005 (W 0.0150207) | - | - | `*` one row has no measurement here |
+| `householder_apply/4096x256/b1 [sequence(basis=256,target=256)]` | 6.28379 ± 0.0191621 (W 0.0102312) | - | - | `*` one row has no measurement here |
+| `lu/1024x64/b1` | 0.285315 ± 0.00224618 (W 0.00156412) | - | - | `*` one row has no measurement here |
+| `lu/1024x64/b1 [api-inclusive]` | 0.312808 ± 0.00133848 (W 0.00179921) | - | - | `*` one row has no measurement here |
+| `lu/4096x256/b1` | 5.01524 ± 0.0682422 (W 0.00930369) | - | - | `*` one row has no measurement here |
+| `lu/4096x256/b1 [api-inclusive]` | 5.777 ± 0.0668388 (W 0.00932549) | - | - | `*` one row has no measurement here |
+| `qr/1024x64/b1` | 0.591253 ± 0.00756279 (W 0.00277734) | - | - | `*` one row has no measurement here |
+| `qr/1024x64/b1 [api-inclusive]` | 0.816005 ± 0.00384019 (W 0.00381705) | - | - | `*` one row has no measurement here |
+| `qr/4096x256/b1` | 16.9296 ± 0.261086 (W 0.0565276) | - | - | `*` one row has no measurement here |
+| `qr/4096x256/b1 [api-inclusive]` | 21.3114 ± 0.0730153 (W 0.0271947) | - | - | `*` one row has no measurement here |
+| `qr_factor/1024x64/b1` | 0.461048 ± 0.00194125 (W 0.00235283) | - | - | `*` one row has no measurement here |
+| `qr_factor/4096x256/b1` | 10.0692 ± 0.0113752 (W 0.0161951) | - | - | `*` one row has no measurement here |
+| `svd_thin/1024x64/b1` | 0.945684 ± 0.00182338 (W 0.00442582) | - | - | `*` one row has no measurement here |
+| `svd_thin/1024x64/b1 [api-inclusive]` | 0.955765 ± 0.00337774 (W 0.00324632) | - | - | `*` one row has no measurement here |
+| `svd_thin/4096x256/b1` | 25.0206 ± 0.0332539 (W 0.0323182) | - | - | `*` one row has no measurement here |
+| `svd_thin/4096x256/b1 [api-inclusive]` | 25.1393 ± 0.0282139 (W 0.0454247) | - | - | `*` one row has no measurement here |
+| `svd_values/1024x64/b1` | 0.651317 ± 0.0605602 (W 0.00211312) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_values/1024x64/b1 [api-inclusive]` | 0.639668 ± 0.00449057 (W 0.00362633) | - | - | `*` one row has no measurement here |
+| `svd_values/4096x256/b1` | 16.4714 ± 0.0382556 (W 0.0238007) | - | - | `*` one row has no measurement here |
+| `svd_values/4096x256/b1 [api-inclusive]` | 16.4517 ± 0.0396003 (W 0.0195041) | - | - | `*` one row has no measurement here |
+
+## linalg-tall, c32, c order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `full_piv_lu/1024x64/b1` | 0.344836 ± 0.00168014 (W 0.00192019) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/1024x64/b1 [api-inclusive]` | 0.390468 ± 0.00119666 (W 0.00291222) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1` | 6.53034 ± 0.0173119 (W 0.00608372) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1 [api-inclusive]` | 7.60134 ± 0.0312974 (W 0.0102083) | - | - | `*` one row has no measurement here |
+| `householder_apply/1024x64/b1 [block(basis=64,target=64)]` | 0.0962715 ± 0.000618964 (W 0.00151056) | - | - | `*` one row has no measurement here |
+| `householder_apply/1024x64/b1 [sequence(basis=64,target=64)]` | 0.096156 ± 0.000427497 (W 0.000962873) | - | - | `*` one row has no measurement here |
+| `householder_apply/4096x256/b1 [block(basis=256,target=256)]` | 3.35733 ± 0.0167387 (W 0.0208723) | - | - | `*` one row has no measurement here |
+| `householder_apply/4096x256/b1 [sequence(basis=256,target=256)]` | 3.33692 ± 0.0140299 (W 0.0135744) | - | - | `*` one row has no measurement here |
+| `lu/1024x64/b1` | 0.259074 ± 0.00200192 (W 0.00161996) | - | - | `*` one row has no measurement here |
+| `lu/1024x64/b1 [api-inclusive]` | 0.304005 ± 0.00323307 (W 0.00255353) | - | - | `*` one row has no measurement here |
+| `lu/4096x256/b1` | 4.14347 ± 0.00738745 (W 0.00770313) | - | - | `*` one row has no measurement here |
+| `lu/4096x256/b1 [api-inclusive]` | 5.26051 ± 0.0290208 (W 0.021456) | - | - | `*` one row has no measurement here |
+| `qr/1024x64/b1` | 0.512328 ± 0.00232424 (W 0.00291033) | - | - | `*` one row has no measurement here |
+| `qr/1024x64/b1 [api-inclusive]` | 0.738282 ± 0.0017882 (W 0.00313944) | - | - | `*` one row has no measurement here |
+| `qr/4096x256/b1` | 11.1528 ± 0.170585 (W 0.0202709) | - | - | `*` one row has no measurement here |
+| `qr/4096x256/b1 [api-inclusive]` | 16.8305 ± 0.129676 (W 0.0477331) | - | - | `*` one row has no measurement here |
+| `qr_factor/1024x64/b1` | 0.411242 ± 0.00104522 (W 0.00290443) | - | - | `*` one row has no measurement here |
+| `qr_factor/4096x256/b1` | 7.51475 ± 0.0137899 (W 0.0139389) | - | - | `*` one row has no measurement here |
+| `svd_thin/1024x64/b1` | 0.877825 ± 0.0101496 (W 0.00383577) | - | - | `*` one row has no measurement here |
+| `svd_thin/1024x64/b1 [api-inclusive]` | 0.884877 ± 0.00950465 (W 0.00310706) | - | - | `*` one row has no measurement here |
+| `svd_thin/4096x256/b1` | 19.9107 ± 0.0841332 (W 0.0357313) | - | - | `*` one row has no measurement here |
+| `svd_thin/4096x256/b1 [api-inclusive]` | 19.9824 ± 0.0516009 (W 0.043355) | - | - | `*` one row has no measurement here |
+| `svd_values/1024x64/b1` | 0.611187 ± 0.00512088 (W 0.00414327) | - | - | `*` one row has no measurement here |
+| `svd_values/1024x64/b1 [api-inclusive]` | 0.609409 ± 0.00240542 (W 0.00389136) | - | - | `*` one row has no measurement here |
+| `svd_values/4096x256/b1` | 14.3077 ± 0.03311 (W 0.0226761) | - | - | `*` one row has no measurement here |
+| `svd_values/4096x256/b1 [api-inclusive]` | 14.3002 ± 0.0163046 (W 0.0237334) | - | - | `*` one row has no measurement here |
+
+## linalg-tall, c32, f order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `full_piv_lu/1024x64/b1` | 0.570176 ± 0.00214037 (W 0.00190688) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/1024x64/b1 [api-inclusive]` | 0.573623 ± 0.00118508 (W 0.0019653) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1` | 33.8624 ± 0.024741 (W 0.0243421) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1 [api-inclusive]` | 32.4143 ± 0.0459528 (W 0.0219894) | - | - | `*` one row has no measurement here |
+| `householder_apply/1024x64/b1 [block(basis=64,target=64)]` | 0.426608 ± 0.00139608 (W 0.00154077) | - | - | `*` one row has no measurement here |
+| `householder_apply/1024x64/b1 [sequence(basis=64,target=64)]` | 0.426748 ± 0.00199157 (W 0.00146605) | - | - | `*` one row has no measurement here |
+| `householder_apply/4096x256/b1 [block(basis=256,target=256)]` | 23.9279 ± 0.029074 (W 0.0340158) | - | - | `*` one row has no measurement here |
+| `householder_apply/4096x256/b1 [sequence(basis=256,target=256)]` | 23.8975 ± 0.035283 (W 0.0301114) | - | - | `*` one row has no measurement here |
+| `lu/1024x64/b1` | 0.263618 ± 0.00320642 (W 0.00217195) | - | - | `*` one row has no measurement here |
+| `lu/1024x64/b1 [api-inclusive]` | 0.275482 ± 0.00291824 (W 0.00148544) | - | - | `*` one row has no measurement here |
+| `lu/4096x256/b1` | 8.56158 ± 0.0282314 (W 0.0145129) | - | - | `*` one row has no measurement here |
+| `lu/4096x256/b1 [api-inclusive]` | 8.68615 ± 0.0192374 (W 0.00841195) | - | - | `*` one row has no measurement here |
+| `qr/1024x64/b1` | 1.01875 ± 0.00308019 (W 0.00200104) | - | - | `*` one row has no measurement here |
+| `qr/1024x64/b1 [api-inclusive]` | 1.2513 ± 0.00618534 (W 0.00261858) | - | - | `*` one row has no measurement here |
+| `qr/4096x256/b1` | 43.3775 ± 0.0839102 (W 0.0198354) | - | - | `*` one row has no measurement here |
+| `qr/4096x256/b1 [api-inclusive]` | 46.9267 ± 0.0983003 (W 0.0404706) | - | - | `*` one row has no measurement here |
+| `qr_factor/1024x64/b1` | 0.593454 ± 0.00180978 (W 0.00222922) | - | - | `*` one row has no measurement here |
+| `qr_factor/4096x256/b1` | 19.0336 ± 0.0253291 (W 0.0159544) | - | - | `*` one row has no measurement here |
+| `svd_thin/1024x64/b1` | 1.45652 ± 0.00206234 (W 0.00249244) | - | - | `*` one row has no measurement here |
+| `svd_thin/1024x64/b1 [api-inclusive]` | 1.4659 ± 0.0035227 (W 0.00304066) | - | - | `*` one row has no measurement here |
+| `svd_thin/4096x256/b1` | 52.211 ± 0.120431 (W 0.0411879) | - | - | `*` one row has no measurement here |
+| `svd_thin/4096x256/b1 [api-inclusive]` | 52.222 ± 0.0995496 (W 0.0590394) | - | - | `*` one row has no measurement here |
+| `svd_values/1024x64/b1` | 0.787005 ± 0.00265641 (W 0.00266542) | - | - | `*` one row has no measurement here |
+| `svd_values/1024x64/b1 [api-inclusive]` | 0.787231 ± 0.00184037 (W 0.00262971) | - | - | `*` one row has no measurement here |
+| `svd_values/4096x256/b1` | 23.2502 ± 0.0376005 (W 0.0258105) | - | - | `*` one row has no measurement here |
+| `svd_values/4096x256/b1 [api-inclusive]` | 23.2363 ± 0.00814288 (W 0.017777) | - | - | `*` one row has no measurement here |
+
+## linalg-tall, c32, f order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `full_piv_lu/1024x64/b1` | 0.316944 ± 0.00136032 (W 0.00200125) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/1024x64/b1 [api-inclusive]` | 0.340635 ± 0.00185983 (W 0.00153037) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1` | 10.2096 ± 0.0254484 (W 0.0121973) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1 [api-inclusive]` | 10.157 ± 0.0265702 (W 0.0146696) | - | - | `*` one row has no measurement here |
+| `householder_apply/1024x64/b1 [block(basis=64,target=64)]` | 0.15367 ± 0.00147025 (W 0.00161041) | - | - | `*` one row has no measurement here |
+| `householder_apply/1024x64/b1 [sequence(basis=64,target=64)]` | 0.153714 ± 0.0012709 (W 0.0012421) | - | - | `*` one row has no measurement here |
+| `householder_apply/4096x256/b1 [block(basis=256,target=256)]` | 7.23457 ± 0.110811 (W 0.103511) | - | - | `*` one row has no measurement here |
+| `householder_apply/4096x256/b1 [sequence(basis=256,target=256)]` | 7.18154 ± 0.164966 (W 0.123929) | - | - | `*` one row has no measurement here |
+| `lu/1024x64/b1` | 0.22154 ± 0.00116876 (W 0.00129803) | - | - | `*` one row has no measurement here |
+| `lu/1024x64/b1 [api-inclusive]` | 0.241489 ± 0.00138476 (W 0.00108316) | - | - | `*` one row has no measurement here |
+| `lu/4096x256/b1` | 4.1208 ± 0.0195921 (W 0.00836226) | - | - | `*` one row has no measurement here |
+| `lu/4096x256/b1 [api-inclusive]` | 4.33494 ± 0.00778852 (W 0.00722289) | - | - | `*` one row has no measurement here |
+| `qr/1024x64/b1` | 0.53614 ± 0.00216256 (W 0.00269547) | - | - | `*` one row has no measurement here |
+| `qr/1024x64/b1 [api-inclusive]` | 0.731486 ± 0.00361561 (W 0.00325277) | - | - | `*` one row has no measurement here |
+| `qr/4096x256/b1` | 15.8776 ± 0.0209472 (W 0.021577) | - | - | `*` one row has no measurement here |
+| `qr/4096x256/b1 [api-inclusive]` | 19.0772 ± 0.0676911 (W 0.0276899) | - | - | `*` one row has no measurement here |
+| `qr_factor/1024x64/b1` | 0.393759 ± 0.0013344 (W 0.00190788) | - | - | `*` one row has no measurement here |
+| `qr_factor/4096x256/b1` | 9.2043 ± 0.0118427 (W 0.0100044) | - | - | `*` one row has no measurement here |
+| `svd_thin/1024x64/b1` | 0.901402 ± 0.00462089 (W 0.00141364) | - | - | `*` one row has no measurement here |
+| `svd_thin/1024x64/b1 [api-inclusive]` | 0.910985 ± 0.00281481 (W 0.00300556) | - | - | `*` one row has no measurement here |
+| `svd_thin/4096x256/b1` | 21.0367 ± 0.0221392 (W 0.0215847) | - | - | `*` one row has no measurement here |
+| `svd_thin/4096x256/b1 [api-inclusive]` | 21.1203 ± 0.0465519 (W 0.0336908) | - | - | `*` one row has no measurement here |
+| `svd_values/1024x64/b1` | 0.598124 ± 0.00199175 (W 0.00160267) | - | - | `*` one row has no measurement here |
+| `svd_values/1024x64/b1 [api-inclusive]` | 0.599344 ± 0.00132528 (W 0.00157863) | - | - | `*` one row has no measurement here |
+| `svd_values/4096x256/b1` | 12.5648 ± 0.0293097 (W 0.0112077) | - | - | `*` one row has no measurement here |
+| `svd_values/4096x256/b1 [api-inclusive]` | 12.5533 ± 0.0101731 (W 0.00969548) | - | - | `*` one row has no measurement here |
+
+## linalg-tall, c32, f order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `full_piv_lu/1024x64/b1` | 0.2941 ± 0.00149695 (W 0.00123241) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/1024x64/b1 [api-inclusive]` | 0.317746 ± 0.00205513 (W 0.00213264) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1` | 6.27003 ± 0.0150091 (W 0.010094) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/4096x256/b1 [api-inclusive]` | 6.40918 ± 0.0108169 (W 0.00851252) | - | - | `*` one row has no measurement here |
+| `householder_apply/1024x64/b1 [block(basis=64,target=64)]` | 0.0975545 ± 0.00238296 (W 0.00165022) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `householder_apply/1024x64/b1 [sequence(basis=64,target=64)]` | 0.098002 ± 0.00113168 (W 0.000905877) | - | - | `*` one row has no measurement here |
+| `householder_apply/4096x256/b1 [block(basis=256,target=256)]` | 5.34161 ± 0.0670788 (W 0.119983) | - | - | `*` one row has no measurement here |
+| `householder_apply/4096x256/b1 [sequence(basis=256,target=256)]` | 5.38591 ± 0.237728 (W 0.1058) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `lu/1024x64/b1` | 0.213746 ± 0.00184197 (W 0.00170804) | - | - | `*` one row has no measurement here |
+| `lu/1024x64/b1 [api-inclusive]` | 0.235497 ± 0.0019952 (W 0.00136068) | - | - | `*` one row has no measurement here |
+| `lu/4096x256/b1` | 3.66314 ± 0.00330404 (W 0.00794695) | - | - | `*` one row has no measurement here |
+| `lu/4096x256/b1 [api-inclusive]` | 3.94942 ± 0.0081456 (W 0.00721543) | - | - | `*` one row has no measurement here |
+| `qr/1024x64/b1` | 0.447867 ± 0.00211995 (W 0.00277911) | - | - | `*` one row has no measurement here |
+| `qr/1024x64/b1 [api-inclusive]` | 0.650837 ± 0.00389331 (W 0.00274841) | - | - | `*` one row has no measurement here |
+| `qr/4096x256/b1` | 10.8355 ± 0.0236134 (W 0.0156211) | - | - | `*` one row has no measurement here |
+| `qr/4096x256/b1 [api-inclusive]` | 14.4447 ± 0.0695434 (W 0.0564397) | - | - | `*` one row has no measurement here |
+| `qr_factor/1024x64/b1` | 0.360524 ± 0.000763299 (W 0.0022278) | - | - | `*` one row has no measurement here |
+| `qr_factor/4096x256/b1` | 7.00531 ± 0.0177111 (W 0.00751266) | - | - | `*` one row has no measurement here |
+| `svd_thin/1024x64/b1` | 0.823388 ± 0.00223502 (W 0.00198336) | - | - | `*` one row has no measurement here |
+| `svd_thin/1024x64/b1 [api-inclusive]` | 0.834478 ± 0.00473267 (W 0.00224292) | - | - | `*` one row has no measurement here |
+| `svd_thin/4096x256/b1` | 15.8193 ± 0.048739 (W 0.0419821) | - | - | `*` one row has no measurement here |
+| `svd_thin/4096x256/b1 [api-inclusive]` | 15.9959 ± 0.0289031 (W 0.043054) | - | - | `*` one row has no measurement here |
+| `svd_values/1024x64/b1` | 0.572167 ± 0.00111803 (W 0.00211972) | - | - | `*` one row has no measurement here |
+| `svd_values/1024x64/b1 [api-inclusive]` | 0.572821 ± 0.00165641 (W 0.00288922) | - | - | `*` one row has no measurement here |
+| `svd_values/4096x256/b1` | 10.3754 ± 0.0130517 (W 0.0154046) | - | - | `*` one row has no measurement here |
+| `svd_values/4096x256/b1 [api-inclusive]` | 10.3824 ± 0.0300044 (W 0.0132837) | - | - | `*` one row has no measurement here |
+
+Not applicable to this population's shapes and reported as skipped: `cholesky/1024x64`, `cholesky/4096x256`, `eigh/1024x64`, `eigh/4096x256`, `full_piv_lu/1024x64`, `full_piv_lu/4096x256`, `householder_apply/1024x64`, `householder_apply/4096x256`, `lu/1024x64`, `lu/4096x256`, `qr/1024x64`, `qr/4096x256`, `qr_factor/1024x64`, `qr_factor/4096x256`, `solve/1024x64`, `solve/4096x256`, `svd_thin/1024x64`, `svd_thin/4096x256`, `svd_values/1024x64`, `svd_values/4096x256`, `triangular_solve/1024x64`, `triangular_solve/4096x256`, `upgrade_factor/1024x64`, `upgrade_factor/4096x256`.
+
+## linalg-wide, f64, c order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `full_piv_lu/256x4096/b1` | 29.0795 ± 0.104561 (W 0.0255758) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/256x4096/b1 [api-inclusive]` | 31.1192 ± 0.365033 (W 0.104742) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/64x1024/b1` | 0.44084 ± 0.00953279 (W 0.00184516) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `full_piv_lu/64x1024/b1 [api-inclusive]` | 0.784889 ± 0.00246317 (W 0.00178371) | - | - | `*` one row has no measurement here |
+| `lu/256x4096/b1` | 5.04575 ± 0.0139952 (W 0.00585484) | - | - | `*` one row has no measurement here |
+| `lu/256x4096/b1 [api-inclusive]` | 7.07554 ± 0.022046 (W 0.0220604) | - | - | `*` one row has no measurement here |
+| `lu/64x1024/b1` | 0.159564 ± 0.00103347 (W 0.00121304) | - | - | `*` one row has no measurement here |
+| `lu/64x1024/b1 [api-inclusive]` | 0.257014 ± 0.000861871 (W 0.00166949) | - | - | `*` one row has no measurement here |
+| `qr/256x4096/b1` | 13.0153 ± 0.61483 (W 0.0187342) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr/256x4096/b1 [api-inclusive]` | 11.7285 ± 0.063228 (W 0.0245026) | - | - | `*` one row has no measurement here |
+| `qr/64x1024/b1` | 0.583835 ± 0.00550004 (W 0.00442995) | - | - | `*` one row has no measurement here |
+| `qr/64x1024/b1 [api-inclusive]` | 0.384974 ± 0.00256808 (W 0.00270873) | - | - | `*` one row has no measurement here |
+| `qr_factor/256x4096/b1` | 12.4354 ± 0.386946 (W 0.018808) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr_factor/64x1024/b1` | 0.563651 ± 0.00632893 (W 0.00336911) | - | - | `*` one row has no measurement here |
+| `svd_thin/256x4096/b1` | 31.9597 ± 0.0371966 (W 0.0392207) | - | - | `*` one row has no measurement here |
+| `svd_thin/256x4096/b1 [api-inclusive]` | 32.0227 ± 0.0761908 (W 0.0595503) | - | - | `*` one row has no measurement here |
+| `svd_thin/64x1024/b1` | 1.04217 ± 0.0045577 (W 0.00249281) | - | - | `*` one row has no measurement here |
+| `svd_thin/64x1024/b1 [api-inclusive]` | 1.04518 ± 0.00239638 (W 0.00171257) | - | - | `*` one row has no measurement here |
+| `svd_values/256x4096/b1` | 14.8039 ± 0.028797 (W 0.0117352) | - | - | `*` one row has no measurement here |
+| `svd_values/256x4096/b1 [api-inclusive]` | 14.7837 ± 0.0166094 (W 0.0152805) | - | - | `*` one row has no measurement here |
+| `svd_values/64x1024/b1` | 0.550491 ± 0.00157109 (W 0.0020818) | - | - | `*` one row has no measurement here |
+| `svd_values/64x1024/b1 [api-inclusive]` | 0.549652 ± 0.00218049 (W 0.00224355) | - | - | `*` one row has no measurement here |
+
+## linalg-wide, f64, c order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `full_piv_lu/256x4096/b1` | 8.18296 ± 0.0127224 (W 0.0122565) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/256x4096/b1 [api-inclusive]` | 9.68967 ± 0.0803359 (W 0.0168032) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/64x1024/b1` | 0.228871 ± 0.00163471 (W 0.00212604) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/64x1024/b1 [api-inclusive]` | 0.364985 ± 0.00195202 (W 0.00174131) | - | - | `*` one row has no measurement here |
+| `lu/256x4096/b1` | 1.62827 ± 0.00564342 (W 0.00327909) | - | - | `*` one row has no measurement here |
+| `lu/256x4096/b1 [api-inclusive]` | 2.93523 ± 0.0161226 (W 0.00970156) | - | - | `*` one row has no measurement here |
+| `lu/64x1024/b1` | 0.0779725 ± 0.00191277 (W 0.000858915) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `lu/64x1024/b1 [api-inclusive]` | 0.1453 ± 0.000618762 (W 0.00122362) | - | - | `*` one row has no measurement here |
+| `qr/256x4096/b1` | 5.58867 ± 0.238594 (W 0.0209765) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr/256x4096/b1 [api-inclusive]` | 4.39581 ± 0.0820743 (W 0.0122067) | - | - | `*` one row has no measurement here |
+| `qr/64x1024/b1` | 0.39241 ± 0.00235377 (W 0.00342741) | - | - | `*` one row has no measurement here |
+| `qr/64x1024/b1 [api-inclusive]` | 0.213211 ± 0.00153909 (W 0.00119709) | - | - | `*` one row has no measurement here |
+| `qr_factor/256x4096/b1` | 5.43316 ± 0.0465866 (W 0.017238) | - | - | `*` one row has no measurement here |
+| `qr_factor/64x1024/b1` | 0.379714 ± 0.00330199 (W 0.00297856) | - | - | `*` one row has no measurement here |
+| `svd_thin/256x4096/b1` | 14.9781 ± 0.0547691 (W 0.0290471) | - | - | `*` one row has no measurement here |
+| `svd_thin/256x4096/b1 [api-inclusive]` | 15.0134 ± 0.0254508 (W 0.026603) | - | - | `*` one row has no measurement here |
+| `svd_thin/64x1024/b1` | 0.778501 ± 0.00397762 (W 0.0030276) | - | - | `*` one row has no measurement here |
+| `svd_thin/64x1024/b1 [api-inclusive]` | 0.782981 ± 0.00314217 (W 0.00231119) | - | - | `*` one row has no measurement here |
+| `svd_values/256x4096/b1` | 9.18153 ± 0.104675 (W 0.0105636) | - | - | `*` one row has no measurement here |
+| `svd_values/256x4096/b1 [api-inclusive]` | 9.18401 ± 0.102764 (W 0.0112957) | - | - | `*` one row has no measurement here |
+| `svd_values/64x1024/b1` | 0.500183 ± 0.00201587 (W 0.0023317) | - | - | `*` one row has no measurement here |
+| `svd_values/64x1024/b1 [api-inclusive]` | 0.499635 ± 0.00120558 (W 0.0018038) | - | - | `*` one row has no measurement here |
+
+## linalg-wide, f64, c order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `full_piv_lu/256x4096/b1` | 4.72015 ± 0.0168859 (W 0.00783778) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/256x4096/b1 [api-inclusive]` | 5.83513 ± 0.0592122 (W 0.0203596) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/64x1024/b1` | 0.212197 ± 0.000566237 (W 0.00213843) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/64x1024/b1 [api-inclusive]` | 0.316401 ± 0.000933036 (W 0.00215369) | - | - | `*` one row has no measurement here |
+| `lu/256x4096/b1` | 1.01306 ± 0.00664453 (W 0.004369) | - | - | `*` one row has no measurement here |
+| `lu/256x4096/b1 [api-inclusive]` | 2.25544 ± 0.0227161 (W 0.00887118) | - | - | `*` one row has no measurement here |
+| `lu/64x1024/b1` | 0.0630975 ± 0.00118041 (W 0.00148096) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `lu/64x1024/b1 [api-inclusive]` | 0.128406 ± 0.00112187 (W 0.0018079) | - | - | `*` one row has no measurement here |
+| `qr/256x4096/b1` | 4.45486 ± 0.237896 (W 0.0155509) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr/256x4096/b1 [api-inclusive]` | 3.33526 ± 0.0949726 (W 0.0100056) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr/64x1024/b1` | 0.359622 ± 0.0029835 (W 0.00283661) | - | - | `*` one row has no measurement here |
+| `qr/64x1024/b1 [api-inclusive]` | 0.193473 ± 0.00175742 (W 0.00185266) | - | - | `*` one row has no measurement here |
+| `qr_factor/256x4096/b1` | 4.59317 ± 0.292659 (W 0.0187771) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr_factor/64x1024/b1` | 0.349178 ± 0.0037634 (W 0.00333909) | - | - | `*` one row has no measurement here |
+| `svd_thin/256x4096/b1` | 12.3485 ± 0.02795 (W 0.0320738) | - | - | `*` one row has no measurement here |
+| `svd_thin/256x4096/b1 [api-inclusive]` | 12.4254 ± 0.038269 (W 0.0281244) | - | - | `*` one row has no measurement here |
+| `svd_thin/64x1024/b1` | 0.73821 ± 0.00577186 (W 0.00224559) | - | - | `*` one row has no measurement here |
+| `svd_thin/64x1024/b1 [api-inclusive]` | 0.74866 ± 0.0015233 (W 0.00219981) | - | - | `*` one row has no measurement here |
+| `svd_values/256x4096/b1` | 8.11503 ± 0.068543 (W 0.0110192) | - | - | `*` one row has no measurement here |
+| `svd_values/256x4096/b1 [api-inclusive]` | 8.1264 ± 0.0860201 (W 0.0152769) | - | - | `*` one row has no measurement here |
+| `svd_values/64x1024/b1` | 0.488607 ± 0.00230022 (W 0.00215816) | - | - | `*` one row has no measurement here |
+| `svd_values/64x1024/b1 [api-inclusive]` | 0.487949 ± 0.00151497 (W 0.00266) | - | - | `*` one row has no measurement here |
+
+## linalg-wide, f64, f order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `full_piv_lu/256x4096/b1` | 36.5453 ± 0.133143 (W 0.035809) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/256x4096/b1 [api-inclusive]` | 30.1179 ± 0.259935 (W 0.0467164) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/64x1024/b1` | 0.76291 ± 0.00712336 (W 0.00161669) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/64x1024/b1 [api-inclusive]` | 0.725535 ± 0.00164063 (W 0.00169363) | - | - | `*` one row has no measurement here |
+| `lu/256x4096/b1` | 5.70993 ± 0.0187905 (W 0.0070465) | 14.7455 ± 0.0177851 (W 0.0131718) | 🔵 colmat 2.58× faster than `lapack-aocl` |  |
+| `lu/256x4096/b1 [api-inclusive]` | 5.88361 ± 0.0142289 (W 0.00843731) | - | - | `*` one row has no measurement here |
+| `lu/64x1024/b1` | 0.176188 ± 0.000919833 (W 0.00131279) | 0.13257 ± 0.00241878 (W 0.00104568) | 🔴 colmat 1.33× slower than `lapack-aocl` |  |
+| `lu/64x1024/b1 [api-inclusive]` | 0.184182 ± 0.000898805 (W 0.00129463) | - | - | `*` one row has no measurement here |
+| `qr/256x4096/b1` | 10.4032 ± 0.053794 (W 0.00970225) | 54.5975 ± 0.199534 (W 0.0762173) | 🔵 colmat 5.25× faster than `lapack-aocl` |  |
+| `qr/256x4096/b1 [api-inclusive]` | 10.3691 ± 0.0300525 (W 0.00815446) | - | - | `*` one row has no measurement here |
+| `qr/64x1024/b1` | 0.290498 ± 0.0025507 (W 0.00163193) | 0.709086 ± 0.0095247 (W 0.00617752) | 🔵 colmat 2.44× faster than `lapack-aocl` |  |
+| `qr/64x1024/b1 [api-inclusive]` | 0.298148 ± 0.00051048 (W 0.00171077) | - | - | `*` one row has no measurement here |
+| `qr_factor/256x4096/b1` | 9.77733 ± 0.0142744 (W 0.0120811) | 53.6137 ± 0.259986 (W 0.0499187) | 🔵 colmat 5.48× faster than `lapack-aocl` |  |
+| `qr_factor/64x1024/b1` | 0.271927 ± 0.00143085 (W 0.00159243) | 0.657738 ± 0.0523746 (W 0.00436797) | 🔵 colmat 2.42× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `svd_thin/256x4096/b1` | 35.9026 ± 0.04478 (W 0.0415165) | 92.7371 ± 0.613195 (W 0.230434) | 🔵 colmat 2.58× faster than `lapack-aocl` |  |
+| `svd_thin/256x4096/b1 [api-inclusive]` | 35.96 ± 0.0473961 (W 0.0406459) | - | - | `*` one row has no measurement here |
+| `svd_thin/64x1024/b1` | 1.09136 ± 0.0025848 (W 0.00337645) | 2.49051 ± 0.00889931 (W 0.00780357) | 🔵 colmat 2.28× faster than `lapack-aocl` |  |
+| `svd_thin/64x1024/b1 [api-inclusive]` | 1.09128 ± 0.00455681 (W 0.00285086) | - | - | `*` one row has no measurement here |
+| `svd_values/256x4096/b1` | 18.6659 ± 0.0197306 (W 0.0172795) | 41.6763 ± 0.316281 (W 0.159615) | 🔵 colmat 2.23× faster than `lapack-aocl` |  |
+| `svd_values/256x4096/b1 [api-inclusive]` | 18.6746 ± 0.0365876 (W 0.0218101) | - | - | `*` one row has no measurement here |
+| `svd_values/64x1024/b1` | 0.598336 ± 0.00274071 (W 0.0038484) | 1.34674 ± 0.00467144 (W 0.00700071) | 🔵 colmat 2.25× faster than `lapack-aocl` |  |
+| `svd_values/64x1024/b1 [api-inclusive]` | 0.595047 ± 0.00681639 (W 0.00560364) | - | - | `*` one row has no measurement here |
+
+## linalg-wide, f64, f order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `full_piv_lu/256x4096/b1` | 9.58555 ± 0.00937026 (W 0.0108987) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/256x4096/b1 [api-inclusive]` | 8.47479 ± 0.016969 (W 0.00748579) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/64x1024/b1` | 0.295237 ± 0.0013511 (W 0.00168597) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/64x1024/b1 [api-inclusive]` | 0.296437 ± 0.00232501 (W 0.00131846) | - | - | `*` one row has no measurement here |
+| `lu/256x4096/b1` | 1.55491 ± 0.00381724 (W 0.0042609) | 4.67139 ± 0.00918072 (W 0.00867577) | 🔵 colmat 3.00× faster than `lapack-aocl` |  |
+| `lu/256x4096/b1 [api-inclusive]` | 1.78686 ± 0.00679985 (W 0.00424444) | - | - | `*` one row has no measurement here |
+| `lu/64x1024/b1` | 0.0575885 ± 0.000366921 (W 0.000282176) | 0.0651985 ± 0.000380413 (W 0.000457731) | 🔵 colmat 1.13× faster than `lapack-aocl` |  |
+| `lu/64x1024/b1 [api-inclusive]` | 0.0710265 ± 0.000472791 (W 0.000249241) | - | - | `*` one row has no measurement here |
+| `qr/256x4096/b1` | 2.97695 ± 0.00712535 (W 0.0067533) | 17.0269 ± 0.047364 (W 0.0361554) | 🔵 colmat 5.72× faster than `lapack-aocl` |  |
+| `qr/256x4096/b1 [api-inclusive]` | 3.15438 ± 0.0721277 (W 0.00833669) | - | - | `*` one row has no measurement here |
+| `qr/64x1024/b1` | 0.125451 ± 0.000262174 (W 0.000533903) | 0.73261 ± 0.0119581 (W 0.00587158) | 🔵 colmat 5.84× faster than `lapack-aocl` |  |
+| `qr/64x1024/b1 [api-inclusive]` | 0.139091 ± 0.000770579 (W 0.000394196) | - | - | `*` one row has no measurement here |
+| `qr_factor/256x4096/b1` | 2.77756 ± 0.00336308 (W 0.00790407) | 16.0719 ± 0.0970074 (W 0.0316552) | 🔵 colmat 5.79× faster than `lapack-aocl` |  |
+| `qr_factor/64x1024/b1` | 0.113333 ± 0.000330659 (W 0.000503773) | 0.647894 ± 0.0364284 (W 0.00443935) | 🔵 colmat 5.72× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `svd_thin/256x4096/b1` | 18.9151 ± 0.0499854 (W 0.0331693) | 84.1423 ± 1.5494 (W 1.70534) | 🔵 colmat 4.45× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `svd_thin/256x4096/b1 [api-inclusive]` | 18.9915 ± 0.0387439 (W 0.0257607) | - | - | `*` one row has no measurement here |
+| `svd_thin/64x1024/b1` | 0.820693 ± 0.00881791 (W 0.00565346) | 2.93334 ± 0.0259749 (W 0.0270369) | 🔵 colmat 3.57× faster than `lapack-aocl` |  |
+| `svd_thin/64x1024/b1 [api-inclusive]` | 0.824751 ± 0.00266602 (W 0.00401745) | - | - | `*` one row has no measurement here |
+| `svd_values/256x4096/b1` | 13.1088 ± 0.0268147 (W 0.0187932) | 38.712 ± 0.19138 (W 0.130089) | 🔵 colmat 2.95× faster than `lapack-aocl` |  |
+| `svd_values/256x4096/b1 [api-inclusive]` | 13.0945 ± 0.00771482 (W 0.0216077) | - | - | `*` one row has no measurement here |
+| `svd_values/64x1024/b1` | 0.558631 ± 0.00602347 (W 0.00298488) | 1.34334 ± 0.00560918 (W 0.00650264) | 🔵 colmat 2.40× faster than `lapack-aocl` |  |
+| `svd_values/64x1024/b1 [api-inclusive]` | 0.545443 ± 0.00555546 (W 0.00487562) | - | - | `*` one row has no measurement here |
+
+## linalg-wide, f64, f order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `full_piv_lu/256x4096/b1` | 4.91789 ± 0.137524 (W 0.00663501) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `full_piv_lu/256x4096/b1 [api-inclusive]` | 4.58089 ± 0.0462257 (W 0.00990988) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/64x1024/b1` | 0.236229 ± 0.00108394 (W 0.00166679) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/64x1024/b1 [api-inclusive]` | 0.244365 ± 0.00191025 (W 0.00215132) | - | - | `*` one row has no measurement here |
+| `lu/256x4096/b1` | 0.860744 ± 0.00251568 (W 0.00275578) | 4.70835 ± 0.00415996 (W 0.00896744) | 🔵 colmat 5.47× faster than `lapack-aocl` |  |
+| `lu/256x4096/b1 [api-inclusive]` | 1.13271 ± 0.00781848 (W 0.00342535) | - | - | `*` one row has no measurement here |
+| `lu/64x1024/b1` | 0.0380735 ± 0.000265661 (W 0.000283237) | 0.0651995 ± 0.000382841 (W 0.000737619) | 🔵 colmat 1.71× faster than `lapack-aocl` |  |
+| `lu/64x1024/b1 [api-inclusive]` | 0.0551985 ± 0.000291573 (W 0.000375664) | - | - | `*` one row has no measurement here |
+| `qr/256x4096/b1` | 1.77081 ± 0.00478266 (W 0.00455892) | 12.013 ± 0.0687702 (W 0.0436321) | 🔵 colmat 6.78× faster than `lapack-aocl` |  |
+| `qr/256x4096/b1 [api-inclusive]` | 2.06971 ± 0.00700908 (W 0.00366601) | - | - | `*` one row has no measurement here |
+| `qr/64x1024/b1` | 0.101836 ± 0.000710487 (W 0.000993919) | 0.76766 ± 0.0490384 (W 0.00655731) | 🔵 colmat 7.54× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `qr/64x1024/b1 [api-inclusive]` | 0.119178 ± 0.000222129 (W 0.00082568) | - | - | `*` one row has no measurement here |
+| `qr_factor/256x4096/b1` | 1.65658 ± 0.00792535 (W 0.00483139) | 10.6733 ± 0.0281578 (W 0.0455109) | 🔵 colmat 6.44× faster than `lapack-aocl` |  |
+| `qr_factor/64x1024/b1` | 0.090236 ± 0.000590561 (W 0.000534434) | 0.658752 ± 0.0389167 (W 0.00406452) | 🔵 colmat 7.30× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `svd_thin/256x4096/b1` | 16.4008 ± 0.0279806 (W 0.0271482) | 75.7151 ± 0.831886 (W 0.898406) | 🔵 colmat 4.62× faster than `lapack-aocl` |  |
+| `svd_thin/256x4096/b1 [api-inclusive]` | 16.4777 ± 0.0490472 (W 0.0414914) | - | - | `*` one row has no measurement here |
+| `svd_thin/64x1024/b1` | 0.79455 ± 0.00597199 (W 0.00227135) | 2.96629 ± 0.0363416 (W 0.0521584) | 🔵 colmat 3.73× faster than `lapack-aocl` |  |
+| `svd_thin/64x1024/b1 [api-inclusive]` | 0.794858 ± 0.00653192 (W 0.00437086) | - | - | `*` one row has no measurement here |
+| `svd_values/256x4096/b1` | 12.0071 ± 0.0218453 (W 0.035508) | 37.93 ± 0.161501 (W 0.709649) | 🔵 colmat 3.16× faster than `lapack-aocl` |  |
+| `svd_values/256x4096/b1 [api-inclusive]` | 12.1078 ± 0.0698567 (W 0.0249687) | - | - | `*` one row has no measurement here |
+| `svd_values/64x1024/b1` | 0.534766 ± 0.00646766 (W 0.00329238) | 1.35913 ± 0.00999083 (W 0.00475245) | 🔵 colmat 2.54× faster than `lapack-aocl` |  |
+| `svd_values/64x1024/b1 [api-inclusive]` | 0.533115 ± 0.00735308 (W 0.00341892) | - | - | `*` one row has no measurement here |
+
+## linalg-wide, c64, c order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `full_piv_lu/256x4096/b1` | 66.1539 ± 0.239116 (W 0.122738) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/256x4096/b1 [api-inclusive]` | 74.0692 ± 0.649382 (W 0.23865) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/64x1024/b1` | 0.999944 ± 0.00300666 (W 0.00111694) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/64x1024/b1 [api-inclusive]` | 1.39938 ± 0.0138252 (W 0.00297762) | - | - | `*` one row has no measurement here |
+| `lu/256x4096/b1` | 16.1991 ± 0.0705077 (W 0.020199) | - | - | `*` one row has no measurement here |
+| `lu/256x4096/b1 [api-inclusive]` | 19.778 ± 0.0379971 (W 0.0677078) | - | - | `*` one row has no measurement here |
+| `lu/64x1024/b1` | 0.443835 ± 0.00240787 (W 0.0015892) | - | - | `*` one row has no measurement here |
+| `lu/64x1024/b1 [api-inclusive]` | 0.529896 ± 0.00208444 (W 0.00179655) | - | - | `*` one row has no measurement here |
+| `qr/256x4096/b1` | 40.0094 ± 0.177993 (W 0.0424266) | - | - | `*` one row has no measurement here |
+| `qr/256x4096/b1 [api-inclusive]` | 40.1142 ± 0.0576541 (W 0.0399354) | - | - | `*` one row has no measurement here |
+| `qr/64x1024/b1` | 1.33566 ± 0.0163789 (W 0.00389034) | - | - | `*` one row has no measurement here |
+| `qr/64x1024/b1 [api-inclusive]` | 1.17292 ± 0.00790932 (W 0.0040838) | - | - | `*` one row has no measurement here |
+| `qr_factor/256x4096/b1` | 37.6533 ± 0.152891 (W 0.0447356) | - | - | `*` one row has no measurement here |
+| `qr_factor/64x1024/b1` | 1.25524 ± 0.0216249 (W 0.00413773) | - | - | `*` one row has no measurement here |
+| `svd_thin/256x4096/b1` | 98.9257 ± 0.100975 (W 0.0769379) | - | - | `*` one row has no measurement here |
+| `svd_thin/256x4096/b1 [api-inclusive]` | 99.1198 ± 0.200554 (W 0.0845305) | - | - | `*` one row has no measurement here |
+| `svd_thin/64x1024/b1` | 2.46431 ± 0.00617449 (W 0.00383727) | - | - | `*` one row has no measurement here |
+| `svd_thin/64x1024/b1 [api-inclusive]` | 2.47003 ± 0.00548734 (W 0.00271369) | - | - | `*` one row has no measurement here |
+| `svd_values/256x4096/b1` | 42.1923 ± 0.261972 (W 0.0752795) | - | - | `*` one row has no measurement here |
+| `svd_values/256x4096/b1 [api-inclusive]` | 41.9831 ± 0.178533 (W 0.0536086) | - | - | `*` one row has no measurement here |
+| `svd_values/64x1024/b1` | 1.22896 ± 0.00877905 (W 0.00249582) | - | - | `*` one row has no measurement here |
+| `svd_values/64x1024/b1 [api-inclusive]` | 1.22759 ± 0.00452309 (W 0.002743) | - | - | `*` one row has no measurement here |
+
+## linalg-wide, c64, c order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `full_piv_lu/256x4096/b1` | 17.8975 ± 0.0460011 (W 0.0295421) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/256x4096/b1 [api-inclusive]` | 21.3029 ± 0.353207 (W 0.0807913) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/64x1024/b1` | 0.40673 ± 0.0275065 (W 0.00221561) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `full_piv_lu/64x1024/b1 [api-inclusive]` | 0.530649 ± 0.0196831 (W 0.00262705) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `lu/256x4096/b1` | 4.6372 ± 0.0231699 (W 0.0140024) | - | - | `*` one row has no measurement here |
+| `lu/256x4096/b1 [api-inclusive]` | 7.35982 ± 0.0454006 (W 0.0827343) | - | - | `*` one row has no measurement here |
+| `lu/64x1024/b1` | 0.160235 ± 0.00112018 (W 0.00156319) | - | - | `*` one row has no measurement here |
+| `lu/64x1024/b1 [api-inclusive]` | 0.23483 ± 0.000928368 (W 0.00156345) | - | - | `*` one row has no measurement here |
+| `qr/256x4096/b1` | 12.945 ± 0.494386 (W 0.0256575) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr/256x4096/b1 [api-inclusive]` | 12.9471 ± 0.0736809 (W 0.0267699) | - | - | `*` one row has no measurement here |
+| `qr/64x1024/b1` | 0.568402 ± 0.00198358 (W 0.00369046) | - | - | `*` one row has no measurement here |
+| `qr/64x1024/b1 [api-inclusive]` | 0.458037 ± 0.0009821 (W 0.00209441) | - | - | `*` one row has no measurement here |
+| `qr_factor/256x4096/b1` | 11.6467 ± 0.364406 (W 0.0179956) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr_factor/64x1024/b1` | 0.536868 ± 0.00439378 (W 0.00316722) | - | - | `*` one row has no measurement here |
+| `svd_thin/256x4096/b1` | 37.1165 ± 0.0422764 (W 0.0454236) | - | - | `*` one row has no measurement here |
+| `svd_thin/256x4096/b1 [api-inclusive]` | 37.3426 ± 0.0443982 (W 0.043069) | - | - | `*` one row has no measurement here |
+| `svd_thin/64x1024/b1` | 1.41381 ± 0.011912 (W 0.00367133) | - | - | `*` one row has no measurement here |
+| `svd_thin/64x1024/b1 [api-inclusive]` | 1.42663 ± 0.00666379 (W 0.00423873) | - | - | `*` one row has no measurement here |
+| `svd_values/256x4096/b1` | 20.0318 ± 0.0358678 (W 0.0202483) | - | - | `*` one row has no measurement here |
+| `svd_values/256x4096/b1 [api-inclusive]` | 20.0197 ± 0.0427019 (W 0.0200857) | - | - | `*` one row has no measurement here |
+| `svd_values/64x1024/b1` | 0.897863 ± 0.00318358 (W 0.0027251) | - | - | `*` one row has no measurement here |
+| `svd_values/64x1024/b1 [api-inclusive]` | 0.903779 ± 0.0027528 (W 0.00218258) | - | - | `*` one row has no measurement here |
+
+## linalg-wide, c64, c order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `full_piv_lu/256x4096/b1` | 9.86716 ± 0.0143808 (W 0.021173) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/256x4096/b1 [api-inclusive]` | 12.4701 ± 0.0919789 (W 0.0651754) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/64x1024/b1` | 0.319315 ± 0.00147109 (W 0.00260536) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/64x1024/b1 [api-inclusive]` | 0.410439 ± 0.00170587 (W 0.0021345) | - | - | `*` one row has no measurement here |
+| `lu/256x4096/b1` | 2.62309 ± 0.0150895 (W 0.00919898) | - | - | `*` one row has no measurement here |
+| `lu/256x4096/b1 [api-inclusive]` | 5.1417 ± 0.0865471 (W 0.0443236) | - | - | `*` one row has no measurement here |
+| `lu/64x1024/b1` | 0.113227 ± 0.000761483 (W 0.000633327) | - | - | `*` one row has no measurement here |
+| `lu/64x1024/b1 [api-inclusive]` | 0.189997 ± 0.00194079 (W 0.00207161) | - | - | `*` one row has no measurement here |
+| `qr/256x4096/b1` | 7.73084 ± 0.174399 (W 0.0209385) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr/256x4096/b1 [api-inclusive]` | 8.34453 ± 0.142573 (W 0.0392359) | - | - | `*` one row has no measurement here |
+| `qr/64x1024/b1` | 0.441348 ± 0.00280867 (W 0.00391874) | - | - | `*` one row has no measurement here |
+| `qr/64x1024/b1 [api-inclusive]` | 0.341353 ± 0.00278356 (W 0.00267526) | - | - | `*` one row has no measurement here |
+| `qr_factor/256x4096/b1` | 7.30971 ± 0.415145 (W 0.0188219) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr_factor/64x1024/b1` | 0.417614 ± 0.00172804 (W 0.00306865) | - | - | `*` one row has no measurement here |
+| `svd_thin/256x4096/b1` | 27.9663 ± 0.185595 (W 0.0513129) | - | - | `*` one row has no measurement here |
+| `svd_thin/256x4096/b1 [api-inclusive]` | 28.068 ± 0.0524499 (W 0.0619549) | - | - | `*` one row has no measurement here |
+| `svd_thin/64x1024/b1` | 1.25952 ± 0.00452879 (W 0.00286496) | - | - | `*` one row has no measurement here |
+| `svd_thin/64x1024/b1 [api-inclusive]` | 1.2795 ± 0.00221638 (W 0.00136494) | - | - | `*` one row has no measurement here |
+| `svd_values/256x4096/b1` | 15.8037 ± 0.0473844 (W 0.0141707) | - | - | `*` one row has no measurement here |
+| `svd_values/256x4096/b1 [api-inclusive]` | 15.7884 ± 0.0285346 (W 0.0200818) | - | - | `*` one row has no measurement here |
+| `svd_values/64x1024/b1` | 0.854706 ± 0.00283581 (W 0.00285768) | - | - | `*` one row has no measurement here |
+| `svd_values/64x1024/b1 [api-inclusive]` | 0.862807 ± 0.00278478 (W 0.00310018) | - | - | `*` one row has no measurement here |
+
+## linalg-wide, c64, f order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `full_piv_lu/256x4096/b1` | 79.4944 ± 0.811845 (W 0.208738) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/256x4096/b1 [api-inclusive]` | 72.6991 ± 0.861867 (W 0.36256) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/64x1024/b1` | 1.35814 ± 0.0116944 (W 0.00282401) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/64x1024/b1 [api-inclusive]` | 1.3225 ± 0.01069 (W 0.00342525) | - | - | `*` one row has no measurement here |
+| `lu/256x4096/b1` | 16.8258 ± 0.118156 (W 0.0197121) | 34.488 ± 0.0251938 (W 0.0303634) | 🔵 colmat 2.05× faster than `lapack-aocl` |  |
+| `lu/256x4096/b1 [api-inclusive]` | 17.3932 ± 0.171461 (W 0.02544) | - | - | `*` one row has no measurement here |
+| `lu/64x1024/b1` | 0.442165 ± 0.00457359 (W 0.00178614) | 0.34083 ± 0.00364971 (W 0.00403741) | 🔴 colmat 1.30× slower than `lapack-aocl` |  |
+| `lu/64x1024/b1 [api-inclusive]` | 0.462112 ± 0.00267853 (W 0.00254499) | - | - | `*` one row has no measurement here |
+| `qr/256x4096/b1` | 37.6558 ± 0.134799 (W 0.0267833) | 68.6516 ± 0.355007 (W 0.0732257) | 🔵 colmat 1.82× faster than `lapack-aocl` |  |
+| `qr/256x4096/b1 [api-inclusive]` | 37.4725 ± 0.189421 (W 0.0484213) | - | - | `*` one row has no measurement here |
+| `qr/64x1024/b1` | 1.07827 ± 0.00438278 (W 0.00244775) | 1.39049 ± 0.0159241 (W 0.00277143) | 🔵 colmat 1.29× faster than `lapack-aocl` |  |
+| `qr/64x1024/b1 [api-inclusive]` | 1.10079 ± 0.00375301 (W 0.00171564) | - | - | `*` one row has no measurement here |
+| `qr_factor/256x4096/b1` | 35.1173 ± 0.16595 (W 0.0250482) | 64.9156 ± 0.620614 (W 0.0955092) | 🔵 colmat 1.85× faster than `lapack-aocl` |  |
+| `qr_factor/64x1024/b1` | 1.01282 ± 0.00340284 (W 0.00120479) | 1.23159 ± 0.00714589 (W 0.0032064) | 🔵 colmat 1.22× faster than `lapack-aocl` |  |
+| `svd_thin/256x4096/b1` | 107.58 ± 0.167131 (W 0.130233) | 283.593 ± 3.06016 (W 2.04232) | 🔵 colmat 2.64× faster than `lapack-aocl` |  |
+| `svd_thin/256x4096/b1 [api-inclusive]` | 107.554 ± 0.28094 (W 0.139892) | - | - | `*` one row has no measurement here |
+| `svd_thin/64x1024/b1` | 2.5322 ± 0.00391565 (W 0.00231198) | 5.16978 ± 0.0817179 (W 0.00944511) | 🔵 colmat 2.04× faster than `lapack-aocl` |  |
+| `svd_thin/64x1024/b1 [api-inclusive]` | 2.5513 ± 0.00280995 (W 0.00341019) | - | - | `*` one row has no measurement here |
+| `svd_values/256x4096/b1` | 50.5061 ± 2.40784 (W 0.0701849) | 132.187 ± 5.66761 (W 0.727279) | 🔵 colmat 2.62× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `svd_values/256x4096/b1 [api-inclusive]` | 50.5926 ± 2.35182 (W 0.0430586) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_values/64x1024/b1` | 1.31163 ± 0.00164861 (W 0.00238251) | 2.43956 ± 0.0486843 (W 0.00497023) | 🔵 colmat 1.86× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `svd_values/64x1024/b1 [api-inclusive]` | 1.31007 ± 0.00284218 (W 0.00199262) | - | - | `*` one row has no measurement here |
+
+## linalg-wide, c64, f order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `full_piv_lu/256x4096/b1` | 20.6036 ± 0.216268 (W 0.0371373) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/256x4096/b1 [api-inclusive]` | 19.6602 ± 0.229015 (W 0.0328345) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/64x1024/b1` | 0.445972 ± 0.0451711 (W 0.00226727) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `full_piv_lu/64x1024/b1 [api-inclusive]` | 0.449319 ± 0.00194019 (W 0.00159642) | - | - | `*` one row has no measurement here |
+| `lu/256x4096/b1` | 4.60688 ± 0.0309609 (W 0.0118183) | 11.9447 ± 0.0223794 (W 0.0113995) | 🔵 colmat 2.59× faster than `lapack-aocl` |  |
+| `lu/256x4096/b1 [api-inclusive]` | 5.22473 ± 0.0174955 (W 0.0247037) | - | - | `*` one row has no measurement here |
+| `lu/64x1024/b1` | 0.13407 ± 0.000510958 (W 0.000497303) | 0.128167 ± 0.000890367 (W 0.00101378) | · |  |
+| `lu/64x1024/b1 [api-inclusive]` | 0.162449 ± 0.000298136 (W 0.000418126) | - | - | `*` one row has no measurement here |
+| `qr/256x4096/b1` | 9.97966 ± 0.0379006 (W 0.0241331) | 46.4958 ± 0.478296 (W 0.240962) | 🔵 colmat 4.66× faster than `lapack-aocl` |  |
+| `qr/256x4096/b1 [api-inclusive]` | 10.3774 ± 0.0489939 (W 0.0254179) | - | - | `*` one row has no measurement here |
+| `qr/64x1024/b1` | 0.354421 ± 0.000598621 (W 0.00158172) | 1.3133 ± 0.0120809 (W 0.00334239) | 🔵 colmat 3.71× faster than `lapack-aocl` |  |
+| `qr/64x1024/b1 [api-inclusive]` | 0.387618 ± 0.000689724 (W 0.00140628) | - | - | `*` one row has no measurement here |
+| `qr_factor/256x4096/b1` | 9.34805 ± 0.0348244 (W 0.0161504) | 45.7294 ± 0.30944 (W 0.139098) | 🔵 colmat 4.89× faster than `lapack-aocl` |  |
+| `qr_factor/64x1024/b1` | 0.318941 ± 0.000720953 (W 0.00144398) | 1.20104 ± 0.0177507 (W 0.00431651) | 🔵 colmat 3.77× faster than `lapack-aocl` |  |
+| `svd_thin/256x4096/b1` | 45.6141 ± 0.0962849 (W 0.0674206) | 220.35 ± 1.07873 (W 0.271686) | 🔵 colmat 4.83× faster than `lapack-aocl` |  |
+| `svd_thin/256x4096/b1 [api-inclusive]` | 45.7885 ± 0.0749355 (W 0.0863217) | - | - | `*` one row has no measurement here |
+| `svd_thin/64x1024/b1` | 1.47992 ± 0.0095956 (W 0.00346774) | 4.74013 ± 0.0913544 (W 0.00677178) | 🔵 colmat 3.20× faster than `lapack-aocl` | `!` between-start range over 5% |
+| `svd_thin/64x1024/b1 [api-inclusive]` | 1.49707 ± 0.0121226 (W 0.00380572) | - | - | `*` one row has no measurement here |
+| `svd_values/256x4096/b1` | 28.4996 ± 0.0949797 (W 0.0941529) | 113.325 ± 0.532353 (W 0.137853) | 🔵 colmat 3.98× faster than `lapack-aocl` |  |
+| `svd_values/256x4096/b1 [api-inclusive]` | 28.4984 ± 0.0911154 (W 0.0587842) | - | - | `*` one row has no measurement here |
+| `svd_values/64x1024/b1` | 0.959448 ± 0.00274955 (W 0.0017162) | 2.41896 ± 0.0415026 (W 0.00547398) | 🔵 colmat 2.52× faster than `lapack-aocl` |  |
+| `svd_values/64x1024/b1 [api-inclusive]` | 0.957941 ± 0.00421649 (W 0.00205405) | - | - | `*` one row has no measurement here |
+
+## linalg-wide, c64, f order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `full_piv_lu/256x4096/b1` | 10.7183 ± 0.0898563 (W 0.0225801) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/256x4096/b1 [api-inclusive]` | 10.4709 ± 0.056316 (W 0.0194383) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/64x1024/b1` | 0.30593 ± 0.0170945 (W 0.00196075) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `full_piv_lu/64x1024/b1 [api-inclusive]` | 0.325781 ± 0.00664727 (W 0.00110408) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `lu/256x4096/b1` | 2.44832 ± 0.00968148 (W 0.00364063) | 5.27256 ± 0.0162874 (W 0.0105686) | 🔵 colmat 2.15× faster than `lapack-aocl` |  |
+| `lu/256x4096/b1 [api-inclusive]` | 3.11099 ± 0.00405767 (W 0.0117184) | - | - | `*` one row has no measurement here |
+| `lu/64x1024/b1` | 0.0839915 ± 0.000262397 (W 0.000262585) | 0.127791 ± 0.000538675 (W 0.00163647) | 🔵 colmat 1.52× faster than `lapack-aocl` |  |
+| `lu/64x1024/b1 [api-inclusive]` | 0.117593 ± 0.000572474 (W 0.00161319) | - | - | `*` one row has no measurement here |
+| `qr/256x4096/b1` | 5.52148 ± 0.0136254 (W 0.0103418) | 45.5298 ± 0.364349 (W 0.157265) | 🔵 colmat 8.25× faster than `lapack-aocl` |  |
+| `qr/256x4096/b1 [api-inclusive]` | 6.01125 ± 0.0176512 (W 0.0103929) | - | - | `*` one row has no measurement here |
+| `qr/64x1024/b1` | 0.230569 ± 0.000518281 (W 0.00147938) | 1.34577 ± 0.0159521 (W 0.00739772) | 🔵 colmat 5.84× faster than `lapack-aocl` |  |
+| `qr/64x1024/b1 [api-inclusive]` | 0.271244 ± 0.000421204 (W 0.0018756) | - | - | `*` one row has no measurement here |
+| `qr_factor/256x4096/b1` | 5.17311 ± 0.0353638 (W 0.00990798) | 44.4723 ± 0.628032 (W 0.57353) | 🔵 colmat 8.60× faster than `lapack-aocl` |  |
+| `qr_factor/64x1024/b1` | 0.206702 ± 0.000952063 (W 0.00192114) | 1.23918 ± 0.00763901 (W 0.00624128) | 🔵 colmat 6.00× faster than `lapack-aocl` |  |
+| `svd_thin/256x4096/b1` | 36.4815 ± 0.209062 (W 0.109325) | 234.117 ± 1.91666 (W 1.49779) | 🔵 colmat 6.42× faster than `lapack-aocl` |  |
+| `svd_thin/256x4096/b1 [api-inclusive]` | 36.6921 ± 0.127617 (W 0.0903176) | - | - | `*` one row has no measurement here |
+| `svd_thin/64x1024/b1` | 1.32661 ± 0.00684436 (W 0.00305061) | 4.90466 ± 0.0785268 (W 0.00633193) | 🔵 colmat 3.70× faster than `lapack-aocl` |  |
+| `svd_thin/64x1024/b1 [api-inclusive]` | 1.34005 ± 0.0180206 (W 0.00246091) | - | - | `*` one row has no measurement here |
+| `svd_values/256x4096/b1` | 24.461 ± 0.149751 (W 0.10807) | 124.182 ± 0.83297 (W 0.825656) | 🔵 colmat 5.08× faster than `lapack-aocl` |  |
+| `svd_values/256x4096/b1 [api-inclusive]` | 24.4191 ± 0.129855 (W 0.115623) | - | - | `*` one row has no measurement here |
+| `svd_values/64x1024/b1` | 0.91493 ± 0.0014977 (W 0.00230556) | 2.39923 ± 0.026278 (W 0.00584372) | 🔵 colmat 2.62× faster than `lapack-aocl` |  |
+| `svd_values/64x1024/b1 [api-inclusive]` | 0.917132 ± 0.0205956 (W 0.0022877) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+
+## linalg-wide, f32, c order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `full_piv_lu/256x4096/b1` | 14.4213 ± 0.0252283 (W 0.00856145) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/256x4096/b1 [api-inclusive]` | 19.145 ± 0.10759 (W 0.0194563) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/64x1024/b1` | 0.237428 ± 0.000864218 (W 0.00106304) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/64x1024/b1 [api-inclusive]` | 0.670352 ± 0.00153571 (W 0.0015785) | - | - | `*` one row has no measurement here |
+| `lu/256x4096/b1` | 2.93025 ± 0.0099872 (W 0.00466323) | - | - | `*` one row has no measurement here |
+| `lu/256x4096/b1 [api-inclusive]` | 4.84671 ± 0.0193531 (W 0.0106619) | - | - | `*` one row has no measurement here |
+| `lu/64x1024/b1` | 0.106409 ± 0.000289181 (W 0.00105203) | - | - | `*` one row has no measurement here |
+| `lu/64x1024/b1 [api-inclusive]` | 0.228774 ± 0.00103193 (W 0.00111572) | - | - | `*` one row has no measurement here |
+| `qr/256x4096/b1` | 9.71981 ± 0.102944 (W 0.0249713) | - | - | `*` one row has no measurement here |
+| `qr/256x4096/b1 [api-inclusive]` | 8.62772 ± 0.017018 (W 0.0182564) | - | - | `*` one row has no measurement here |
+| `qr/64x1024/b1` | 0.522551 ± 0.00209989 (W 0.00227697) | - | - | `*` one row has no measurement here |
+| `qr/64x1024/b1 [api-inclusive]` | 0.375939 ± 0.00246609 (W 0.0024319) | - | - | `*` one row has no measurement here |
+| `qr_factor/256x4096/b1` | 9.32745 ± 0.305661 (W 0.0167122) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr_factor/64x1024/b1` | 0.504411 ± 0.00174497 (W 0.00467673) | - | - | `*` one row has no measurement here |
+| `svd_thin/256x4096/b1` | 19.0984 ± 0.0836739 (W 0.0123681) | - | - | `*` one row has no measurement here |
+| `svd_thin/256x4096/b1 [api-inclusive]` | 19.1116 ± 0.0443951 (W 0.0222822) | - | - | `*` one row has no measurement here |
+| `svd_thin/64x1024/b1` | 0.774395 ± 0.0015894 (W 0.00194887) | - | - | `*` one row has no measurement here |
+| `svd_thin/64x1024/b1 [api-inclusive]` | 0.777887 ± 0.00237511 (W 0.00219286) | - | - | `*` one row has no measurement here |
+| `svd_values/256x4096/b1` | 9.6371 ± 0.051173 (W 0.00596157) | - | - | `*` one row has no measurement here |
+| `svd_values/256x4096/b1 [api-inclusive]` | 9.63853 ± 0.0565132 (W 0.0065887) | - | - | `*` one row has no measurement here |
+| `svd_values/64x1024/b1` | 0.437546 ± 0.0016196 (W 0.00200264) | - | - | `*` one row has no measurement here |
+| `svd_values/64x1024/b1 [api-inclusive]` | 0.43794 ± 0.00116319 (W 0.00213335) | - | - | `*` one row has no measurement here |
+
+## linalg-wide, f32, c order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `full_piv_lu/256x4096/b1` | 4.43468 ± 0.017412 (W 0.00542101) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/256x4096/b1 [api-inclusive]` | 6.17783 ± 0.0875207 (W 0.00572987) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/64x1024/b1` | 0.163664 ± 0.000543627 (W 0.00109937) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/64x1024/b1 [api-inclusive]` | 0.338958 ± 0.0307694 (W 0.00147412) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `lu/256x4096/b1` | 0.964684 ± 0.0158003 (W 0.00273603) | - | - | `*` one row has no measurement here |
+| `lu/256x4096/b1 [api-inclusive]` | 2.26041 ± 0.00621187 (W 0.00574676) | - | - | `*` one row has no measurement here |
+| `lu/64x1024/b1` | 0.050733 ± 0.000178945 (W 0.000466184) | - | - | `*` one row has no measurement here |
+| `lu/64x1024/b1 [api-inclusive]` | 0.12671 ± 0.000342192 (W 0.00110233) | - | - | `*` one row has no measurement here |
+| `qr/256x4096/b1` | 4.11031 ± 0.236028 (W 0.0127759) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr/256x4096/b1 [api-inclusive]` | 3.29954 ± 0.0166724 (W 0.00973431) | - | - | `*` one row has no measurement here |
+| `qr/64x1024/b1` | 0.383182 ± 0.00322909 (W 0.00306574) | - | - | `*` one row has no measurement here |
+| `qr/64x1024/b1 [api-inclusive]` | 0.220552 ± 0.00290757 (W 0.00305076) | - | - | `*` one row has no measurement here |
+| `qr_factor/256x4096/b1` | 4.09237 ± 0.203071 (W 0.0154737) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr_factor/64x1024/b1` | 0.369871 ± 0.00151202 (W 0.00454671) | - | - | `*` one row has no measurement here |
+| `svd_thin/256x4096/b1` | 9.63373 ± 0.070389 (W 0.0137322) | - | - | `*` one row has no measurement here |
+| `svd_thin/256x4096/b1 [api-inclusive]` | 9.70917 ± 0.0803953 (W 0.0123672) | - | - | `*` one row has no measurement here |
+| `svd_thin/64x1024/b1` | 0.620629 ± 0.00146917 (W 0.00254193) | - | - | `*` one row has no measurement here |
+| `svd_thin/64x1024/b1 [api-inclusive]` | 0.626594 ± 0.000650051 (W 0.00193011) | - | - | `*` one row has no measurement here |
+| `svd_values/256x4096/b1` | 6.73804 ± 0.0185548 (W 0.00710581) | - | - | `*` one row has no measurement here |
+| `svd_values/256x4096/b1 [api-inclusive]` | 6.73989 ± 0.0257277 (W 0.00648634) | - | - | `*` one row has no measurement here |
+| `svd_values/64x1024/b1` | 0.414579 ± 0.00095315 (W 0.00161635) | - | - | `*` one row has no measurement here |
+| `svd_values/64x1024/b1 [api-inclusive]` | 0.417404 ± 0.00144366 (W 0.00151949) | - | - | `*` one row has no measurement here |
+
+## linalg-wide, f32, c order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `full_piv_lu/256x4096/b1` | 2.82544 ± 0.00784373 (W 0.00640781) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/256x4096/b1 [api-inclusive]` | 3.90859 ± 0.0299465 (W 0.00724632) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/64x1024/b1` | 0.165332 ± 0.00117793 (W 0.00169536) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/64x1024/b1 [api-inclusive]` | 0.297917 ± 0.00281178 (W 0.00213928) | - | - | `*` one row has no measurement here |
+| `lu/256x4096/b1` | 0.685083 ± 0.016842 (W 0.00558991) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `lu/256x4096/b1 [api-inclusive]` | 1.83439 ± 0.0111051 (W 0.00701461) | - | - | `*` one row has no measurement here |
+| `lu/64x1024/b1` | 0.0427485 ± 0.000234938 (W 0.000639999) | - | - | `*` one row has no measurement here |
+| `lu/64x1024/b1 [api-inclusive]` | 0.110495 ± 0.000297019 (W 0.000784484) | - | - | `*` one row has no measurement here |
+| `qr/256x4096/b1` | 3.50214 ± 0.143584 (W 0.022297) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr/256x4096/b1 [api-inclusive]` | 2.47004 ± 0.0263578 (W 0.00685771) | - | - | `*` one row has no measurement here |
+| `qr/64x1024/b1` | 0.360765 ± 0.0026848 (W 0.00536622) | - | - | `*` one row has no measurement here |
+| `qr/64x1024/b1 [api-inclusive]` | 0.200868 ± 0.00301252 (W 0.00418788) | - | - | `*` one row has no measurement here |
+| `qr_factor/256x4096/b1` | 3.40212 ± 0.259662 (W 0.0855245) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr_factor/64x1024/b1` | 0.347842 ± 0.00287045 (W 0.00223814) | - | - | `*` one row has no measurement here |
+| `svd_thin/256x4096/b1` | 7.94174 ± 0.0217687 (W 0.00932559) | - | - | `*` one row has no measurement here |
+| `svd_thin/256x4096/b1 [api-inclusive]` | 8.03284 ± 0.0519098 (W 0.00507787) | - | - | `*` one row has no measurement here |
+| `svd_thin/64x1024/b1` | 0.599093 ± 0.00229564 (W 0.00250217) | - | - | `*` one row has no measurement here |
+| `svd_thin/64x1024/b1 [api-inclusive]` | 0.604723 ± 0.00215577 (W 0.00219396) | - | - | `*` one row has no measurement here |
+| `svd_values/256x4096/b1` | 5.84579 ± 0.0359079 (W 0.00606825) | - | - | `*` one row has no measurement here |
+| `svd_values/256x4096/b1 [api-inclusive]` | 5.88534 ± 0.0321726 (W 0.00873713) | - | - | `*` one row has no measurement here |
+| `svd_values/64x1024/b1` | 0.406521 ± 0.00198727 (W 0.00207819) | - | - | `*` one row has no measurement here |
+| `svd_values/64x1024/b1 [api-inclusive]` | 0.405221 ± 0.00130171 (W 0.00225715) | - | - | `*` one row has no measurement here |
+
+## linalg-wide, f32, f order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `full_piv_lu/256x4096/b1` | 20.1201 ± 1.71878 (W 0.037902) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `full_piv_lu/256x4096/b1 [api-inclusive]` | 17.8102 ± 0.141422 (W 0.0196432) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/64x1024/b1` | 0.612205 ± 0.0150246 (W 0.00176563) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `full_piv_lu/64x1024/b1 [api-inclusive]` | 0.605674 ± 0.000827418 (W 0.00187144) | - | - | `*` one row has no measurement here |
+| `lu/256x4096/b1` | 3.68131 ± 0.0126058 (W 0.00751897) | - | - | `*` one row has no measurement here |
+| `lu/256x4096/b1 [api-inclusive]` | 3.66235 ± 0.0227925 (W 0.0089934) | - | - | `*` one row has no measurement here |
+| `lu/64x1024/b1` | 0.152934 ± 0.000241757 (W 0.000528672) | - | - | `*` one row has no measurement here |
+| `lu/64x1024/b1 [api-inclusive]` | 0.157539 ± 0.00029403 (W 0.00141941) | - | - | `*` one row has no measurement here |
+| `qr/256x4096/b1` | 7.22614 ± 0.0306677 (W 0.00864795) | - | - | `*` one row has no measurement here |
+| `qr/256x4096/b1 [api-inclusive]` | 7.31959 ± 0.0174737 (W 0.00806848) | - | - | `*` one row has no measurement here |
+| `qr/64x1024/b1` | 0.237591 ± 0.000478663 (W 0.00177897) | - | - | `*` one row has no measurement here |
+| `qr/64x1024/b1 [api-inclusive]` | 0.298502 ± 0.00293548 (W 0.00289762) | - | - | `*` one row has no measurement here |
+| `qr_factor/256x4096/b1` | 6.83251 ± 0.0518869 (W 0.0151431) | - | - | `*` one row has no measurement here |
+| `qr_factor/64x1024/b1` | 0.222397 ± 0.00284915 (W 0.00140118) | - | - | `*` one row has no measurement here |
+| `svd_thin/256x4096/b1` | 21.1023 ± 0.250833 (W 0.0146587) | - | - | `*` one row has no measurement here |
+| `svd_thin/256x4096/b1 [api-inclusive]` | 21.1716 ± 0.0507694 (W 0.0152579) | - | - | `*` one row has no measurement here |
+| `svd_thin/64x1024/b1` | 0.795873 ± 0.00349696 (W 0.00208549) | - | - | `*` one row has no measurement here |
+| `svd_thin/64x1024/b1 [api-inclusive]` | 0.799068 ± 0.00267313 (W 0.00403094) | - | - | `*` one row has no measurement here |
+| `svd_values/256x4096/b1` | 11.6137 ± 0.403384 (W 0.0118529) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_values/256x4096/b1 [api-inclusive]` | 11.6373 ± 0.41146 (W 0.014103) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_values/64x1024/b1` | 0.468279 ± 0.00298393 (W 0.00419931) | - | - | `*` one row has no measurement here |
+| `svd_values/64x1024/b1 [api-inclusive]` | 0.467278 ± 0.0064358 (W 0.00332642) | - | - | `*` one row has no measurement here |
+
+## linalg-wide, f32, f order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `full_piv_lu/256x4096/b1` | 5.22984 ± 0.025495 (W 0.00645811) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/256x4096/b1 [api-inclusive]` | 5.08393 ± 0.793865 (W 0.00654091) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `full_piv_lu/64x1024/b1` | 0.272007 ± 0.0312163 (W 0.0015628) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `full_piv_lu/64x1024/b1 [api-inclusive]` | 0.275714 ± 0.0312095 (W 0.00143234) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `lu/256x4096/b1` | 1.0124 ± 0.00452884 (W 0.00323169) | - | - | `*` one row has no measurement here |
+| `lu/256x4096/b1 [api-inclusive]` | 1.13884 ± 0.00780385 (W 0.00385647) | - | - | `*` one row has no measurement here |
+| `lu/64x1024/b1` | 0.049378 ± 0.00023618 (W 0.00027665) | - | - | `*` one row has no measurement here |
+| `lu/64x1024/b1 [api-inclusive]` | 0.0570185 ± 0.000258372 (W 0.000240864) | - | - | `*` one row has no measurement here |
+| `qr/256x4096/b1` | 2.03542 ± 0.0147434 (W 0.00606417) | - | - | `*` one row has no measurement here |
+| `qr/256x4096/b1 [api-inclusive]` | 2.17376 ± 0.0101391 (W 0.00578316) | - | - | `*` one row has no measurement here |
+| `qr/64x1024/b1` | 0.101787 ± 0.0119493 (W 0.00117589) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr/64x1024/b1 [api-inclusive]` | 0.153998 ± 0.00278137 (W 0.00342098) | - | - | `*` one row has no measurement here |
+| `qr_factor/256x4096/b1` | 1.90616 ± 0.00515065 (W 0.0043574) | - | - | `*` one row has no measurement here |
+| `qr_factor/64x1024/b1` | 0.0917015 ± 0.000503168 (W 0.000177761) | - | - | `*` one row has no measurement here |
+| `svd_thin/256x4096/b1` | 11.8736 ± 0.477973 (W 0.0224137) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_thin/256x4096/b1 [api-inclusive]` | 11.9112 ± 0.452228 (W 0.0119335) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_thin/64x1024/b1` | 0.639873 ± 0.00333582 (W 0.00369329) | - | - | `*` one row has no measurement here |
+| `svd_thin/64x1024/b1 [api-inclusive]` | 0.645667 ± 0.003852 (W 0.00289939) | - | - | `*` one row has no measurement here |
+| `svd_values/256x4096/b1` | 8.70164 ± 0.0277205 (W 0.0104561) | - | - | `*` one row has no measurement here |
+| `svd_values/256x4096/b1 [api-inclusive]` | 8.72013 ± 0.0219103 (W 0.0116537) | - | - | `*` one row has no measurement here |
+| `svd_values/64x1024/b1` | 0.446075 ± 0.00319759 (W 0.00354841) | - | - | `*` one row has no measurement here |
+| `svd_values/64x1024/b1 [api-inclusive]` | 0.44886 ± 0.00303125 (W 0.00221995) | - | - | `*` one row has no measurement here |
+
+## linalg-wide, f32, f order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `full_piv_lu/256x4096/b1` | 2.85445 ± 0.00870394 (W 0.00514651) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/256x4096/b1 [api-inclusive]` | 2.76716 ± 0.00749006 (W 0.00822385) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/64x1024/b1` | 0.233512 ± 0.0019983 (W 0.00135232) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/64x1024/b1 [api-inclusive]` | 0.235259 ± 0.00146001 (W 0.00198731) | - | - | `*` one row has no measurement here |
+| `lu/256x4096/b1` | 0.566962 ± 0.00238332 (W 0.0024153) | - | - | `*` one row has no measurement here |
+| `lu/256x4096/b1 [api-inclusive]` | 0.677547 ± 0.00174351 (W 0.00275492) | - | - | `*` one row has no measurement here |
+| `lu/64x1024/b1` | 0.032244 ± 0.000173309 (W 0.000257515) | - | - | `*` one row has no measurement here |
+| `lu/64x1024/b1 [api-inclusive]` | 0.041654 ± 0.000271611 (W 0.000357813) | - | - | `*` one row has no measurement here |
+| `qr/256x4096/b1` | 1.1614 ± 0.00193795 (W 0.00353559) | - | - | `*` one row has no measurement here |
+| `qr/256x4096/b1 [api-inclusive]` | 1.30814 ± 0.00581784 (W 0.00358689) | - | - | `*` one row has no measurement here |
+| `qr/64x1024/b1` | 0.079022 ± 0.000394461 (W 0.000223838) | - | - | `*` one row has no measurement here |
+| `qr/64x1024/b1 [api-inclusive]` | 0.13053 ± 0.00159113 (W 0.00325721) | - | - | `*` one row has no measurement here |
+| `qr_factor/256x4096/b1` | 1.07207 ± 0.00300126 (W 0.0027798) | - | - | `*` one row has no measurement here |
+| `qr_factor/64x1024/b1` | 0.070382 ± 0.000448997 (W 0.000207531) | - | - | `*` one row has no measurement here |
+| `svd_thin/256x4096/b1` | 9.95261 ± 0.0575601 (W 0.0102732) | - | - | `*` one row has no measurement here |
+| `svd_thin/256x4096/b1 [api-inclusive]` | 10.0106 ± 0.0403759 (W 0.0352522) | - | - | `*` one row has no measurement here |
+| `svd_thin/64x1024/b1` | 0.618464 ± 0.00256288 (W 0.00331751) | - | - | `*` one row has no measurement here |
+| `svd_thin/64x1024/b1 [api-inclusive]` | 0.625656 ± 0.00319976 (W 0.00262972) | - | - | `*` one row has no measurement here |
+| `svd_values/256x4096/b1` | 7.84339 ± 0.0211525 (W 0.0103131) | - | - | `*` one row has no measurement here |
+| `svd_values/256x4096/b1 [api-inclusive]` | 7.8663 ± 0.0411303 (W 0.0347285) | - | - | `*` one row has no measurement here |
+| `svd_values/64x1024/b1` | 0.438565 ± 0.00359455 (W 0.00245078) | - | - | `*` one row has no measurement here |
+| `svd_values/64x1024/b1 [api-inclusive]` | 0.44033 ± 0.00228892 (W 0.00324939) | - | - | `*` one row has no measurement here |
+
+## linalg-wide, c32, c order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `full_piv_lu/256x4096/b1` | 32.8899 ± 0.0267019 (W 0.0194619) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/256x4096/b1 [api-inclusive]` | 39.4767 ± 0.341655 (W 0.174884) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/64x1024/b1` | 0.50704 ± 0.00291777 (W 0.00219519) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/64x1024/b1 [api-inclusive]` | 0.936458 ± 0.00199854 (W 0.00063156) | - | - | `*` one row has no measurement here |
+| `lu/256x4096/b1` | 9.18859 ± 0.0170879 (W 0.00871957) | - | - | `*` one row has no measurement here |
+| `lu/256x4096/b1 [api-inclusive]` | 11.0932 ± 0.0302673 (W 0.00994424) | - | - | `*` one row has no measurement here |
+| `lu/64x1024/b1` | 0.287533 ± 0.00108552 (W 0.00163271) | - | - | `*` one row has no measurement here |
+| `lu/64x1024/b1 [api-inclusive]` | 0.381474 ± 0.00206806 (W 0.00203225) | - | - | `*` one row has no measurement here |
+| `qr/256x4096/b1` | 23.2812 ± 0.499372 (W 0.0262983) | - | - | `*` one row has no measurement here |
+| `qr/256x4096/b1 [api-inclusive]` | 22.5563 ± 0.0628832 (W 0.0256413) | - | - | `*` one row has no measurement here |
+| `qr/64x1024/b1` | 0.839048 ± 0.0029174 (W 0.00295822) | - | - | `*` one row has no measurement here |
+| `qr/64x1024/b1 [api-inclusive]` | 0.737208 ± 0.00541064 (W 0.00149775) | - | - | `*` one row has no measurement here |
+| `qr_factor/256x4096/b1` | 21.6187 ± 0.0486145 (W 0.0130591) | - | - | `*` one row has no measurement here |
+| `qr_factor/64x1024/b1` | 0.802623 ± 0.00708265 (W 0.00454166) | - | - | `*` one row has no measurement here |
+| `svd_thin/256x4096/b1` | 52.3505 ± 0.0238665 (W 0.0419853) | - | - | `*` one row has no measurement here |
+| `svd_thin/256x4096/b1 [api-inclusive]` | 52.4165 ± 0.0646513 (W 0.0397615) | - | - | `*` one row has no measurement here |
+| `svd_thin/64x1024/b1` | 1.46132 ± 0.00291818 (W 0.00214423) | - | - | `*` one row has no measurement here |
+| `svd_thin/64x1024/b1 [api-inclusive]` | 1.46632 ± 0.00542341 (W 0.00280917) | - | - | `*` one row has no measurement here |
+| `svd_values/256x4096/b1` | 23.2328 ± 0.0133696 (W 0.0173992) | - | - | `*` one row has no measurement here |
+| `svd_values/256x4096/b1 [api-inclusive]` | 23.2301 ± 0.0342321 (W 0.0198414) | - | - | `*` one row has no measurement here |
+| `svd_values/64x1024/b1` | 0.782717 ± 0.00196561 (W 0.00200494) | - | - | `*` one row has no measurement here |
+| `svd_values/64x1024/b1 [api-inclusive]` | 0.782446 ± 0.00106011 (W 0.00194037) | - | - | `*` one row has no measurement here |
+
+## linalg-wide, c32, c order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `full_piv_lu/256x4096/b1` | 9.18558 ± 0.0230724 (W 0.0102409) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/256x4096/b1 [api-inclusive]` | 11.4216 ± 0.0745481 (W 0.0204027) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/64x1024/b1` | 0.254614 ± 0.0021082 (W 0.00169343) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/64x1024/b1 [api-inclusive]` | 0.40332 ± 0.00164786 (W 0.00194446) | - | - | `*` one row has no measurement here |
+| `lu/256x4096/b1` | 2.64796 ± 0.00342121 (W 0.00662194) | - | - | `*` one row has no measurement here |
+| `lu/256x4096/b1 [api-inclusive]` | 4.17355 ± 0.0325961 (W 0.00760395) | - | - | `*` one row has no measurement here |
+| `lu/64x1024/b1` | 0.115276 ± 0.000448986 (W 0.00155785) | - | - | `*` one row has no measurement here |
+| `lu/64x1024/b1 [api-inclusive]` | 0.181053 ± 0.00102247 (W 0.00140481) | - | - | `*` one row has no measurement here |
+| `qr/256x4096/b1` | 7.72908 ± 0.0202686 (W 0.0185664) | - | - | `*` one row has no measurement here |
+| `qr/256x4096/b1 [api-inclusive]` | 7.26342 ± 0.0603847 (W 0.0130933) | - | - | `*` one row has no measurement here |
+| `qr/64x1024/b1` | 0.454283 ± 0.00173238 (W 0.0026502) | - | - | `*` one row has no measurement here |
+| `qr/64x1024/b1 [api-inclusive]` | 0.317524 ± 0.00195564 (W 0.00182397) | - | - | `*` one row has no measurement here |
+| `qr_factor/256x4096/b1` | 7.43476 ± 0.104707 (W 0.0163738) | - | - | `*` one row has no measurement here |
+| `qr_factor/64x1024/b1` | 0.432383 ± 0.00121265 (W 0.00352058) | - | - | `*` one row has no measurement here |
+| `svd_thin/256x4096/b1` | 21.3664 ± 0.0419118 (W 0.0318097) | - | - | `*` one row has no measurement here |
+| `svd_thin/256x4096/b1 [api-inclusive]` | 21.4274 ± 0.0508327 (W 0.0342385) | - | - | `*` one row has no measurement here |
+| `svd_thin/64x1024/b1` | 0.916291 ± 0.00853024 (W 0.00203989) | - | - | `*` one row has no measurement here |
+| `svd_thin/64x1024/b1 [api-inclusive]` | 0.925182 ± 0.00318773 (W 0.0019644) | - | - | `*` one row has no measurement here |
+| `svd_values/256x4096/b1` | 12.5531 ± 0.0330285 (W 0.0179026) | - | - | `*` one row has no measurement here |
+| `svd_values/256x4096/b1 [api-inclusive]` | 12.5649 ± 0.016867 (W 0.0120982) | - | - | `*` one row has no measurement here |
+| `svd_values/64x1024/b1` | 0.597598 ± 0.00191933 (W 0.00184641) | - | - | `*` one row has no measurement here |
+| `svd_values/64x1024/b1 [api-inclusive]` | 0.598 ± 0.0011265 (W 0.00166791) | - | - | `*` one row has no measurement here |
+
+## linalg-wide, c32, c order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `full_piv_lu/256x4096/b1` | 5.21038 ± 0.00838963 (W 0.00973292) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/256x4096/b1 [api-inclusive]` | 6.78604 ± 0.0509181 (W 0.013554) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/64x1024/b1` | 0.229696 ± 0.00118179 (W 0.00196616) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/64x1024/b1 [api-inclusive]` | 0.337106 ± 0.0012327 (W 0.00286671) | - | - | `*` one row has no measurement here |
+| `lu/256x4096/b1` | 1.59259 ± 0.00593907 (W 0.00485902) | - | - | `*` one row has no measurement here |
+| `lu/256x4096/b1 [api-inclusive]` | 2.95314 ± 0.0209236 (W 0.0047754) | - | - | `*` one row has no measurement here |
+| `lu/64x1024/b1` | 0.091478 ± 0.000726908 (W 0.00100954) | - | - | `*` one row has no measurement here |
+| `lu/64x1024/b1 [api-inclusive]` | 0.150003 ± 0.0012565 (W 0.00265887) | - | - | `*` one row has no measurement here |
+| `qr/256x4096/b1` | 5.34863 ± 0.23339 (W 0.0153885) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `qr/256x4096/b1 [api-inclusive]` | 4.7279 ± 0.0421491 (W 0.0090064) | - | - | `*` one row has no measurement here |
+| `qr/64x1024/b1` | 0.378647 ± 0.00255488 (W 0.00330073) | - | - | `*` one row has no measurement here |
+| `qr/64x1024/b1 [api-inclusive]` | 0.249486 ± 0.00238889 (W 0.00163046) | - | - | `*` one row has no measurement here |
+| `qr_factor/256x4096/b1` | 5.22333 ± 0.034025 (W 0.0180501) | - | - | `*` one row has no measurement here |
+| `qr_factor/64x1024/b1` | 0.363677 ± 0.00271916 (W 0.00346621) | - | - | `*` one row has no measurement here |
+| `svd_thin/256x4096/b1` | 16.0823 ± 0.0409089 (W 0.0370068) | - | - | `*` one row has no measurement here |
+| `svd_thin/256x4096/b1 [api-inclusive]` | 16.2345 ± 0.0532365 (W 0.0322725) | - | - | `*` one row has no measurement here |
+| `svd_thin/64x1024/b1` | 0.839569 ± 0.00541692 (W 0.0025411) | - | - | `*` one row has no measurement here |
+| `svd_thin/64x1024/b1 [api-inclusive]` | 0.846842 ± 0.00720404 (W 0.00281521) | - | - | `*` one row has no measurement here |
+| `svd_values/256x4096/b1` | 10.3963 ± 0.0148334 (W 0.00715656) | - | - | `*` one row has no measurement here |
+| `svd_values/256x4096/b1 [api-inclusive]` | 10.4232 ± 0.0138431 (W 0.0146211) | - | - | `*` one row has no measurement here |
+| `svd_values/64x1024/b1` | 0.570358 ± 0.00276381 (W 0.0022655) | - | - | `*` one row has no measurement here |
+| `svd_values/64x1024/b1 [api-inclusive]` | 0.569439 ± 0.00138777 (W 0.00159339) | - | - | `*` one row has no measurement here |
+
+## linalg-wide, c32, f order, 1T (CPU 0)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `full_piv_lu/256x4096/b1` | 41.5974 ± 0.460761 (W 0.044997) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/256x4096/b1 [api-inclusive]` | 37.9901 ± 0.173828 (W 0.144271) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/64x1024/b1` | 0.868568 ± 0.0437698 (W 0.00134139) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `full_piv_lu/64x1024/b1 [api-inclusive]` | 0.862903 ± 0.00167292 (W 0.00135673) | - | - | `*` one row has no measurement here |
+| `lu/256x4096/b1` | 9.73541 ± 0.0291824 (W 0.0088082) | - | - | `*` one row has no measurement here |
+| `lu/256x4096/b1 [api-inclusive]` | 9.89998 ± 0.0332865 (W 0.00913632) | - | - | `*` one row has no measurement here |
+| `lu/64x1024/b1` | 0.302824 ± 0.000863687 (W 0.00215317) | - | - | `*` one row has no measurement here |
+| `lu/64x1024/b1 [api-inclusive]` | 0.312638 ± 0.000746641 (W 0.00188122) | - | - | `*` one row has no measurement here |
+| `qr/256x4096/b1` | 21.0617 ± 0.0651438 (W 0.0167286) | - | - | `*` one row has no measurement here |
+| `qr/256x4096/b1 [api-inclusive]` | 21.2331 ± 0.0459817 (W 0.0295516) | - | - | `*` one row has no measurement here |
+| `qr/64x1024/b1` | 0.653309 ± 0.00187839 (W 0.00187029) | - | - | `*` one row has no measurement here |
+| `qr/64x1024/b1 [api-inclusive]` | 0.665756 ± 0.00218765 (W 0.00242173) | - | - | `*` one row has no measurement here |
+| `qr_factor/256x4096/b1` | 19.8508 ± 0.042585 (W 0.0112747) | - | - | `*` one row has no measurement here |
+| `qr_factor/64x1024/b1` | 0.61319 ± 0.00257082 (W 0.00227242) | - | - | `*` one row has no measurement here |
+| `svd_thin/256x4096/b1` | 56.3002 ± 0.0600033 (W 0.0501122) | - | - | `*` one row has no measurement here |
+| `svd_thin/256x4096/b1 [api-inclusive]` | 56.4044 ± 0.0626372 (W 0.047876) | - | - | `*` one row has no measurement here |
+| `svd_thin/64x1024/b1` | 1.52482 ± 0.0075274 (W 0.00400193) | - | - | `*` one row has no measurement here |
+| `svd_thin/64x1024/b1 [api-inclusive]` | 1.52534 ± 0.00380949 (W 0.00604966) | - | - | `*` one row has no measurement here |
+| `svd_values/256x4096/b1` | 27.2055 ± 0.0335419 (W 0.0207442) | - | - | `*` one row has no measurement here |
+| `svd_values/256x4096/b1 [api-inclusive]` | 27.2081 ± 0.0292866 (W 0.0223554) | - | - | `*` one row has no measurement here |
+| `svd_values/64x1024/b1` | 0.83149 ± 0.00331874 (W 0.00428414) | - | - | `*` one row has no measurement here |
+| `svd_values/64x1024/b1 [api-inclusive]` | 0.83648 ± 0.00312462 (W 0.00364048) | - | - | `*` one row has no measurement here |
+
+## linalg-wide, c32, f order, 4T (CPU 0-3)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `full_piv_lu/256x4096/b1` | 10.9421 ± 0.013872 (W 0.0186681) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/256x4096/b1 [api-inclusive]` | 10.1789 ± 0.0479944 (W 0.00893015) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/64x1024/b1` | 0.321333 ± 0.000915044 (W 0.00184451) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/64x1024/b1 [api-inclusive]` | 0.328858 ± 0.00181476 (W 0.00227267) | - | - | `*` one row has no measurement here |
+| `lu/256x4096/b1` | 2.63787 ± 0.00616743 (W 0.00536828) | - | - | `*` one row has no measurement here |
+| `lu/256x4096/b1 [api-inclusive]` | 2.89488 ± 0.00348088 (W 0.00833036) | - | - | `*` one row has no measurement here |
+| `lu/64x1024/b1` | 0.09353 ± 0.000851464 (W 0.000362579) | - | - | `*` one row has no measurement here |
+| `lu/64x1024/b1 [api-inclusive]` | 0.107692 ± 0.000550697 (W 0.000316453) | - | - | `*` one row has no measurement here |
+| `qr/256x4096/b1` | 5.79608 ± 0.0487385 (W 0.00657112) | - | - | `*` one row has no measurement here |
+| `qr/256x4096/b1 [api-inclusive]` | 5.89657 ± 0.0456678 (W 0.00757257) | - | - | `*` one row has no measurement here |
+| `qr/64x1024/b1` | 0.22698 ± 0.000512619 (W 0.00144205) | - | - | `*` one row has no measurement here |
+| `qr/64x1024/b1 [api-inclusive]` | 0.243458 ± 0.000915879 (W 0.00140753) | - | - | `*` one row has no measurement here |
+| `qr_factor/256x4096/b1` | 5.36857 ± 0.0499314 (W 0.00573516) | - | - | `*` one row has no measurement here |
+| `qr_factor/64x1024/b1` | 0.205431 ± 0.000594017 (W 0.00145296) | - | - | `*` one row has no measurement here |
+| `svd_thin/256x4096/b1` | 25.2666 ± 0.0223008 (W 0.0376056) | - | - | `*` one row has no measurement here |
+| `svd_thin/256x4096/b1 [api-inclusive]` | 25.3857 ± 0.0182576 (W 0.0405109) | - | - | `*` one row has no measurement here |
+| `svd_thin/64x1024/b1` | 0.964779 ± 0.0211488 (W 0.00364966) | - | - | `*` one row has no measurement here; `!` between-start range over 5% |
+| `svd_thin/64x1024/b1 [api-inclusive]` | 0.968629 ± 0.00244408 (W 0.00599868) | - | - | `*` one row has no measurement here |
+| `svd_values/256x4096/b1` | 16.4828 ± 0.0165216 (W 0.0139391) | - | - | `*` one row has no measurement here |
+| `svd_values/256x4096/b1 [api-inclusive]` | 16.4651 ± 0.053638 (W 0.0206901) | - | - | `*` one row has no measurement here |
+| `svd_values/64x1024/b1` | 0.64116 ± 0.00322911 (W 0.00586518) | - | - | `*` one row has no measurement here |
+| `svd_values/64x1024/b1 [api-inclusive]` | 0.642896 ± 0.00629689 (W 0.0047678) | - | - | `*` one row has no measurement here |
+
+## linalg-wide, c32, f order, 8T (CPU 0-7)
+
+| case | colmat (ms) | lapack-aocl (ms) | vs `lapack-aocl` | notes |
+|---|---|---|---|---|
+| `full_piv_lu/256x4096/b1` | 5.55104 ± 0.092192 (W 0.00684798) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/256x4096/b1 [api-inclusive]` | 5.59612 ± 0.047985 (W 0.00958308) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/64x1024/b1` | 0.253547 ± 0.00157185 (W 0.00267759) | - | - | `*` one row has no measurement here |
+| `full_piv_lu/64x1024/b1 [api-inclusive]` | 0.26212 ± 0.000884044 (W 0.00205154) | - | - | `*` one row has no measurement here |
+| `lu/256x4096/b1` | 1.4381 ± 0.0026991 (W 0.00396921) | - | - | `*` one row has no measurement here |
+| `lu/256x4096/b1 [api-inclusive]` | 1.72076 ± 0.00367008 (W 0.00441386) | - | - | `*` one row has no measurement here |
+| `lu/64x1024/b1` | 0.0597085 ± 0.000316924 (W 0.000271756) | - | - | `*` one row has no measurement here |
+| `lu/64x1024/b1 [api-inclusive]` | 0.077124 ± 0.000526131 (W 0.000475803) | - | - | `*` one row has no measurement here |
+| `qr/256x4096/b1` | 3.17065 ± 0.00409974 (W 0.0065554) | - | - | `*` one row has no measurement here |
+| `qr/256x4096/b1 [api-inclusive]` | 3.45152 ± 0.0118678 (W 0.0061429) | - | - | `*` one row has no measurement here |
+| `qr/64x1024/b1` | 0.156677 ± 0.000430886 (W 0.000393854) | - | - | `*` one row has no measurement here |
+| `qr/64x1024/b1 [api-inclusive]` | 0.177154 ± 0.000785772 (W 0.00171334) | - | - | `*` one row has no measurement here |
+| `qr_factor/256x4096/b1` | 2.95494 ± 0.00442817 (W 0.00469808) | - | - | `*` one row has no measurement here |
+| `qr_factor/64x1024/b1` | 0.140773 ± 0.000437199 (W 0.000323909) | - | - | `*` one row has no measurement here |
+| `svd_thin/256x4096/b1` | 20.1249 ± 0.0489304 (W 0.0585687) | - | - | `*` one row has no measurement here |
+| `svd_thin/256x4096/b1 [api-inclusive]` | 20.2148 ± 0.0450999 (W 0.0402779) | - | - | `*` one row has no measurement here |
+| `svd_thin/64x1024/b1` | 0.884725 ± 0.00385931 (W 0.00168427) | - | - | `*` one row has no measurement here |
+| `svd_thin/64x1024/b1 [api-inclusive]` | 0.89306 ± 0.00928137 (W 0.0045187) | - | - | `*` one row has no measurement here |
+| `svd_values/256x4096/b1` | 14.3227 ± 0.123378 (W 0.0126516) | - | - | `*` one row has no measurement here |
+| `svd_values/256x4096/b1 [api-inclusive]` | 14.3269 ± 0.0344897 (W 0.0259724) | - | - | `*` one row has no measurement here |
+| `svd_values/64x1024/b1` | 0.613303 ± 0.00711497 (W 0.00380944) | - | - | `*` one row has no measurement here |
+| `svd_values/64x1024/b1 [api-inclusive]` | 0.627233 ± 0.00907445 (W 0.00213613) | - | - | `*` one row has no measurement here |
+
+Not applicable to this population's shapes and reported as skipped: `cholesky/256x4096`, `cholesky/64x1024`, `eigh/256x4096`, `eigh/64x1024`, `full_piv_lu/256x4096`, `full_piv_lu/64x1024`, `lu/256x4096`, `lu/64x1024`, `qr/256x4096`, `qr/64x1024`, `qr_factor/256x4096`, `qr_factor/64x1024`, `solve/256x4096`, `solve/64x1024`, `svd_thin/256x4096`, `svd_thin/64x1024`, `svd_values/256x4096`, `svd_values/64x1024`, `triangular_solve/256x4096`, `triangular_solve/64x1024`.
+
+Repeated process sets describe observed repeatability under the recorded order schedule; they are not a paired baseline/candidate experiment and do not establish equal performance between engines.
