@@ -110,6 +110,53 @@ class PinnedTest(unittest.TestCase):
                 if name == 'precheck_only':
                     self.assertIn('cpu16 busy=0.20 (cache peer)',result.stderr)
 
+    def _run_evidence(self, status, **extra_env):
+        tmp = tempfile.TemporaryDirectory(prefix='pinned evidence ')
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        bindir = root/'bin'
+        bindir.mkdir()
+        script = bindir/'fake.py'
+        script.write_text(f'#!{sys.executable}\n'+FAKE)
+        script.chmod(0o755)
+        for program in ('python3','taskset','writer'):
+            (bindir/program).symlink_to(script)
+        local = root/'node-local-tmp'
+        local.mkdir()
+        env = {k: v for k, v in os.environ.items() if not k.startswith(('SLURM_', 'PINNED_'))}
+        env.update(PATH=str(bindir)+os.pathsep+os.environ['PATH'], SIM_ROOT=str(root),
+                   TMPDIR=str(local), FAIL_CHECKS='', PINNED_RETRIES='1', PINNED_WAIT='0',
+                   PINNED_IDLE_SECONDS='0', COMMAND_STATUS=str(status), **extra_env)
+        result = subprocess.run(['bash',str(PINNED),'4','--',str(bindir/'writer')],
+                                env=env,text=True,capture_output=True,cwd=root)
+        return root, local, result
+
+    def test_failed_command_evidence_goes_to_the_shared_dir_not_tmp(self):
+        # #143: on a compute node TMPDIR/tmp is gone after the job; evidence must not live there.
+        shared = tempfile.TemporaryDirectory(prefix='shared fs ')
+        self.addCleanup(shared.cleanup)
+        for label, env, where in (
+            ('explicit', {'PINNED_EVIDENCE_DIR': str(Path(shared.name)/'explicit')}, Path(shared.name)/'explicit'),
+            ('slurm', {'SLURM_JOB_ID': '4242', 'SLURM_SUBMIT_DIR': shared.name},
+             Path(shared.name)/'failed-evidence'/'4242'),
+        ):
+            with self.subTest(label=label):
+                root, local, result = self._run_evidence(1, **env)
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertEqual(list(local.iterdir()), [], 'nothing may be left only on node-local tmp')
+                self.assertEqual(len(list(where.glob('pinned-stdout.*'))), 1)
+                self.assertEqual(len(list(where.glob('pinned-guard.*'))), 1)
+                self.assertIn(f'evidence retained at {where}/', result.stderr)
+                self.assertIn('sample=1', next(where.glob('pinned-stdout.*')).read_text())
+
+    def test_valid_run_removes_its_evidence(self):
+        shared = tempfile.TemporaryDirectory(prefix='shared fs ')
+        self.addCleanup(shared.cleanup)
+        where = Path(shared.name)/'ok'
+        root, local, result = self._run_evidence(0, PINNED_EVIDENCE_DIR=str(where))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(list(where.iterdir()), [])
+
 
 if __name__ == '__main__':
     unittest.main()

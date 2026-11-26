@@ -72,6 +72,10 @@ jobs:
         run: python3 -m unittest discover -s tests -v
       - name: The candidate comparison accepts and refuses what it should
         run: python3 scripts/test_candidate_compare.py -v
+      - name: pinned.sh keeps failure evidence off node-local tmp, and CPU sets follow the cache topology (#143)
+        run: |
+          python3 scripts/test_pinned.py -v
+          python3 scripts/test_cpu_sets.py -v
       - name: Every recorded run manifest validates
         run: |
           shopt -s nullglob
