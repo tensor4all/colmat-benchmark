@@ -40,7 +40,7 @@ rather than being implied by the other arm's page.
 | `colmat-kernels` | `zen5-cpu` | `mkl` | - | - | - | - | missing | - |
 | `colmat-kernels` | `zen5-cpu` | `aocl` | - | - | - | - | missing | - |
 | `colmat-kernels` | `evo2-zen5-16c` (optional) | `openblas` | `81560db94498/0539947ffb75` | 0.34.0 | 2026-11-25 | partial | current | [result/evo2-zen5-16c/colmat-kernels/81560db94498-0539947ffb75-openblas-timing-v2.md](evo2-zen5-16c/colmat-kernels/81560db94498-0539947ffb75-openblas-timing-v2.md) |
-| `colmat-kernels` | `evo2-zen5-16c` (optional) | `mkl` | `81560db94498/0539947ffb75` | 0.34.0 | 2026-11-25 | full | current | [result/evo2-zen5-16c/colmat-kernels/81560db94498-0539947ffb75-mkl-timing-v2.md](evo2-zen5-16c/colmat-kernels/81560db94498-0539947ffb75-mkl-timing-v2.md) |
+| `colmat-kernels` | `evo2-zen5-16c` (optional) | `mkl` | `81560db94498/0539947ffb75` | 0.34.0 | 2026-11-25 | partial | current | [result/evo2-zen5-16c/colmat-kernels/81560db94498-0539947ffb75-mkl-timing-v2.md](evo2-zen5-16c/colmat-kernels/81560db94498-0539947ffb75-mkl-timing-v2.md) |
 | `colmat-kernels` | `evo2-zen5-16c` (optional) | `aocl` | `81560db94498/0539947ffb75` | 0.34.0 | 2026-11-26 | partial | current | [result/evo2-zen5-16c/colmat-kernels/81560db94498-0539947ffb75-aocl-timing-v2.md](evo2-zen5-16c/colmat-kernels/81560db94498-0539947ffb75-aocl-timing-v2.md) |
 | `colmat-kernels` | `minisforum-p-core` (optional) | `openblas` | - | - | - | - | missing | - |
 | `colmat-kernels` | `minisforum-p-core` (optional) | `mkl` | - | - | - | - | missing | - |

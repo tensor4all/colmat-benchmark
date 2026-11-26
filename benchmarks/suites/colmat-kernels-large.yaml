@@ -199,6 +199,11 @@ engines_doc:
 # .github/workflows/ci.yml).
 runs:
   - threads: [4, 8]
+    # evo2 measures its whole machine too: 16T is one thread per physical core, cpus 0-15
+    # (colmat-benchmark#137). `profile_threads` scopes that row to evo2, so the zen5-cpu grid
+    # above is unchanged; evo2's CPUs come from its own `thread_rows` (0 / 0-3 / 0-7 / 0-15),
+    # because cpu_sets names no list for it. The toolkit admits the 16T row only with SMT off.
+    profile_threads: {evo2-zen5-16c: [4, 8, 16]}
     cpu_sets: {zen5-cpu: ["4-7", "4-11"]}
     dtypes: [f64, c64]
     # C (row-major) and F (column-major) for every case, as a declared axis: faer's
