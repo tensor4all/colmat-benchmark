@@ -11,6 +11,14 @@
 #
 # Exits 75 when no valid run was obtained.
 #
+# Evidence location (#143): the command's stdout and the guard log are created *in* an evidence
+# directory on the shared filesystem, not in node-local /tmp, because on a Slurm compute node /tmp
+# dies with the job and a four-hour failure would leave only a log line naming files that no
+# longer exist. The directory is $PINNED_EVIDENCE_DIR if set, else
+# $SLURM_SUBMIT_DIR/failed-evidence/$SLURM_JOB_ID inside a Slurm job, else $TMPDIR (or /tmp).
+# Writing there directly (not copying from an EXIT trap) means a SIGKILL, a wall-time kill or a
+# node failure still leaves the files. A valid run deletes them; a failed one keeps them.
+#
 # Container mode (#99): with BENCH_CONTAINER=<name> the measured command runs *inside* that
 # running container as `docker exec <name> taskset -c CPUS COMMAND...` instead of under a
 # host `taskset`. The recorder, this script and the idle guard stay on the observing side
@@ -48,8 +56,18 @@ if [[ $(uname -s) != Linux ]] || [[ ! -r /proc/stat ]] || ! command -v taskset >
     exec "$@"
 fi
 echo "pinned.sh: cpus=$cpus idle_window=${seconds}s max_busy=$max_busy retries=$retries" >&2
-tmp=$(mktemp)
-guard=$(mktemp)
+evidence=${PINNED_EVIDENCE_DIR:-}
+if [[ -z $evidence && -n ${SLURM_JOB_ID:-} ]]; then
+    evidence=${SLURM_SUBMIT_DIR:-$PWD}/failed-evidence/$SLURM_JOB_ID
+fi
+if [[ -n $evidence ]] && mkdir -p -- "$evidence"; then
+    tmp=$(mktemp "$evidence/pinned-stdout.XXXXXX")
+    guard=$(mktemp "$evidence/pinned-guard.XXXXXX")
+else
+    [[ -z $evidence ]] || echo "pinned.sh: cannot create evidence dir $evidence; using ${TMPDIR:-/tmp}" >&2
+    tmp=$(mktemp)
+    guard=$(mktemp)
+fi
 keep=0
 cleanup() {
     if [[ $keep == 1 ]]; then
