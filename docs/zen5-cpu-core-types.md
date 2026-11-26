@@ -1,5 +1,7 @@
 # `zen5-cpu`: the recorded rows ran on Zen5c compact cores (colmat-benchmark#130)
 
+> **Retired 2026-11-27**: `zen5-cpu` is no longer a target; see [zen5-cpu-retired.md](zen5-cpu-retired.md).
+
 The host behind `zen5-cpu` (AMD Ryzen AI 9 HX 470, "evo") is hybrid. Per-CPU
 `amd_pstate_highest_perf`, read 2026-11-25:
 

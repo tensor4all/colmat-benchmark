@@ -78,10 +78,25 @@ jobs:
           python3 scripts/test_cpu_sets.py -v
       - name: Every recorded run manifest validates
         run: |
+          # `zen5-cpu` is retired (docs/zen5-cpu-retired.md): no suite lists it, so the validator
+          # reports one message for its frozen manifests, "does not list profile 'zen5-cpu'".
+          # Everything else still has to pass for them, so only that message is tolerated.
           shopt -s nullglob
           files=(data/results/*/*/*/run.yaml)
           if [ ${#files[@]} -eq 0 ]; then echo "no runs recorded yet"; exit 0; fi
-          python3 scripts/validate_run.py "${files[@]}"
+          python3 - "${files[@]}" <<'PY'
+          import sys
+          from campaign_toolkit import validate_run
+          bad = 0
+          for f in sys.argv[1:]:
+              errs = validate_run.validate(f)
+              if f.startswith("data/results/zen5-cpu/"):
+                  errs = [e for e in errs if not e.endswith("does not list profile 'zen5-cpu'")]
+              if errs:
+                  bad += 1
+                  print("FAIL", f, *errs, sep="\n  ")
+          sys.exit(1 if bad else 0)
+          PY
       - name: Index is current, required cells present
         run: python3 scripts/gen_index.py --check
       - name: The pin has a current recording

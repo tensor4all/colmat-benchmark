@@ -38,13 +38,11 @@ invalidated_by:
   - Cargo.toml
   - Cargo.lock
 stale_after: 20
-# Empty until the first (zen5-cpu, colmat-kernels) cell exists: `missing` is a
-# normal state for a cell with no run, and it becomes an error only for a profile
-# listed as required. The first recorded cell moves `zen5-cpu` in here.
-required_profiles:
-  - zen5-cpu
+# `zen5-cpu` is retired (2026-11-27, docs/zen5-cpu-retired.md): it is neither required nor
+# optional here, so no `missing` row is promised for it. `missing` is a normal state for a cell
+# with no run, and becomes an error only for a profile listed as required.
+required_profiles: []
 optional_profiles:
-  - zen5-cpu
   - evo2-zen5-16c
   - minisforum-p-core
   - zen2-cpu
@@ -204,11 +202,11 @@ engines_doc:
 runs:
   - threads: [1, 4, 8]
     # evo2 measures its whole machine too: 16T is one thread per physical core, cpus 0-15
-    # (colmat-benchmark#137). `profile_threads` scopes that row to evo2, so the zen5-cpu grid
-    # above is unchanged; evo2's CPUs come from its own `thread_rows` (0 / 0-3 / 0-7 / 0-15),
-    # because cpu_sets names no list for it. The toolkit admits the 16T row only with SMT off.
+    # (colmat-benchmark#137). `profile_threads` scopes that row to evo2, so the other profiles' grid
+    # is unchanged. The one cpu_sets entry (the schema wants one) is evo2's own `thread_rows`,
+    # 0 / 0-3 / 0-7 / 0-15, unchanged; zen5-cpu is retired (docs/zen5-cpu-retired.md). The toolkit admits the 16T row only with SMT off.
     profile_threads: {evo2-zen5-16c: [1, 4, 8, 16]}
-    cpu_sets: {zen5-cpu: ["4", "4-7", "4-11"]}
+    cpu_sets: {evo2-zen5-16c: ["0", "0-3", "0-7", "0-15"]}
     # All four native dtypes: `f32`/`c32` reach the same kernels and the harness can
     # measure them since `docs/harness-dtype-axis.md`. The optimization loop selects the
     # 64 and 32 cells explicitly; a full run measures the whole grid for every dtype.
