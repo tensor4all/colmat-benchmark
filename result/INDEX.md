@@ -21,9 +21,6 @@ rather than being implied by the other arm's page.
 |---|---|---|---|---|---|---|---|---|
 | `colmat-kernels-keyaki-os-shared` | `keyaki-64-os-shared` | `mkl` | - | - | - | - | missing | - |
 | `colmat-kernels-keyaki` | `keyaki-64` | `mkl` | - | - | - | - | missing | - |
-| `colmat-kernels-large` | `zen5-cpu` (optional) | `openblas` | - | - | - | - | missing | - |
-| `colmat-kernels-large` | `zen5-cpu` (optional) | `mkl` | - | - | - | - | missing | - |
-| `colmat-kernels-large` | `zen5-cpu` (optional) | `aocl` | - | - | - | - | missing | - |
 | `colmat-kernels-large` | `evo2-zen5-16c` (optional) | `openblas` | `81560db94498/0539947ffb75` | 0.34.0 | 2026-11-26 | partial | current | [result/evo2-zen5-16c/colmat-kernels-large/81560db94498-0539947ffb75-openblas-timing-v2.md](evo2-zen5-16c/colmat-kernels-large/81560db94498-0539947ffb75-openblas-timing-v2.md) |
 | `colmat-kernels-large` | `evo2-zen5-16c` (optional) | `mkl` | `81560db94498/0539947ffb75` | 0.34.0 | 2026-11-26 | partial | current | [result/evo2-zen5-16c/colmat-kernels-large/81560db94498-0539947ffb75-mkl-timing-v2.md](evo2-zen5-16c/colmat-kernels-large/81560db94498-0539947ffb75-mkl-timing-v2.md) |
 | `colmat-kernels-large` | `evo2-zen5-16c` (optional) | `aocl` | `81560db94498/0539947ffb75` | 0.34.0 | 2026-11-26 | partial | current | [result/evo2-zen5-16c/colmat-kernels-large/81560db94498-0539947ffb75-aocl-timing-v2.md](evo2-zen5-16c/colmat-kernels-large/81560db94498-0539947ffb75-aocl-timing-v2.md) |
@@ -36,9 +33,6 @@ rather than being implied by the other arm's page.
 | `colmat-kernels-large` | `zen2-64-smt-off` (optional) | `openblas` | - | - | - | - | missing | - |
 | `colmat-kernels-large` | `zen2-64-smt-off` (optional) | `mkl` | - | - | - | - | missing | - |
 | `colmat-kernels-large` | `zen2-64-smt-off` (optional) | `aocl` | - | - | - | - | missing | - |
-| `colmat-kernels` | `zen5-cpu` | `openblas` | - | - | - | - | missing | - |
-| `colmat-kernels` | `zen5-cpu` | `mkl` | - | - | - | - | missing | - |
-| `colmat-kernels` | `zen5-cpu` | `aocl` | - | - | - | - | missing | - |
 | `colmat-kernels` | `evo2-zen5-16c` (optional) | `openblas` | `81560db94498/0539947ffb75` | 0.34.0 | 2026-11-25 | partial | current | [result/evo2-zen5-16c/colmat-kernels/81560db94498-0539947ffb75-openblas-timing-v2.md](evo2-zen5-16c/colmat-kernels/81560db94498-0539947ffb75-openblas-timing-v2.md) |
 | `colmat-kernels` | `evo2-zen5-16c` (optional) | `mkl` | `81560db94498/0539947ffb75` | 0.34.0 | 2026-11-25 | partial | current | [result/evo2-zen5-16c/colmat-kernels/81560db94498-0539947ffb75-mkl-timing-v2.md](evo2-zen5-16c/colmat-kernels/81560db94498-0539947ffb75-mkl-timing-v2.md) |
 | `colmat-kernels` | `evo2-zen5-16c` (optional) | `aocl` | `81560db94498/0539947ffb75` | 0.34.0 | 2026-11-26 | partial | current | [result/evo2-zen5-16c/colmat-kernels/81560db94498-0539947ffb75-aocl-timing-v2.md](evo2-zen5-16c/colmat-kernels/81560db94498-0539947ffb75-aocl-timing-v2.md) |

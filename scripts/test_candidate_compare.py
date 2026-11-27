@@ -58,6 +58,9 @@ class CandidateCliTest(unittest.TestCase):
         self.manifest = yaml.safe_load(TEMPLATE.read_text())
         # The template was recorded before #113; the synthetic runs use the current names.
         self.manifest.update(suite_id='colmat-kernels', suite_file='benchmarks/suites/colmat-kernels.yaml')
+        # zen5-cpu is retired and no suite lists it (docs/zen5-cpu-retired.md); the template's
+        # profile is replaced by one the suite lists, since only its shape is used.
+        self.manifest['target_profile'] = 'evo2-zen5-16c'
         self.manifest['suite_sha256'] = hashlib.sha256(suite_file.read_bytes()).hexdigest()
         for identity in ('library', 'upstream', 'harness', 'toolkit'):
             self.manifest[identity].update(commit=commit, dirty=False)

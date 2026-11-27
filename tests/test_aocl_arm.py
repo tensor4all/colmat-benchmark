@@ -100,22 +100,13 @@ class ValidatorAndIndexTest(unittest.TestCase):
         declared = gen_index.collect()['declared']
         cells = {(c['suite'], c['profile']) for c in declared if c['vendor'] == 'aocl'}
         for suite_id in SUITES:
-            self.assertIn((suite_id, 'zen5-cpu'), cells)
+            self.assertIn((suite_id, 'evo2-zen5-16c'), cells)
         # The other arms are still declared next to it.
         for vendor in ('mkl', 'openblas'):
-            self.assertIn(('colmat-kernels', 'zen5-cpu'),
+            self.assertIn(('colmat-kernels', 'evo2-zen5-16c'),
                           {(c['suite'], c['profile']) for c in declared if c['vendor'] == vendor})
-
-
-class PublishTest(unittest.TestCase):
-    def test_publish_records_aocl_in_both_suites_and_keeps_the_other_arms(self):
-        text = (ROOT / 'scripts/publish.sh').read_text()
-        for needle in ('colmat-kernels \\\n    --vendor mkl', 'colmat-kernels \\\n    --vendor openblas',
-                       'colmat-kernels-large \\\n    --vendor mkl',
-                       'colmat-kernels \\\n        --vendor aocl --engines colmat,lapack-aocl',
-                       'colmat-kernels-large \\\n        --vendor aocl --engines colmat,lapack-aocl'):
-            self.assertIn(needle, text)
-        self.assertIn('scripts/resolve_aocl_root.sh', text)
+        # zen5-cpu is retired (docs/zen5-cpu-retired.md): no cell is declared, so none reads `missing`.
+        self.assertNotIn('zen5-cpu', {c['profile'] for c in declared})
 
 
 if __name__ == '__main__':

@@ -44,7 +44,11 @@ class RenameAliasesTest(unittest.TestCase):
         self.assertIn(BASELINE, runs)       # a committed recording; recordings are never removed
         for run in runs:
             with self.subTest(run=run.name), contextlib.redirect_stderr(io.StringIO()) as err:
-                self.assertEqual(validate_run.validate(str(run / 'run.yaml')), [])
+                # `zen5-cpu` is retired (docs/zen5-cpu-retired.md) and no suite lists it, so the one
+                # complaint left is that; every declaration-derived check still has to pass.
+                retired = [f"suite {run.parent.name!r} does not list profile 'zen5-cpu'"]
+                self.assertEqual(validate_run.validate(str(run / 'run.yaml')),
+                                 retired if run.parent.parent.name == 'zen5-cpu' else [])
             recorded = yaml.safe_load((run / 'run.yaml').read_text())['suite_sha256']
             skipped = 'declaration-derived checks skipped' in err.getvalue()
             self.assertEqual(skipped, aliases[recorded] not in current)
